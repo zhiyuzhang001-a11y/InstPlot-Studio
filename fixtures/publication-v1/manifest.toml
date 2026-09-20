@@ -1,0 +1,105 @@
+schema_version = 1
+fixture_id = "publication-v1-single-axes"
+status = "draft"
+data_file = "data.csv"
+data_license = "CC0-1.0"
+data_origin = "Synthetic values authored for SciPlot validation; no experimental data."
+
+[figure]
+width_mm = 89.0
+height_mm = 65.0
+background = "#FFFFFF"
+axes_count = 1
+
+[validation_reference]
+axis_label_pt = 9.0
+tick_label_pt = 8.0
+legend_pt = 8.0
+annotation_pt = 8.0
+spine_pt = 0.6
+primary_line_pt = 1.0
+secondary_line_pt = 0.9
+error_bar_pt = 0.7
+marker_diameter_pt = 4.0
+note = "Reference values for comparing implementations; not frozen product defaults."
+
+[labels]
+x = "μ₀H_DL (mT)"
+y = "Current density J_e (A m⁻²)"
+fallback_probe = "温度 T (K)"
+
+[axes]
+x_scale = "linear"
+y_scale = "linear"
+ticks_direction = "in"
+top_spine = true
+right_spine = true
+grid = false
+
+[[series]]
+id = "experiment-a"
+role = "experiment"
+semantic_identity = "sample-a"
+x = "x"
+y = "experiment_a"
+y_error = "error_a"
+marker = "open-circle"
+
+[[series]]
+id = "fit-a"
+role = "fit"
+semantic_identity = "sample-a"
+x = "x"
+y = "fit_a"
+line = "solid"
+
+[[series]]
+id = "experiment-b"
+role = "experiment"
+semantic_identity = "sample-b"
+x = "x"
+y = "experiment_b"
+y_error = "error_b"
+marker = "filled-square"
+
+[[series]]
+id = "theory"
+role = "theory"
+x = "x"
+y = "theory"
+line = "dashed"
+
+[outputs]
+pdf_width_pt = 252.28346
+pdf_height_pt = 184.25197
+png_300 = [1051, 768]
+png_600 = [2102, 1535]
+png_1200 = [4205, 3071]
+tiff_required_for_gate_a = false
+tiff_required_for_v1_release = true
+
+[color_contract.distinct]
+name = "Paul Tol Bright"
+status = "source-and-exact-values-pending-verification"
+
+[color_contract.high_contrast]
+name = "Paul Tol High Contrast"
+status = "source-and-exact-values-pending-verification"
+
+[color_contract.diverging]
+name = "pending"
+status = "source-backed-palette-selection-required"
+
+[color_contract.neutral]
+name = "pending"
+status = "exact-value-and-provenance-required"
+
+[acceptance]
+same_layout_for_all_backends = true
+pdf_text_searchable = true
+pdf_paths_vector = true
+svg_text_preserved = true
+missing_glyph_warning = true
+grayscale_reference_required = true
+cvd_reference_required = true
+

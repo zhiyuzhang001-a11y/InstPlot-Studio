@@ -1,0 +1,4 @@
+/target/
+/.agent-token-manager/
+*.log
+.DS_Store
