@@ -1,0 +1,49 @@
+schema_version = 1
+status = "frozen"
+source_name = "Paul Tol Colour Schemes"
+source_version = "SRON/EPS/TN/09-002 issue 3.2, 2021-08-18"
+source_url = "https://sronpersonalpages.nl/~pault/data/colourschemes.pdf"
+source_page = "https://sronpersonalpages.nl/~pault/"
+accessed = "2026-09-20"
+provenance_class = "externally-authored factual colour values, transcribed with attribution"
+redistribution = "Only hexadecimal colour facts are stored; the source document and images are not redistributed."
+sampling_method = "Use values in listed order; do not interpolate qualitative palettes."
+
+[distinct]
+name = "Paul Tol Bright"
+colors = ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377", "#BBBBBB"]
+expected_grayscale_light_to_dark = ["#66CCEE", "#BBBBBB", "#CCBB44", "#EE6677", "#228833", "#4477AA", "#AA3377"]
+
+[high_contrast]
+name = "Paul Tol High Contrast"
+colors = ["#004488", "#DDAA33", "#BB5566"]
+expected_grayscale_behavior = "Source describes equal-luminance samples; distinguish by hue and redundant encoding, not grayscale alone."
+
+[diverging]
+name = "Paul Tol BuRd"
+colors = ["#2166AC", "#4393C3", "#92C5DE", "#D1E5F0", "#F7F7F7", "#FDDBC7", "#F4A582", "#D6604D", "#B2182B"]
+bad_data = "#FFEE99"
+center_index = 4
+sampling_method = "For fewer colors, sample equidistant points including both extremes and the neutral center; for more colors, interpolate linear-light sRGB between adjacent anchors."
+
+[neutral]
+name = "SciPlot neutral ink"
+colors = ["#666666", "#A0A0A0"]
+provenance_class = "SciPlot-authored semantic constants"
+semantics = ["theory/reference primary neutral", "secondary/background neutral"]
+
+[role_mapping]
+object_a = "#4477AA"
+object_b = "#EE6677"
+theory = "#666666"
+reference = "#A0A0A0"
+experiment_encoding = "marker with optional error bar"
+fit_encoding = "solid line; same color as its experiment semantic_identity"
+theory_encoding = "dashed neutral line"
+reference_encoding = "dotted light-neutral line"
+
+[accessibility_reference]
+normal = "All roles use the role mapping above."
+grayscale = "Experiment A/B retain open-circle/filled-square distinction; fit/theory/reference retain solid/dashed/dotted distinction."
+deuteranopia = "The expected pass condition is semantic identity preserved by marker fill/shape and line dash even if color separation decreases."
+minimum_non_color_channels = 1

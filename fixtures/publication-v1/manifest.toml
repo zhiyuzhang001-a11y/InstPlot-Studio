@@ -1,9 +1,13 @@
 schema_version = 1
 fixture_id = "publication-v1-single-axes"
-status = "draft"
+status = "frozen"
 data_file = "data.csv"
+palette_file = "palettes.toml"
+expected_file = "expected.toml"
+benchmark_corpus = "../../benchmarks/publication-corpus-v1/manifest.toml"
 data_license = "CC0-1.0"
 data_origin = "Synthetic values authored for SciPlot validation; no experimental data."
+rounding_rule = "round-half-away-from-zero"
 
 [figure]
 width_mm = 89.0
@@ -27,14 +31,18 @@ note = "Reference values for comparing implementations; not frozen product defau
 x = "μ₀H_DL (mT)"
 y = "Current density J_e (A m⁻²)"
 fallback_probe = "温度 T (K)"
+legend = ["Experiment A", "Fit A", "Experiment B", "Theory", "Reference"]
 
 [axes]
 x_scale = "linear"
 y_scale = "linear"
+x_limits = [-3.0, 3.0]
+y_limits = [-2.5, 2.5]
 ticks_direction = "in"
 top_spine = true
 right_spine = true
 grid = false
+clip_to_plot = true
 
 [[series]]
 id = "experiment-a"
@@ -44,6 +52,7 @@ x = "x"
 y = "experiment_a"
 y_error = "error_a"
 marker = "open-circle"
+color_role = "object-a"
 
 [[series]]
 id = "fit-a"
@@ -52,6 +61,7 @@ semantic_identity = "sample-a"
 x = "x"
 y = "fit_a"
 line = "solid"
+color_role = "object-a"
 
 [[series]]
 id = "experiment-b"
@@ -61,6 +71,7 @@ x = "x"
 y = "experiment_b"
 y_error = "error_b"
 marker = "filled-square"
+color_role = "object-b"
 
 [[series]]
 id = "theory"
@@ -68,6 +79,26 @@ role = "theory"
 x = "x"
 y = "theory"
 line = "dashed"
+color_role = "theory"
+
+[[series]]
+id = "reference-zero"
+role = "reference"
+x = "x"
+y = "reference"
+line = "dotted"
+color_role = "reference"
+
+[data_probes]
+dense_region_column = "x"
+dense_region = [-0.1, 0.1]
+dense_region_min_points = 5
+multiscale_column = "scale_probe"
+multiscale_min_orders = 10
+clipping_column = "x"
+clipping_expected_below = -3.0
+clipping_expected_above = 3.0
+zero_neighborhood_column = "experiment_a"
 
 [outputs]
 pdf_width_pt = 252.28346
@@ -78,21 +109,15 @@ png_1200 = [4205, 3071]
 tiff_required_for_gate_a = false
 tiff_required_for_v1_release = true
 
-[color_contract.distinct]
-name = "Paul Tol Bright"
-status = "source-and-exact-values-pending-verification"
-
-[color_contract.high_contrast]
-name = "Paul Tol High Contrast"
-status = "source-and-exact-values-pending-verification"
-
-[color_contract.diverging]
-name = "pending"
-status = "source-backed-palette-selection-required"
-
-[color_contract.neutral]
-name = "pending"
-status = "exact-value-and-provenance-required"
+[tolerances]
+page_size_pt = 0.01
+glyph_position_pt = 0.10
+path_coordinate_pt = 0.05
+raster_changed_pixel_fraction = 0.0025
+raster_max_channel_delta = 8
+anti_aliasing_edge_band_px = 1
+cross_platform_font_metric_pt = 0.10
+rule = "A result fails when any tolerance is exceeded outside the one-pixel anti-aliasing edge band."
 
 [acceptance]
 same_layout_for_all_backends = true
@@ -102,4 +127,10 @@ svg_text_preserved = true
 missing_glyph_warning = true
 grayscale_reference_required = true
 cvd_reference_required = true
+required_cvd_condition = "deuteranopia"
+deterministic_snapshot = true
 
+[provenance]
+frozen_on = "2026-09-20"
+owner = "SciPlot"
+change_policy = "Any change requires a fixture version bump or an ADR explaining compatibility."

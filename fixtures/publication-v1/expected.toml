@@ -1,0 +1,46 @@
+schema_version = 1
+fixture_id = "publication-v1-single-axes"
+
+[document]
+axes_count = 1
+series_count = 5
+series_order = ["reference-zero", "theory", "fit-a", "experiment-a", "experiment-b"]
+clip_to_plot = true
+
+[semantics]
+experiment_roles = ["experiment-a", "experiment-b"]
+fit_roles = ["fit-a"]
+theory_roles = ["theory"]
+reference_roles = ["reference-zero"]
+shared_identity_pairs = [["experiment-a", "fit-a"]]
+
+[layout]
+coordinate_unit = "pt"
+page_width_pt = 252.28346
+page_height_pt = 184.25197
+backend_origin = "top-left"
+rounding_rule = "round-half-away-from-zero"
+
+[drawing]
+background = "#FFFFFF"
+draw_order = ["background", "reference", "theory", "fit", "error-bars", "markers", "axes", "labels", "legend"]
+top_spine = true
+right_spine = true
+grid = false
+ticks_direction = "in"
+
+[text]
+required_strings = ["μ₀H_DL (mT)", "Current density J_e (A m⁻²)", "温度 T (K)", "Experiment", "Fit", "Theory"]
+searchable_in_pdf = true
+preserved_as_text_in_svg = true
+missing_glyph_is_error = false
+missing_glyph_requires_warning = true
+
+[raster]
+background_rgba = [255, 255, 255, 255]
+alpha_mode = "straight"
+png_dimensions = [[300, 1051, 768], [600, 2102, 1535], [1200, 4205, 3071]]
+
+[accessibility]
+views = ["normal", "grayscale", "deuteranopia"]
+semantic_identity_must_not_depend_on_color_alone = true

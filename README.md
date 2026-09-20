@@ -16,11 +16,18 @@ workspace member inside the Lite repository.
 
 ## Current phase
 
-Part A, beginning with:
+Part A:
 
-1. A0 — freeze the InstPlot Lite baseline;
-2. A1 — define the fixed publication fixture and acceptance contract;
-3. A2 — build a point-based Figure IR and backend-neutral Display List spike.
+1. A0 — local InstPlot Lite baseline captured; cross-platform evidence remains open;
+2. A1 — fixed publication fixture and acceptance contract frozen and validated;
+3. A2 — the next implementation phase: a point-based Figure IR and
+   backend-neutral Display List spike.
+
+Validate the A1 contract with:
+
+```sh
+python3 scripts/validate_a1.py
+```
 
 The authoritative plan is in
 [`docs/SCIPLOT_EXECUTION_PLAN.md`](docs/SCIPLOT_EXECUTION_PLAN.md).

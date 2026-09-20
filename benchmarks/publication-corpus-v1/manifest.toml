@@ -1,0 +1,162 @@
+schema_version = 1
+corpus_id = "publication-visual-benchmark-v1"
+status = "frozen-for-a1"
+accessed = "2026-09-20"
+image_policy = "Store citations and derived observations only. Do not commit publisher images without verified redistribution rights."
+scope = "Two-dimensional curves, scatter, error bars, fits, and experiment/theory comparisons."
+
+[official_constraints]
+nature_single_column_mm = 89.0
+nature_text_pt = [5.0, 7.0]
+nature_line_pt = [0.25, 1.0]
+acs_single_column_mm = 82.5
+wiley_medical_physics_single_column_mm = 80.0
+preferred_vector_text = true
+
+[derived_comparison_ranges]
+axes_width_fraction = [0.68, 0.84]
+axes_height_fraction = [0.60, 0.80]
+marker_to_line_ratio = [3.0, 6.0]
+major_ticks_per_axis = [4, 7]
+legend_key_to_text_height = [2.0, 4.0]
+note = "Initial A1 comparison envelope derived from the cited examples and publisher constraints; A7 will replace estimates with rendered measurement evidence before product defaults freeze."
+
+[[reference]]
+id = "nature-physics-2024-cavity-interactions-fig2d"
+venue = "Nature Physics"
+year = 2024
+figure = "Figure 2d"
+url = "https://www.nature.com/articles/s41567-024-02405-3"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["scatter", "error-bars", "theory-band"]
+observations = ["single axes panel", "data foregrounded over restrained theory band", "compact legend-free encoding"]
+
+[[reference]]
+id = "nature-2025-triboelectric-series-fig2d"
+venue = "Nature"
+year = 2025
+figure = "Figure 2d"
+url = "https://www.nature.com/articles/s41586-024-08530-6"
+license_or_access = "open access article; citation only"
+plot_types = ["scatter", "fit", "multi-series"]
+observations = ["fit visually subordinate to measurements", "consistent object identity", "dense data remains legible"]
+
+[[reference]]
+id = "nature-photonics-2023-two-photon-fig4"
+venue = "Nature Photonics"
+year = 2023
+figure = "Figure 4"
+url = "https://www.nature.com/articles/s41566-023-01260-7"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["scatter", "error-bars", "theory", "inset"]
+observations = ["measurement and theory separated by marker versus line", "secondary mechanisms use dash patterns", "inset preserves hierarchy"]
+
+[[reference]]
+id = "nature-communications-2024-kossel-fig4"
+venue = "Nature Communications"
+year = 2024
+figure = "Figure 4"
+url = "https://www.nature.com/articles/s41467-024-45229-8"
+license_or_access = "open access article; citation only"
+plot_types = ["scatter", "fit", "small-multiples"]
+observations = ["red experimental markers and blue fits", "repeated axes styling", "limited visual vocabulary"]
+
+[[reference]]
+id = "nature-physics-2024-fluctuating-hydrodynamics-fig5"
+venue = "Nature Physics"
+year = 2024
+figure = "Figure 5"
+url = "https://www.nature.com/articles/s41567-024-02611-z"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["curves", "fit", "uncertainty-envelope"]
+observations = ["dashed uncertainty envelope", "fit and data share coordinates", "annotation kept outside dense traces"]
+
+[[reference]]
+id = "science-spj-2025-river-sediment-fig3a"
+venue = "Journal of Remote Sensing (Science Partner Journal)"
+year = 2025
+figure = "Figure 3A"
+url = "https://spj.science.org/doi/10.34133/remotesensing.0940"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["scatter", "piecewise-fit"]
+observations = ["high-density scatter", "piecewise relationships", "axes carry units without decorative grid"]
+
+[[reference]]
+id = "science-spj-2024-full-duplex-fig5"
+venue = "Space: Science & Technology (Science Partner Journal)"
+year = 2024
+figure = "Figure 5"
+url = "https://spj.science.org/doi/10.34133/space.0114"
+license_or_access = "open access publisher page; citation only"
+plot_types = ["experiment", "theory", "multi-series"]
+observations = ["experiment/theory comparison", "multi-panel consistency", "line styles support color"]
+
+[[reference]]
+id = "aps-prl-2024-su4-fig3"
+venue = "Physical Review Letters"
+year = 2024
+figure = "Figure 3"
+url = "https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.132.083401"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["experiment", "theory", "error-bars"]
+observations = ["compact PRL column layout", "symbols and lines remain distinct after reduction", "dense scientific notation"]
+
+[[reference]]
+id = "jacs-2023-single-molecule-fig4"
+venue = "Journal of the American Chemical Society"
+year = 2023
+figure = "Figure 4"
+url = "https://pubs.acs.org/doi/full/10.1021/jacs.2c11450"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["decay-curves", "fit", "distribution"]
+observations = ["fit overlays measurements", "panel lettering is consistent", "color is reinforced by grouping"]
+
+[[reference]]
+id = "advanced-materials-2026-charge-transport-fig4a"
+venue = "Advanced Materials"
+year = 2026
+figure = "Figure 4a"
+url = "https://advanced.onlinelibrary.wiley.com/doi/10.1002/adma.202523681"
+license_or_access = "open access article; citation only"
+plot_types = ["curves", "model", "multi-series"]
+observations = ["model and observation hierarchy", "restrained axes styling", "series identity repeated across panels"]
+
+[[reference]]
+id = "advanced-materials-2026-hydrogel-fig3ef"
+venue = "Advanced Materials"
+year = 2026
+figure = "Figure 3e-f"
+url = "https://advanced.onlinelibrary.wiley.com/doi/10.1002/adma.73386"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["scatter", "kinetic-fit", "decay-fit"]
+observations = ["experimental values and fits share semantic color", "fit quality annotation is compact", "paired panels use identical geometry"]
+
+[[reference]]
+id = "advanced-science-2023-hsp90-fig4b"
+venue = "Advanced Science (Wiley)"
+year = 2023
+figure = "Figure 4b"
+url = "https://advanced.onlinelibrary.wiley.com/doi/10.1002/advs.202304262"
+license_or_access = "publisher-hosted reference; image not redistributed"
+plot_types = ["correlation-curves", "fit", "multi-series"]
+observations = ["curves differentiated without heavy decoration", "fit is visually subordinate", "uncertainty and labels avoid trace overlap"]
+
+[[source_guide]]
+name = "Nature research figure guide"
+url = "https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/"
+use = "figure width, editable text, vector preference, font and line constraints"
+
+[[source_guide]]
+name = "Physical Review Style and Notation Guide"
+url = "https://publish.aps.org/files/styleguide-pr.pdf"
+use = "column reduction and minimum legibility constraints"
+
+[[source_guide]]
+name = "ACS preparing manuscript graphics"
+url = "https://pubs.acs.org/paragonplus/submission/general/graphics_prep.html"
+use = "single-column width and reduction constraints"
+
+[[source_guide]]
+name = "Wiley Guidelines for the Preparation of Figures"
+url = "https://authorservices.wiley.com/asset/photos/electronic_artwork_guidelines.pdf"
+use = "vector/raster type and resolution constraints"
