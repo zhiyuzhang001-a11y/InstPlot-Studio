@@ -53,6 +53,13 @@ pub struct Path {
     pub verbs: Vec<PathVerb>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAnchor {
+    Start,
+    Middle,
+    End,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub source: NodeId,
@@ -61,6 +68,8 @@ pub struct GlyphRun {
     pub y: Pt,
     pub size: Pt,
     pub color: Color,
+    pub rotation_degrees: f64,
+    pub anchor: TextAnchor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -184,7 +193,7 @@ pub fn to_svg(list: &DisplayList) -> SvgOutput {
                 .unwrap();
             }
             DisplayItem::GlyphRun(run) => {
-                writeln!(svg, "  <text data-node=\"{}\" x=\"{:.3}\" y=\"{:.3}\" font-size=\"{:.3}\" fill=\"{}\">{}</text>", run.source.0, run.x.get(), run.y.get(), run.size.get(), hex(run.color), escape(&run.text)).unwrap();
+                writeln!(svg, "  <text data-node=\"{}\" x=\"{:.3}\" y=\"{:.3}\" font-size=\"{:.3}\" fill=\"{}\" text-anchor=\"{}\" transform=\"rotate({:.3} {:.3} {:.3})\">{}</text>", run.source.0, run.x.get(), run.y.get(), run.size.get(), hex(run.color), match run.anchor { TextAnchor::Start => "start", TextAnchor::Middle => "middle", TextAnchor::End => "end" }, run.rotation_degrees, run.x.get(), run.y.get(), escape(&run.text)).unwrap();
             }
             DisplayItem::Image(image) => {
                 writeln!(svg, "  <image data-node=\"{}\" data-resource=\"{}\" x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" />", image.source.0, escape(&image.resource_id), image.x.get(), image.y.get(), image.width.get(), image.height.get()).unwrap();
@@ -248,11 +257,13 @@ fn snapshot_item(output: &mut String, item: &DisplayItem) {
         }
         DisplayItem::GlyphRun(run) => write!(
             output,
-            "GLYPH node={} at={:.3},{:.3} size={:.3} text={:?}",
+            "GLYPH node={} at={:.3},{:.3} size={:.3} rotate={:.3} anchor={:?} text={:?}",
             run.source.0,
             run.x.get(),
             run.y.get(),
             run.size.get(),
+            run.rotation_degrees,
+            run.anchor,
             run.text
         )
         .unwrap(),
@@ -338,7 +349,9 @@ fn item_is_finite(item: &DisplayItem) -> bool {
                 .as_ref()
                 .is_none_or(|value| pt(value.width) && value.dash.iter().all(|dash| pt(*dash)))
         }
-        DisplayItem::GlyphRun(run) => [run.x, run.y, run.size].into_iter().all(pt),
+        DisplayItem::GlyphRun(run) => {
+            [run.x, run.y, run.size].into_iter().all(pt) && run.rotation_degrees.is_finite()
+        }
         DisplayItem::Image(image) => [image.x, image.y, image.width, image.height]
             .into_iter()
             .all(pt),

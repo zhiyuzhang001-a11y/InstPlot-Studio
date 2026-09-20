@@ -2,7 +2,7 @@ use core::fmt;
 
 use crate::{
     Artist, Axes, Color, DisplayItem, DisplayList, Fill, FillRule, GlyphRun, LineCap, LineJoin,
-    NodeId, Path, PathVerb, Pt, Stroke,
+    NodeId, Path, PathVerb, Pt, Stroke, TextAnchor,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +81,8 @@ fn compile_axes(axes: &Axes, list: &mut DisplayList) -> Result<(), CompileError>
         y: pt(axes.top.get() + axes.height.get() + 18.0)?,
         size: pt(9.0)?,
         color: label_color,
+        rotation_degrees: 0.0,
+        anchor: TextAnchor::Middle,
     }));
     list.items.push(DisplayItem::GlyphRun(GlyphRun {
         source: axes.y.id,
@@ -89,6 +91,8 @@ fn compile_axes(axes: &Axes, list: &mut DisplayList) -> Result<(), CompileError>
         y: pt(axes.top.get() + axes.height.get() / 2.0)?,
         size: pt(9.0)?,
         color: label_color,
+        rotation_degrees: -90.0,
+        anchor: TextAnchor::Middle,
     }));
     Ok(())
 }
@@ -167,6 +171,8 @@ fn compile_artist(
             y: text.y,
             size: text.size,
             color: text.color,
+            rotation_degrees: 0.0,
+            anchor: TextAnchor::Start,
         })),
         Artist::Legend(legend) => {
             for (index, entry) in legend.entries.iter().enumerate() {
@@ -177,6 +183,8 @@ fn compile_artist(
                     y: pt(legend.y.get() + index as f64 * legend.size.get() * 1.35)?,
                     size: legend.size,
                     color: legend.color,
+                    rotation_degrees: 0.0,
+                    anchor: TextAnchor::Start,
                 }));
             }
         }

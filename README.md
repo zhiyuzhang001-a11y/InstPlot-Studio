@@ -25,8 +25,10 @@ Part A:
 4. A3 — Parley/fontique/HarfRust/skrifa selected; Source Sans 3 and semantic
    Label AST locally validated. PDF text extraction remains an A4 check and
    three-platform metric evidence remains an A8 check;
-5. A4 — the next phase: validate PDF, SVG, and raster backends against the same
-   Display List and positioned glyph contract.
+5. A4 — Krilla PDF, direct SVG, and direct tiny-skia raster routes locally
+   validated against one resolved Display List; cross-platform and additional
+   editor/viewer evidence remains an A8 check;
+6. A5 — the next phase: run the Plotine reuse comparison against the same fixture.
 
 Validate the A1 contract with:
 

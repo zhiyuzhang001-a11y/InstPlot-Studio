@@ -1,0 +1,70 @@
+#![cfg(feature = "comparison-raster")]
+
+use std::io::Cursor;
+
+use export_backend_spike::{Background, encode_png, rasterize_direct, rasterize_via_svg, resolve};
+use studio_render_spike::{compile, fixed_figure};
+
+#[test]
+fn raster_dimensions_background_alpha_and_png_metadata_are_correct() {
+    let resolved = resolve(&compile(&fixed_figure()).unwrap());
+    for (dpi, expected) in [
+        (300, (1051, 768)),
+        (600, (2102, 1535)),
+        (1200, (4205, 3071)),
+    ] {
+        let transparent = rasterize_via_svg(&resolved, dpi, Background::Transparent);
+        assert_eq!((transparent.width, transparent.height), expected);
+        assert!(transparent.rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
+        assert!(
+            transparent
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] == 255)
+        );
+
+        let white = rasterize_via_svg(&resolved, dpi, Background::White);
+        assert!(white.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+
+        let png = encode_png(&white).unwrap();
+        let decoder = png::Decoder::new(Cursor::new(png));
+        let reader = decoder.read_info().unwrap();
+        assert_eq!((reader.info().width, reader.info().height), expected);
+        let dimensions = reader.info().pixel_dims.unwrap();
+        assert_eq!(dimensions.unit, png::Unit::Meter);
+        assert_eq!(dimensions.xppu, (dpi as f64 / 0.0254).round() as u32);
+        assert!(
+            reader
+                .info()
+                .uncompressed_latin1_text
+                .iter()
+                .any(|chunk| { chunk.keyword == "Software" && chunk.text.contains("SciPlot") })
+        );
+    }
+}
+
+#[test]
+fn direct_and_svg_routes_share_dimensions_and_are_visually_close() {
+    let resolved = resolve(&compile(&fixed_figure()).unwrap());
+    let direct = rasterize_direct(&resolved, 300, Background::White);
+    let via_svg = rasterize_via_svg(&resolved, 300, Background::White);
+    assert_eq!(
+        (direct.width, direct.height),
+        (via_svg.width, via_svg.height)
+    );
+    let border_offset = ((67 * direct.width + 158) * 4) as usize;
+    assert!(
+        direct.rgba[border_offset] < 220,
+        "direct border pixel: {:?}",
+        &direct.rgba[border_offset..border_offset + 4]
+    );
+
+    let differing_channels = direct
+        .rgba
+        .iter()
+        .zip(&via_svg.rgba)
+        .filter(|(left, right)| left.abs_diff(**right) > 16)
+        .count();
+    let ratio = differing_channels as f64 / direct.rgba.len() as f64;
+    assert!(ratio < 0.08, "different channel ratio: {ratio:.4}");
+}

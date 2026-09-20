@@ -11,3 +11,7 @@ alternatives, and an exit strategy.
 - [ADR-005: Deterministic publication fonts and CJK fallback](005-publication-fonts.md)
 - [ADR-006: Font fallback and project reproducibility](006-font-fallback-reproducibility.md)
 - [ADR-007: V1 semantic Label AST and advanced math scope](007-label-ast-scope.md)
+- [ADR-008: PDF backend](008-pdf-backend.md)
+- [ADR-009: SVG backend](009-svg-backend.md)
+- [ADR-010: Raster backend and DPI rounding](010-raster-backend.md)
+- [ADR-011: Real text and optional outline policy](011-real-text-policy.md)
