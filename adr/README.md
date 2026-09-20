@@ -19,3 +19,7 @@ alternatives, and an exit strategy.
 - [ADR-013: Studio UI shell and GUI framework](013-studio-ui-shell.md)
 - [ADR-014: HiDPI transform and window-independent export](014-hidpi-and-headless-export.md)
 - [ADR-015: UI size, startup, and idle-memory baseline](015-ui-size-startup-memory.md)
+- [ADR-016: Scale, locator, and formatter contract](016-scale-locator-formatter.md)
+- [ADR-017: Deterministic single-Axes layout](017-single-axes-layout.md)
+- [ADR-018: Legend auto-placement](018-legend-auto-placement.md)
+- [ADR-019: Preview overlay and document-edit boundary](019-preview-overlay-edit-boundary.md)

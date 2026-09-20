@@ -1,0 +1,12 @@
+[package]
+name = "layout-engine-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+parley = "0.11.1"
+studio-render-spike = { path = "../studio-render-spike" }
+
+[dev-dependencies]
+export-backend-spike = { path = "../export-backend-spike" }

@@ -33,7 +33,10 @@ Part A:
 7. A6 — eframe/egui shell, native dialog, keyboard input, view zoom, HiDPI
    transform, and window-independent export locally validated; three-platform
    scaling/theme evidence remains an A8 check;
-8. A7 — the next phase: deterministic single-Axes publication layout and marks.
+8. A7 — deterministic single-Axes layout, ticks, publication marks, legend
+   placement, warnings, and hit map locally validated against the A1 fixture;
+9. A8 — the next phase: reproducible validation, dependency audit, and the
+   Windows/macOS/Linux evidence matrix.
 
 Validate the A1 contract with:
 
