@@ -15,3 +15,4 @@ alternatives, and an exit strategy.
 - [ADR-009: SVG backend](009-svg-backend.md)
 - [ADR-010: Raster backend and DPI rounding](010-raster-backend.md)
 - [ADR-011: Real text and optional outline policy](011-real-text-policy.md)
+- [ADR-012: Plotine reuse boundary](012-plotine-reuse.md)

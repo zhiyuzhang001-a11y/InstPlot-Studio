@@ -28,7 +28,10 @@ Part A:
 5. A4 — Krilla PDF, direct SVG, and direct tiny-skia raster routes locally
    validated against one resolved Display List; cross-platform and additional
    editor/viewer evidence remains an A8 check;
-6. A5 — the next phase: run the Plotine reuse comparison against the same fixture.
+6. A5 — Plotine 0.5.2 compared against the same fixture; ADR-012 keeps it out of
+   production dependencies and retains only algorithm/test ideas;
+7. A6 — the next phase: validate the minimal UI shell without coupling export to
+   the window or GPU lifecycle.
 
 Validate the A1 contract with:
 

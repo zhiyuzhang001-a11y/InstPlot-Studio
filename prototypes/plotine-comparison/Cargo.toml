@@ -1,0 +1,14 @@
+[package]
+name = "plotine-comparison"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+plotine = { version = "0.5.2", default-features = false, features = ["png", "svg", "pdf", "cjk"] }
+
+[dev-dependencies]
+lopdf = "0.45.0"
+pdf-extract = "0.12.1"
+png = "0.18.1"
+roxmltree = "0.21.1"
