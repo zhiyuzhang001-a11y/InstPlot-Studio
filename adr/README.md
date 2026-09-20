@@ -16,3 +16,6 @@ alternatives, and an exit strategy.
 - [ADR-010: Raster backend and DPI rounding](010-raster-backend.md)
 - [ADR-011: Real text and optional outline policy](011-real-text-policy.md)
 - [ADR-012: Plotine reuse boundary](012-plotine-reuse.md)
+- [ADR-013: Studio UI shell and GUI framework](013-studio-ui-shell.md)
+- [ADR-014: HiDPI transform and window-independent export](014-hidpi-and-headless-export.md)
+- [ADR-015: UI size, startup, and idle-memory baseline](015-ui-size-startup-memory.md)

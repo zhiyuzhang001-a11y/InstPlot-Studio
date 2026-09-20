@@ -1,0 +1,27 @@
+[package]
+name = "ui-shell-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+publication-stack = ["dep:export-backend-spike"]
+
+[dependencies]
+eframe = { version = "=0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+export-backend-spike = { path = "../export-backend-spike", optional = true }
+studio-render-spike = { path = "../studio-render-spike" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "=0.17.2", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

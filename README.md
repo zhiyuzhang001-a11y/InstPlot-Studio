@@ -30,8 +30,10 @@ Part A:
    editor/viewer evidence remains an A8 check;
 6. A5 — Plotine 0.5.2 compared against the same fixture; ADR-012 keeps it out of
    production dependencies and retains only algorithm/test ideas;
-7. A6 — the next phase: validate the minimal UI shell without coupling export to
-   the window or GPU lifecycle.
+7. A6 — eframe/egui shell, native dialog, keyboard input, view zoom, HiDPI
+   transform, and window-independent export locally validated; three-platform
+   scaling/theme evidence remains an A8 check;
+8. A7 — the next phase: deterministic single-Axes publication layout and marks.
 
 Validate the A1 contract with:
 
