@@ -20,8 +20,9 @@ Part A:
 
 1. A0 — local InstPlot Lite baseline captured; cross-platform evidence remains open;
 2. A1 — fixed publication fixture and acceptance contract frozen and validated;
-3. A2 — the next implementation phase: a point-based Figure IR and
-   backend-neutral Display List spike.
+3. A2 — point-based Figure IR and backend-neutral Display List spike implemented
+   and locally verified;
+4. A3 — the next phase: select and validate one text shaping and font route.
 
 Validate the A1 contract with:
 
