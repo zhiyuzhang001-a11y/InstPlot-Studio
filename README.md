@@ -22,7 +22,11 @@ Part A:
 2. A1 — fixed publication fixture and acceptance contract frozen and validated;
 3. A2 — point-based Figure IR and backend-neutral Display List spike implemented
    and locally verified;
-4. A3 — the next phase: select and validate one text shaping and font route.
+4. A3 — Parley/fontique/HarfRust/skrifa selected; Source Sans 3 and semantic
+   Label AST locally validated. PDF text extraction remains an A4 check and
+   three-platform metric evidence remains an A8 check;
+5. A4 — the next phase: validate PDF, SVG, and raster backends against the same
+   Display List and positioned glyph contract.
 
 Validate the A1 contract with:
 

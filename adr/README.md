@@ -7,3 +7,7 @@ alternatives, and an exit strategy.
 - [ADR-001: Physical units and conversion boundaries](001-physical-units.md)
 - [ADR-002: Display List coordinate and primitive contract](002-display-list-contract.md)
 - [ADR-003: Stable node identity](003-stable-node-identity.md)
+- [ADR-004: Default text shaping engine](004-default-text-shaping-engine.md)
+- [ADR-005: Deterministic publication fonts and CJK fallback](005-publication-fonts.md)
+- [ADR-006: Font fallback and project reproducibility](006-font-fallback-reproducibility.md)
+- [ADR-007: V1 semantic Label AST and advanced math scope](007-label-ast-scope.md)
