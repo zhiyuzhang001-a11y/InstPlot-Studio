@@ -27,6 +27,15 @@ class AuditHelpersTest(unittest.TestCase):
         }
         self.assertFalse(any("svg" in check_id for check_id in ids))
 
+    def test_windows_scaling_includes_fractional_dpi(self) -> None:
+        scaling = next(
+            item
+            for item in audit.manual_items("windows")
+            if item["id"] == "windows-scaling"
+        )
+        self.assertIn("125%", scaling["requirement"])
+        self.assertIn("live scale change", scaling["requirement"])
+
     def test_automated_scope_is_explicit_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)

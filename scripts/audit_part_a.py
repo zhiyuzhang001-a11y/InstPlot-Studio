@@ -750,7 +750,7 @@ def manual_items(profile: str) -> list[dict[str, Any]]:
         return [
             {
                 "id": "windows-scaling",
-                "requirement": "Inspect preview at 100%, 150%, and 200% Windows display scaling; export geometry must remain unchanged.",
+                "requirement": "Inspect preview at 100%, 125%, 150%, and 200% Windows display scaling, including one live scale change; export geometry must remain unchanged.",
             },
             {
                 "id": "windows-pdf-viewer",
