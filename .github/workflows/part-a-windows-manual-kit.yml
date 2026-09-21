@@ -1,0 +1,56 @@
+name: Build Part A Windows manual test kit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-manual-kit:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build executable and generate PDF
+        shell: pwsh
+        run: |
+          Push-Location prototypes/ui-shell-spike
+          cargo build --release --locked
+          Pop-Location
+
+          Push-Location prototypes/export-backend-spike
+          cargo run --release --locked --bin generate_fixture -- artifacts
+          Pop-Location
+
+      - name: Assemble test kit
+        shell: pwsh
+        run: |
+          $package = Join-Path $PWD "target/part-a-windows-manual-kit"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "prototypes/ui-shell-spike/target/release/ui-shell-spike.exe" "$package/InstPlot-Studio-Part-A.exe"
+          Copy-Item "prototypes/export-backend-spike/artifacts/a4-fixture.pdf" "$package/InstPlot-Studio-Part-A.pdf"
+          Copy-Item "reports/WINDOWS_PART_A_MANUAL_CHECKLIST.md" "$package/WINDOWS_PART_A_MANUAL_CHECKLIST.md"
+          Copy-Item "prototypes/text-shaping-spike/assets/fonts/GUST-FONT-LICENSE.txt" "$package/GUST-FONT-LICENSE.txt"
+          Copy-Item "prototypes/text-shaping-spike/assets/fonts/MANIFEST-TeX-Gyre-Heros.txt" "$package/MANIFEST-TeX-Gyre-Heros.txt"
+          Copy-Item "prototypes/text-shaping-spike/assets/fonts/README-TeX-Gyre-Heros.txt" "$package/README-TeX-Gyre-Heros.txt"
+          git rev-parse HEAD | Set-Content -Encoding utf8NoBOM "$package/GIT_COMMIT.txt"
+
+          $hashes = Get-ChildItem -File $package |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $hashes | Set-Content -Encoding utf8NoBOM "$package/SHA256SUMS.txt"
+
+      - name: Upload Windows manual test kit
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: InstPlot-Studio-Windows-Part-A-manual-kit
+          path: target/part-a-windows-manual-kit/
+          if-no-files-found: error
+          retention-days: 14
