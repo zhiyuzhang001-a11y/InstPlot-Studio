@@ -43,6 +43,10 @@ jobs:
           cargo build --release --locked
           Pop-Location
 
+          Push-Location prototypes/export-backend-spike
+          cargo run --release --locked --bin generate_fixture -- artifacts
+          Pop-Location
+
           $package = Join-Path $PWD "target/part-a-windows-manual-kit"
           New-Item -ItemType Directory -Force -Path $package | Out-Null
           Copy-Item "prototypes/ui-shell-spike/target/release/ui-shell-spike.exe" "$package/InstPlot-Studio-Part-A.exe"
