@@ -52,16 +52,30 @@ changed pixels.
 
 ## Remaining A8 evidence
 
-- run the same deterministic font and visual matrix on native Windows; Linux is
-  deferred by the current product-owner decision and is not recorded as passed;
-- install or otherwise provide `cargo-audit` for the RustSec advisory scan;
-- repeat the UI preview on a real Retina display (the attached T2752Q reports
-  2560×1440 at 1.0 pixels per point, so this host cannot supply Retina evidence).
+- Windows automated validation passed all 21 checks in GitHub Actions at commit
+  `7d89c666f964d96e49cd72f67fba480bbe0532f8`; Windows GUI scaling, target-viewer,
+  and native-input checks still require an interactive Windows host. Linux is
+  deferred by the current product-owner decision and is not recorded as passed.
+- Repeat the UI preview on a real Retina display, or an accepted Apple
+  high-resolution simulation followed by release-time hardware confirmation.
+  The attached T2752Q reports 2560×1440 at 1.0 pixels per point and Quartz Debug
+  is not installed, so this host cannot supply 2× manual evidence.
 
 The macOS Preview check for the generated PDF passed on 2026-09-21: the page,
 vector geometry, clipping, labels, Greek quantity symbol, and scripted text
-rendered correctly. The unified audit is `scripts/audit_part_a.py`; its exit
-codes distinguish failures (`1`) from incomplete or blocked evidence (`2`).
+rendered correctly. A fresh accessibility-assisted inspection also confirmed
+one search result for `μ0HDL` and exact semantic select/copy output. Structured
+manual evidence is recorded in `reports/A8_MACOS_MANUAL_EVIDENCE.json`. The
+unified audit is `scripts/audit_part_a.py`; its exit codes distinguish failures
+(`1`) from incomplete or blocked evidence (`2`).
+
+The same fresh 1× inspection confirmed that the A6 shell opens at
+`pixels_per_point=1.000`, reports a 378×276 px framebuffer at 1.50× canvas zoom,
+and routes Command-O to the native macOS Open dialog. It also reproduced the
+documented A6 placeholder limitation: the y-axis source string is neither
+rotated nor fully visible in the shell preview. The publication PDF is correct,
+but this disposable shell must not be cited as a publication-faithful preview;
+the future Studio preview must consume the resolved A3/A7 runs or outlines.
 
 The Illustrator 2026 SVG import failure discovered during this review is kept
 as evidence for the optional SVG experiment. ADR-021 removes SVG from the V1

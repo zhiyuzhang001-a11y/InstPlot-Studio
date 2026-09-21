@@ -1,0 +1,12 @@
+---
+description: Avoid token-heavy supervision of long-running automated tasks
+alwaysApply: true
+---
+
+# Long-running task monitoring
+
+- After starting a long-running local or remote automated command, do not continuously poll or narrate unchanged status.
+- Let the process run independently. Prefer a single delayed completion check, a background job, CI notification, or a saved log/result file.
+- Check again only near the expected completion time, when the task reports completion, or when user action is required.
+- Do not spend model turns merely waiting. Use the resulting logs and structured reports to diagnose failures after the run finishes.
+- For long local builds and test suites, tell the user that the task has started and yield control unless active interaction is genuinely required.

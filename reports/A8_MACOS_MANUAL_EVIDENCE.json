@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "platform": "Darwin",
+  "reviewer": "Codex local macOS inspection",
+  "observed_at_utc": "2026-09-21T09:51:39Z",
+  "checks": [
+    {
+      "id": "macos-retina-preview",
+      "requirement": "Inspect the preview on a Retina display and confirm export is independent of window scale.",
+      "result": "blocked",
+      "notes": "The only attached display is T2752Q at 2560x1440 and the running shell reports pixels_per_point=1.000. The 1x window, canvas, zoom metadata and native framebuffer sizing were inspected successfully, but no Retina display or Quartz Debug high-resolution simulation is available. Existing 2x transform unit tests are not represented as manual Retina evidence.",
+      "artifacts": []
+    },
+    {
+      "id": "macos-pdf-viewer",
+      "requirement": "Open the generated PDF in Preview/target viewer and verify vectors, clipping, search, selection, and copied semantic text.",
+      "result": "pass",
+      "notes": "Opened the one-page fixture in macOS Preview. The page and vector geometry rendered without clipping or overlap. Searching for μ0HDL returned one match. Select-all and copy preserved: Current density Je (A m−2); T ≤ 300 K; Experiment; Fit; μ0HDL (mT). pdfinfo reports 252.283 x 184.252 pt and the repository PDF structural test independently verifies vector paths and an embedded font subset.",
+      "artifacts": [
+        "prototypes/export-backend-spike/artifacts/a4-fixture.pdf"
+      ]
+    }
+  ]
+}
