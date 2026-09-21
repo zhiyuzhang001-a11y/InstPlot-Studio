@@ -15,11 +15,22 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned RustSec auditor
         shell: pwsh
-        run: cargo install cargo-audit --version 0.22.2 --locked
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "cargo-audit-v0.22.2.zip"
+          $expanded = Join-Path $env:RUNNER_TEMP "cargo-audit-v0.22.2"
+          Invoke-WebRequest -Uri "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-pc-windows-msvc-v0.22.2.zip" -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          $expected = "0a7316540862c13d954f648917ceacca593747baed6eec180fafa590be2710ab"
+          if ($actual -ne $expected) {
+            throw "cargo-audit archive SHA-256 mismatch: expected $expected, got $actual"
+          }
+          Expand-Archive -Path $archive -DestinationPath $expanded
+          Copy-Item "$expanded/cargo-audit-x86_64-pc-windows-msvc-v0.22.2/cargo-audit.exe" "$env:USERPROFILE/.cargo/bin/cargo-audit.exe"
+          cargo audit --version
 
       - name: Run complete automated Windows scope
         shell: pwsh
@@ -27,7 +38,7 @@ jobs:
 
       - name: Upload exact audit evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: part-a-windows-audit
           path: |
