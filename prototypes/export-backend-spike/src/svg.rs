@@ -15,7 +15,7 @@ pub fn to_svg(list: &ResolvedDisplayList) -> String {
     for item in &list.items {
         if let ResolvedItem::Text(text) = item {
             for run in &text.runs {
-                if run.font.postscript_name.starts_with("SourceSans3-") {
+                if run.font.postscript_name.starts_with("TeXGyreHeros-") {
                     fonts
                         .entry(run.font.postscript_name.clone())
                         .or_insert_with(|| run.font_data.as_ref().clone());
@@ -29,7 +29,7 @@ pub fn to_svg(list: &ResolvedDisplayList) -> String {
         list.width, list.height, list.width, list.height
     );
     svg.push_str(
-        "  <metadata>SciPlot A4 resolved Display List</metadata>\n  <defs>\n    <style>\n",
+        "  <metadata>InstPlot Studio A4 resolved Display List</metadata>\n  <defs>\n    <style>\n",
     );
     for (postscript_name, data) in &fonts {
         writeln!(
@@ -143,10 +143,11 @@ fn write_run_tspans(svg: &mut String, text: &ResolvedText, run: &ResolvedRun) {
         }
         write!(
             svg,
-            "<tspan x=\"{:.3}\" y=\"{:.3}\" font-family=\"{}\" data-font-version=\"{}\" data-glyph-ids=\"{}\">{}</tspan>",
+            "<tspan x=\"{:.3}\" y=\"{:.3}\" font-family=\"{}\" font-size=\"{:.3}\" data-font-version=\"{}\" data-glyph-ids=\"{}\">{}</tspan>",
             text.x + run.start_x + cursor + first.x_offset,
-            text.y - first.y_offset,
+            text.y + run.baseline_shift - first.y_offset,
             xml(&run.font.postscript_name),
+            run.font_size,
             xml(&run.font.version),
             ids.join(","),
             xml(&text.text[range])

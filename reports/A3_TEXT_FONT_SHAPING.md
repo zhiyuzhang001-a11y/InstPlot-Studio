@@ -1,109 +1,84 @@
 # A3 — text, font, and semantic label validation
 
-Status: **default route selected; local evidence complete**
+Status: **typography migration and backend integration locally complete**
 
-Date: 2026-09-20
+Updated: 2026-09-21
 
 ## Decision
 
-SciPlot will use Parley + fontique + HarfRust + skrifa as its sole default text
-shaping route. Layout produces backend-neutral positioned glyph runs once; the
-preview, PDF, and SVG backends must consume those runs without shaping again.
+InstPlot Studio uses Parley + fontique + HarfRust + skrifa as its sole default
+text-shaping route. V1 bundles TeX Gyre Heros 2.004 in four real OTF faces:
+Regular, Italic, Bold, and Bold Italic. No system font discovery is used for
+publication labels, and no separate Symbol font is required.
 
-The deterministic Latin/Greek family is bundled Source Sans 3 v3.052 in static
-Regular, Italic, and Bold OTF faces. CJK uses a system fallback whose resolved
-font identity, version, face index, embedding permission, and subsetting status
-must be recorded.
+The semantic Label AST selects the face independently from character identity:
+variables and variable subscripts are italic; ordinary text, numbers, units,
+and descriptive subscripts are upright. U+00B5 legacy input is normalized to
+U+03BC. Unsupported scripts, including CJK in V1, produce an explicit error
+instead of fallback, outlines, or rasterized text.
 
-## Candidate evidence
+## Bundled font audit
 
-Both Parley 0.11.1 and cosmic-text 0.19.0 passed the local label corpus. After
-preventing a same-named system font from shadowing the bundled face, both engines
-returned identical glyph IDs, X positions, and advances for the deterministic
-Source Sans runs. Their Y values differ because they expose different baseline
-coordinate conventions, not because they shape different glyphs.
+The files were copied from the locally supplied TeX Gyre distribution together
+with its GUST Font License, upstream manifest, and README. The four fonts total
+543,276 bytes; the complete bundled font directory including checksums is
+579,168 bytes.
 
-Parley is selected because its current stack directly joins font discovery and
-fallback (fontique), shaping (HarfRust), metrics/outlines (skrifa), and styled
-layout. It also uses the newer HarfRust/skrifa line in this comparison. The
-cosmic-text probe remains as an exit-path comparison, but is not a production
-dependency decision.
+- Regular: `TeXGyreHeros-Regular`, 133,600 bytes, SHA-256
+  `6ae1a09d5a940367b7aaaa91ee8bd8a2c333bfe193e7096e23f931357d62081f`.
+- Italic: `TeXGyreHeros-Italic`, 139,208 bytes, SHA-256
+  `6473df7fa107b3fb4be38973710afe22b0640c2ac076d5337cf126bed9aa108c`.
+- Bold: `TeXGyreHeros-Bold`, 135,204 bytes, SHA-256
+  `b170162835f4efc288886dd4231406dc47e19b614cf4416836635599d44a7d60`.
+- Bold Italic: `TeXGyreHeros-BoldItalic`, 135,264 bytes, SHA-256
+  `166fc6d068d9c9974281555cb3d730365537a9b676ab269bb5163f5a75496505`.
+- GUST Font License: SHA-256
+  `2bd69affc3da00715116f713f57eab9707e96daf3562ad0215987b15b9c16f73`.
+- Upstream manifest: SHA-256
+  `3263a067e409258be34027de883e618cc2c76c70135897835f65f3c569dec5d1`.
+- Upstream README: SHA-256
+  `cb41cbe4091a67a7a7b39df62553a7fc05f03e9014d7d1e148687967f3250188`.
 
-Measured on the current Apple Silicon macOS host with a clean Cargo target:
+All four faces pass the accepted Greek Core and Scientific Symbol Core coverage
+checks and allow embedding/subsetting. The family does not map U+2080 SUBSCRIPT
+ZERO or U+207B SUPERSCRIPT MINUS. That is not a Core coverage failure: the V1
+contract requires semantic subscript/superscript layout from ordinary base
+characters, rather than dependence on Unicode presentation glyphs.
 
-- Parley candidate: 13.06 s clean release build; 2,648,824-byte stripped probe.
-- cosmic-text candidate: 10.58 s clean release build; 2,622,136-byte stripped probe.
-- Parley delta in this probe: 26,688 bytes.
-- Mandatory Source Sans assets plus OFL text: 922,053 bytes.
+## Local evidence
 
-The probes include the same three fonts, test model, metadata parser, and system
-font discovery, so these figures compare route cost rather than final app size.
-Both remain compatible with the 10 MiB architecture target at this stage.
+The migrated Parley prototype loads only the four bundled faces. Its positive
+corpus covers upright/italic/bold/bold-italic selection, Greek variables,
+upright units, semantic subscripts and superscripts, U+00B5 normalization, and
+missing-glyph reporting. A negative `温度 T (K)` fixture proves that unsupported
+CJK is rejected before shaping and produces no fallback run.
 
-## Font audit
+The selected Parley tests currently pass locally. The cosmic-text probe remains
+an exit-path comparison, not a production dependency decision.
 
-The pinned family is Adobe Source Sans 3 v3.052 under OFL-1.1. All three static
-faces expose BASE, CFF, GDEF, GPOS, GSUB, OS/2, cmap, head, hhea, hmtx, maxp,
-name, and post tables. The tested coverage includes Latin, Greek, the Unicode
-minus sign, superscript digits, and the publication labels in the fixture. It
-does not include CJK.
+## Remaining gate evidence
 
-- Regular: `Source Sans 3`, PDF/PostScript name `SourceSans3-Regular`, 334,924
-  bytes, SHA-256 `08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6`.
-- Italic: `Source Sans 3 Italic`, PDF/PostScript name `SourceSans3-It`, 239,048
-  bytes, SHA-256 `430b9f0eb1170be0981706d14b6cf87122efba9d86c373bbdf69daf276421462`.
-- Bold: `Source Sans 3 Bold`, PDF/PostScript name `SourceSans3-Bold`, 343,596
-  bytes, SHA-256 `7776ddb9f3eb58683e59f28d558d8896b768c2d0c80799fb3f1c56c54dfd98c9`.
-- License text: 4,485 bytes, SHA-256
-  `f9e57d28452ab6162c7fc0d248b5a5e81bf64676a6950d56b2e137c1253f79e8`.
+A2/A4 now carry semantic labels end-to-end, use ordinary base characters for
+script layout, and prove that every successful PDF/SVG/raster run uses a bundled
+Heros face. A7's metric snapshot and A8's five local visual baselines have been
+regenerated and reviewed. The remaining A3/A8 gate evidence is the native
+Windows/Linux deterministic metric and export matrix.
 
-The OS/2 embedding flag is installable for the bundled faces and subsetting is
-allowed. The local mixed Chinese/Latin test resolved Chinese to PingFang SC
-Regular, PostScript name `PingFangSC-Regular`, version `21.0d1e1`, collection
-face index 3, preview-and-print embedding, with subsetting allowed. This is host
-evidence, not a cross-platform fallback promise.
-
-## Label and failure-path evidence
-
-The semantic Label AST supports Text, Variable, Upright, Greek, Subscript,
-Superscript, Unit, Operator, and Group. It emits independent styled spans before
-shaping. The corpus covers plain Latin, italic variables, upright descriptive
-subscripts, italic mathematical subscripts, upright units and numbers, Greek,
-negative superscript exponents, mixed Chinese/Latin, a missing scalar, rotated
-Y-axis label content, and legend content.
-
-The selected route preserves source Unicode alongside glyph IDs and positions.
-The invalid scalar resolves to glyph ID zero and produces an explicit warning.
-The local CJK fallback records the actual face and embedding rights. Repeating
-the selected probe produces byte-identical snapshots on this host.
+The historical Source Sans 3 and system-CJK measurements remain available in
+Git history, but are not current acceptance evidence.
 
 ## Verification
 
 ```sh
-cd prototypes/text-shaping-spike
-cargo fmt --check
-cargo test --all-features --locked
-cargo run --release --locked --features parley-candidate --bin parley-probe
-cargo run --release --locked --features cosmic-candidate --bin cosmic-probe
+cargo fmt --manifest-path prototypes/text-shaping-spike/Cargo.toml --check
+cargo test --manifest-path prototypes/text-shaping-spike/Cargo.toml --locked --all-features
+cargo clippy --manifest-path prototypes/text-shaping-spike/Cargo.toml \
+  --locked --all-targets --all-features -- -D warnings
 ```
-
-## Remaining gate evidence
-
-A3's architecture decision is complete, but two acceptance claims deliberately
-remain owned by later planned stages:
-
-- A4 must prove that PDF and SVG consume the selected positioned glyph runs,
-  embed/subset the resolved fonts, and preserve searchable/copyable Unicode.
-- A8 must run the pinned Latin/Greek metric snapshot on macOS, Windows, and Linux.
-
-Until those pass, A3 is not a claim that Gate A is complete. Any backend that
-reshapes text or requires outline-only PDF text reopens ADR-004.
 
 ## Sources
 
+- TeX Gyre Heros project: <https://www.gust.org.pl/projects/e-foundry/tex-gyre>
 - Parley documentation: <https://docs.rs/parley/latest/parley/>
 - Parley repository and license: <https://github.com/linebender/parley>
 - cosmic-text documentation: <https://docs.rs/cosmic-text/latest/cosmic_text/>
-- cosmic-text repository: <https://github.com/pop-os/cosmic-text>
-- Source Sans repository and OFL: <https://github.com/adobe-fonts/source-sans>
-- Source Sans releases: <https://github.com/adobe-fonts/source-sans/releases>

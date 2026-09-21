@@ -1,4 +1,5 @@
 use studio_render_spike::{Color, NodeId};
+use text_shaping_spike::Label;
 
 use crate::{
     Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, LineStyle, Locator, MarkerShape,
@@ -6,6 +7,32 @@ use crate::{
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
+
+fn x_axis_label() -> Label {
+    Label::Group(vec![
+        Label::GreekVariable('μ'),
+        Label::VariableSubscript(Box::new(Label::Number("0".into()))),
+        Label::Variable("H".into()),
+        Label::DescriptiveSubscript(Box::new(Label::Text("DL".into()))),
+        Label::Text(" (".into()),
+        Label::Unit("mT".into()),
+        Label::Text(")".into()),
+    ])
+}
+
+fn y_axis_label() -> Label {
+    Label::Group(vec![
+        Label::Text("Current density ".into()),
+        Label::Variable("J".into()),
+        Label::VariableSubscript(Box::new(Label::Variable("e".into()))),
+        Label::Text(" (".into()),
+        Label::Unit("A".into()),
+        Label::UnitSeparator,
+        Label::Unit("m".into()),
+        Label::Superscript(Box::new(Label::Number("−2".into()))),
+        Label::Text(")".into()),
+    ])
+}
 
 pub fn publication_fixture() -> Chart {
     let rows: Vec<Vec<f64>> = CSV
@@ -43,7 +70,7 @@ pub fn publication_fixture() -> Chart {
         height_pt: 65.0 / 25.4 * 72.0,
         x: AxisSpec {
             id: NodeId(2),
-            label: "μ₀H_DL (mT)".into(),
+            label: x_axis_label(),
             minimum: -3.0,
             maximum: 3.0,
             scale: Scale::Linear,
@@ -53,7 +80,7 @@ pub fn publication_fixture() -> Chart {
         },
         y: AxisSpec {
             id: NodeId(3),
-            label: "Current density J_e (A m⁻²)".into(),
+            label: y_axis_label(),
             minimum: -2.5,
             maximum: 2.5,
             scale: Scale::Linear,
@@ -127,7 +154,7 @@ pub fn publication_fixture() -> Chart {
         ],
         annotations: vec![Annotation {
             id: NodeId(20),
-            text: "温度 T (K)".into(),
+            text: "T ≤ 300 K".into(),
             point: DataPoint { x: -2.8, y: 2.1 },
             offset_pt: (2.0, 0.0),
         }],

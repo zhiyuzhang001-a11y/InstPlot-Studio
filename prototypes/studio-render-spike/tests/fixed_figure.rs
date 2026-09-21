@@ -1,4 +1,5 @@
-use studio_render_spike::{compile, fixed_figure, to_svg};
+use studio_render_spike::{DisplayItem, NodeId, compile, fixed_figure, to_svg};
+use text_shaping_spike::Style;
 
 #[test]
 fn display_list_snapshot_is_deterministic() {
@@ -6,6 +7,26 @@ fn display_list_snapshot_is_deterministic() {
     let second = compile(&fixed_figure()).unwrap().debug_snapshot();
     assert_eq!(first, second);
     assert_eq!(first, include_str!("../snapshots/fixed_figure.txt"));
+
+    let display = compile(&fixed_figure()).unwrap();
+    let x_label = display
+        .items
+        .iter()
+        .find_map(|item| match item {
+            DisplayItem::GlyphRun(run) if run.source == NodeId(3) => Some(run),
+            _ => None,
+        })
+        .unwrap();
+    let spans = x_label.label.spans();
+    assert_eq!(spans[0].style, Style::Italic);
+    assert!(spans.iter().any(|span| span.baseline_shift_em > 0.0));
+    assert!(
+        !x_label
+            .label
+            .normalized_text()
+            .chars()
+            .any(|character| matches!(character, '₀' | '⁻' | '²'))
+    );
 }
 
 #[test]

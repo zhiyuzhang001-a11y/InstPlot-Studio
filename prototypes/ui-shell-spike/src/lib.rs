@@ -104,6 +104,7 @@ pub fn paint_display_list(painter: &egui::Painter, list: &DisplayList, transform
                 }
             }
             DisplayItem::GlyphRun(run) => {
+                let text = run.label.normalized_text();
                 let anchor = match run.anchor {
                     studio_render_spike::TextAnchor::Start => egui::Align2::LEFT_BOTTOM,
                     studio_render_spike::TextAnchor::Middle => egui::Align2::CENTER_BOTTOM,
@@ -112,7 +113,7 @@ pub fn paint_display_list(painter: &egui::Painter, list: &DisplayList, transform
                 current.text(
                     transform.position(run.x, run.y),
                     anchor,
-                    &run.text,
+                    text,
                     egui::FontId::proportional(run.size.get() as f32 * transform.zoom),
                     color32(run.color),
                 );

@@ -1,0 +1,36 @@
+name: Part A Windows automated audit
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-audit:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install pinned RustSec auditor
+        shell: pwsh
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Run complete automated Windows scope
+        shell: pwsh
+        run: ./scripts/audit_part_a.ps1 --automated-only
+
+      - name: Upload exact audit evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: part-a-windows-audit
+          path: |
+            target/part-a-audit/
+            target/part-a-validation/
+          if-no-files-found: error

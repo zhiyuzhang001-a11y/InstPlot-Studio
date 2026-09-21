@@ -30,11 +30,12 @@ grid = false
 ticks_direction = "in"
 
 [text]
-required_strings = ["μ₀H_DL (mT)", "Current density J_e (A m⁻²)", "温度 T (K)", "Experiment", "Fit", "Theory"]
+required_strings = ["μ₀H_DL (mT)", "Current density J_e (A m⁻²)", "T ≤ 300 K", "Experiment", "Fit", "Theory"]
 searchable_in_pdf = true
-preserved_as_text_in_svg = true
+svg_export_optional = true
 missing_glyph_is_error = false
 missing_glyph_requires_warning = true
+unsupported_script_is_error = true
 
 [raster]
 background_rgba = [255, 255, 255, 255]

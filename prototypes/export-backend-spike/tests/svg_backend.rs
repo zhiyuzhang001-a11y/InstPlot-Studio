@@ -16,7 +16,7 @@ fn svg_is_physical_self_contained_parseable_and_keeps_text() {
     assert!(svg.contains("clip-path=\"url(#clip-0)\""));
     assert!(svg.contains("data-source=\"Experiment\""));
     assert!(svg.contains("data-glyph-ids="));
-    assert!(svg.contains("温度"));
+    assert!(svg.contains("T ≤ 300 K"));
     assert!(svg.contains("rotate(-90.000"));
     assert!(svg.contains("data:font/otf;base64,"));
     assert!(!svg.contains("file://"));

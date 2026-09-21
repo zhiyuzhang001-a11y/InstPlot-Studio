@@ -4,6 +4,7 @@ use studio_render_spike::{
     Color, DisplayItem, DisplayList, Fill, FillRule, GlyphRun, LineCap, LineJoin, NodeId, Path,
     PathVerb, Pt, Stroke, TextAnchor,
 };
+use text_shaping_spike::Label;
 
 use crate::model::{Chart, DashStyle, DataPoint, MarkerShape, MarkerStyle, Series};
 use crate::scale::{Scale, collision_stride, format_ticks, minor_ticks};
@@ -235,8 +236,8 @@ pub fn layout_with_measurer(
         let x = axis_layout(chart, true, axes, measurer);
         let y = axis_layout(chart, false, axes, measurer);
         let legend = choose_legend(chart, axes, measurer);
-        let y_label = measurer.measure(&chart.y.label, LABEL_FONT);
-        let x_label = measurer.measure(&chart.x.label, LABEL_FONT);
+        let y_label = measurer.measure_label(&chart.y.label, LABEL_FONT);
+        let x_label = measurer.measure_label(&chart.x.label, LABEL_FONT);
         let max_y_tick = y
             .major
             .iter()
@@ -559,22 +560,23 @@ fn extrema_regions(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
         .filter_map(|point| map_point(chart, axes, *point))
         .collect();
     let mut selected = Vec::new();
-    for candidate in [
+    for (x, y) in [
         points.iter().min_by(|a, b| a.0.total_cmp(&b.0)),
         points.iter().max_by(|a, b| a.0.total_cmp(&b.0)),
         points.iter().min_by(|a, b| a.1.total_cmp(&b.1)),
         points.iter().max_by(|a, b| a.1.total_cmp(&b.1)),
-    ] {
-        if let Some((x, y)) = candidate {
-            let bounds = Bounds {
-                x: x - 4.0,
-                y: y - 4.0,
-                width: 8.0,
-                height: 8.0,
-            };
-            if !selected.contains(&bounds) {
-                selected.push(bounds);
-            }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let bounds = Bounds {
+            x: x - 4.0,
+            y: y - 4.0,
+            width: 8.0,
+            height: 8.0,
+        };
+        if !selected.contains(&bounds) {
+            selected.push(bounds);
         }
     }
     selected
@@ -589,29 +591,30 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
                 if let Some(marker) = series.marker {
                     radius = radius.max(marker.size / 2.0);
                 }
-                if let Some(error) = series.errors.get(index) {
-                    if let Some((left, top)) = map_point(
+                if let Some(error) = series.errors.get(index)
+                    && let Some((left, top)) = map_point(
                         chart,
                         axes,
                         DataPoint {
                             x: point.x - error.x_minus,
                             y: point.y + error.y_plus,
                         },
-                    ) && let Some((right, bottom)) = map_point(
+                    )
+                    && let Some((right, bottom)) = map_point(
                         chart,
                         axes,
                         DataPoint {
                             x: point.x + error.x_plus,
                             y: point.y - error.y_minus,
                         },
-                    ) {
-                        output.push(Bounds {
-                            x: left.min(right) - 2.0,
-                            y: top.min(bottom) - 2.0,
-                            width: (right - left).abs() + 4.0,
-                            height: (bottom - top).abs() + 4.0,
-                        });
-                    }
+                    )
+                {
+                    output.push(Bounds {
+                        x: left.min(right) - 2.0,
+                        y: top.min(bottom) - 2.0,
+                        width: (right - left).abs() + 4.0,
+                        height: (bottom - top).abs() + 4.0,
+                    });
                 }
                 output.push(Bounds {
                     x: x - radius,
@@ -658,8 +661,7 @@ fn draw_axes(
             list,
             chart.x.id,
             &tick.label,
-            tick.position,
-            tick.label_bounds.bottom(),
+            (tick.position, tick.label_bounds.bottom()),
             TICK_FONT,
             TextAnchor::Middle,
             0.0,
@@ -692,8 +694,10 @@ fn draw_axes(
             list,
             chart.y.id,
             &tick.label,
-            tick.label_bounds.x,
-            tick.position + tick.label_bounds.height / 3.0,
+            (
+                tick.label_bounds.x,
+                tick.position + tick.label_bounds.height / 3.0,
+            ),
             TICK_FONT,
             TextAnchor::Start,
             0.0,
@@ -721,36 +725,34 @@ fn draw_axes(
         }
     }
 
-    let x_size = measurer.measure(&chart.x.label, LABEL_FONT);
+    let x_size = measurer.measure_label(&chart.x.label, LABEL_FONT);
     let x_bounds = Bounds {
         x: axes.x + (axes.width - x_size.width) / 2.0,
         y: chart.height_pt - x_size.height - 5.0,
         width: x_size.width,
         height: x_size.height,
     };
-    text(
+    label_text(
         list,
         chart.x.id,
         &chart.x.label,
-        axes.x + axes.width / 2.0,
-        x_bounds.bottom(),
+        (axes.x + axes.width / 2.0, x_bounds.bottom()),
         LABEL_FONT,
         TextAnchor::Middle,
         0.0,
     );
-    let y_size = measurer.measure(&chart.y.label, LABEL_FONT);
+    let y_size = measurer.measure_label(&chart.y.label, LABEL_FONT);
     let y_bounds = Bounds {
         x: 5.0,
         y: axes.y + (axes.height - y_size.width) / 2.0,
         width: y_size.height,
         height: y_size.width,
     };
-    text(
+    label_text(
         list,
         chart.y.id,
         &chart.y.label,
-        y_bounds.x + y_bounds.width,
-        axes.y + axes.height / 2.0,
+        (y_bounds.x + y_bounds.width, axes.y + axes.height / 2.0),
         LABEL_FONT,
         TextAnchor::Middle,
         -90.0,
@@ -768,7 +770,7 @@ fn draw_axes(
         if !figure.contains(bounds) {
             warnings.push(LayoutWarning::TextOutsideFigure {
                 node,
-                text: value.clone(),
+                text: value.normalized_text(),
             });
         }
     }
@@ -963,8 +965,7 @@ fn draw_annotations(
             list,
             annotation.id,
             &annotation.text,
-            x,
-            y,
+            (x, y),
             TICK_FONT,
             TextAnchor::Start,
             0.0,
@@ -1038,8 +1039,7 @@ fn draw_legend(
             list,
             series.id,
             &series.label,
-            key_end + 5.0,
-            y + 2.5,
+            (key_end + 5.0, y + 2.5),
             LEGEND_FONT,
             TextAnchor::Start,
             0.0,
@@ -1079,17 +1079,37 @@ fn text(
     list: &mut DisplayList,
     node: NodeId,
     value: &str,
-    x: f64,
-    y: f64,
+    position: (f64, f64),
     size: f64,
     anchor: TextAnchor,
     rotation: f64,
 ) {
     list.items.push(DisplayItem::GlyphRun(GlyphRun {
         source: node,
-        text: value.into(),
-        x: pt(x),
-        y: pt(y),
+        label: Label::Text(value.into()),
+        x: pt(position.0),
+        y: pt(position.1),
+        size: pt(size),
+        color: Color(25, 25, 25, 255),
+        rotation_degrees: rotation,
+        anchor,
+    }));
+}
+
+fn label_text(
+    list: &mut DisplayList,
+    node: NodeId,
+    label: &Label,
+    position: (f64, f64),
+    size: f64,
+    anchor: TextAnchor,
+    rotation: f64,
+) {
+    list.items.push(DisplayItem::GlyphRun(GlyphRun {
+        source: node,
+        label: label.clone(),
+        x: pt(position.0),
+        y: pt(position.1),
         size: pt(size),
         color: Color(25, 25, 25, 255),
         rotation_degrees: rotation,

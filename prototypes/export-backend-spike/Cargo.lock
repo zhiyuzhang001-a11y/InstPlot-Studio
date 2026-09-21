@@ -1619,6 +1619,9 @@ dependencies = [
 [[package]]
 name = "studio-render-spike"
 version = "0.1.0"
+dependencies = [
+ "text-shaping-spike",
+]
 
 [[package]]
 name = "subsetter"

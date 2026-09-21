@@ -452,6 +452,7 @@ dependencies = [
  "export-backend-spike",
  "parley",
  "studio-render-spike",
+ "text-shaping-spike",
 ]
 
 [[package]]
@@ -815,6 +816,9 @@ checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 [[package]]
 name = "studio-render-spike"
 version = "0.1.0"
+dependencies = [
+ "text-shaping-spike",
+]
 
 [[package]]
 name = "subsetter"

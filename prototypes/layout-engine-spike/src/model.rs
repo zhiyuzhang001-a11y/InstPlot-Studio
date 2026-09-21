@@ -1,4 +1,5 @@
 use studio_render_spike::{Color, NodeId};
+use text_shaping_spike::Label;
 
 use crate::scale::{Locator, Scale};
 
@@ -16,7 +17,7 @@ pub struct Chart {
 #[derive(Clone, Debug)]
 pub struct AxisSpec {
     pub id: NodeId,
-    pub label: String,
+    pub label: Label,
     pub minimum: f64,
     pub maximum: f64,
     pub scale: Scale,

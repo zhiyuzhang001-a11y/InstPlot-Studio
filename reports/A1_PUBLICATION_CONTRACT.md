@@ -37,7 +37,7 @@ Result:
 
 ```text
 A1 validation: PASS
-fixture=publication-v1-single-axes series=5 corpus=12 outputs=PDF,SVG,PNG
+fixture=publication-v1-single-axes series=5 corpus=12 required_outputs=PDF,PNG optional_output=SVG
 ```
 
 The validator confirms that:
@@ -52,7 +52,7 @@ The validator confirms that:
 
 ## Known limitations
 
-- Renderer output does not exist yet, so PDF/SVG structure and raster perceptual
+- Renderer output does not exist yet, so PDF structure and raster perceptual
   tolerances are contracts rather than executed backend results.
 - Corpus observations are citation-only and deliberately do not redistribute
   publisher images.

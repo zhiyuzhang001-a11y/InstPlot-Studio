@@ -31,18 +31,17 @@ Generated PDF, SVG, and 300 dpi PNG files are written to the ignored
 | Shared layout | `render_svg`, `render_pdf`, and `render_png` each create a renderer and call `Figure::draw`; vector and 300 dpi raster therefore use different pixel coordinate systems. | Does not satisfy the single resolved, point-space Display List contract. |
 | Axis/tick control | Explicit ranges, major tick locations/formatters, minor ticks, scale, grid, and spines are exposed. | Useful API and test ideas, but not a reason to replace the Figure IR. |
 | Marker/error bar/clipping | Circle/square markers, error bars, cap size, line styles, and axes clip paths work. | Functionally useful; the A1 plot was straightforward to express. |
-| Text shaping | Plotine uses cosmic-text 0.14.2 and an embedded DejaVu family. SVG keeps real text and may use viewer fallback. | Conflicts with A3's selected Parley/fontique/HarfRust/skrifa route and pinned Source Sans 3 metrics. |
-| CJK | The local 300 dpi output finds a system fallback, while the PDF shows missing-glyph boxes for `温度`; extraction also loses `温`. | Backend parity and deterministic fallback fail for the fixture. |
+| Text shaping | Plotine uses cosmic-text 0.14.2 and an embedded DejaVu family. SVG keeps real text and may use viewer fallback. | Conflicts with A3's selected Parley/fontique/HarfRust/skrifa route and pinned TeX Gyre Heros metrics. |
 | Italic/upright and mathtext | Built-in mathtext renders italic `μ`/`H`, upright `DL`, and a subscript as separate text runs. | Capable, but it is a second semantic/text-layout system beside SciPlot's Label AST. |
-| PDF font embedding | PDF contains a subset `MIOATK+DejaVuSans`, `/FontFile2`, and `/ToUnicode`. | Embedding exists, but the chosen font route and missing CJK glyph are incompatible with A3. |
-| PDF text extraction | Text is technically extractable, but `Experiment A` becomes `E x p e r i m e n t   A`; CJK is incomplete. | Fails the A1 search/copy contract. |
-| SVG/PDF/PNG parity | Geometry is broadly similar, but CJK differs; math xlabel placement is below the 184-unit canvas and is clipped; the legend covers data at this compact size. | Publication layout needs SciPlot-owned constraints and one backend-neutral layout. |
+| PDF font embedding | PDF contains a subset `MIOATK+DejaVuSans`, `/FontFile2`, and `/ToUnicode`. | Embedding exists, but the selected V1 font identity and metrics are not exposed or preserved. |
+| PDF text extraction | Text is technically extractable, but `Experiment A` becomes `E x p e r i m e n t   A`. | Fails the A1 search/copy contract. |
+| SVG/PDF/PNG parity | Math xlabel placement is below the 184-unit canvas and is clipped; the legend covers data at this compact size. | Publication layout needs InstPlot Studio-owned constraints and one backend-neutral layout. |
 | Customization | High-level axes and artist APIs are broad. Font identity, positioned glyphs, physical vector page size, and resolved display-list reuse are not exposed at the required boundary. | An adapter would either leak Plotine's model or duplicate layout/shaping work. |
 | Dependency surface | 221 normal dependency-tree lines, 142 unique lines in this locked comparison; duplicate fontdb, rustybuzz, skrifa, font-types/read-fonts, kurbo, GIF, and PNG generations are present. | Material overlap and version skew with the selected A3/A4 stack. |
 | Binary and runtime | Release executable: 10,587,840 bytes; stripped: 9,174,680 bytes. Clean release build: 31.29 s. Cached generation: 0.04 s. Peak resident set: about 25.5 MB. | Runtime is fine, but the stripped comparison is about 3.72 MB larger than the A4 spike and leaves little room under the 10 MiB target. |
 
 The PDF was also rasterized through macOS Quick Look for visual inspection. The
-missing CJK glyphs and clipped x label are visible in that independent viewer.
+the clipped x label is visible in that independent viewer.
 
 ## Decision summary
 

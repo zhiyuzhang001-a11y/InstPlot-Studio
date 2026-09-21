@@ -1,4 +1,5 @@
 use crate::{Color, Mm, Pt, Stroke};
+use text_shaping_spike::Label;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(pub u64);
@@ -26,7 +27,7 @@ pub struct Axes {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Axis {
     pub id: NodeId,
-    pub label: String,
+    pub label: Label,
     pub minimum: f64,
     pub maximum: f64,
 }
@@ -76,7 +77,7 @@ pub struct Text {
     pub id: NodeId,
     pub x: Pt,
     pub y: Pt,
-    pub value: String,
+    pub value: Label,
     pub size: Pt,
     pub color: Color,
 }
@@ -86,7 +87,7 @@ pub struct Legend {
     pub id: NodeId,
     pub x: Pt,
     pub y: Pt,
-    pub entries: Vec<String>,
+    pub entries: Vec<Label>,
     pub size: Pt,
     pub color: Color,
 }

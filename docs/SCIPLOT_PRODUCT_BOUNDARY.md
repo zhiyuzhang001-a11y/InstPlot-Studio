@@ -1,15 +1,15 @@
-# InstPlot Lite 与 SciPlot 产品边界及共享架构
+# InstPlot Lite 与 InstPlot Studio 产品边界及共享架构
 
 > 文档性质：产品边界、能力复用与工程架构补充规范  
 > 状态：Draft V1  
-> 适用产品：InstPlot Lite、SciPlot  
+> 适用产品：InstPlot Lite、InstPlot Studio
 > 相关规范：`PUBLICATION_PLOTTING_DESIGN_SPEC.md`、`scientific-publication-color-system-spec.md`
 
 ## 1. 文档目的
 
 本文件补充现有两份出版绘图规范中尚未定义的内容：
 
-1. InstPlot Lite 与 SciPlot 的产品职责；
+1. InstPlot Lite 与 InstPlot Studio 的产品职责；
 2. Lite 已经具备、Studio 应直接复用的能力；
 3. Studio 为出版绘图必须新增的能力；
 4. 两个软件如何保持独立，同时避免复制代码和重复造轮子；
@@ -23,7 +23,7 @@
 
 ### 2.1 必须是两个独立软件
 
-InstPlot Lite 与 SciPlot 必须是两个可以独立安装、独立启动、独立发布的软件，而不是同一个大型程序中的“简易模式”和“专业模式”。
+InstPlot Lite 与 InstPlot Studio 必须是两个可以独立安装、独立启动、独立发布的软件，而不是同一个大型程序中的“简易模式”和“专业模式”。
 
 原因如下：
 
@@ -99,9 +99,9 @@ Lite 的核心评价标准是：
 
 Lite 不承担精确论文排版责任，也不需要成为通用图形设计软件。
 
-### 3.2 SciPlot
+### 3.2 InstPlot Studio
 
-SciPlot 负责“可信可用数据”到“可投稿图形”的阶段：
+InstPlot Studio 负责“可信可用数据”到“可投稿图形”的阶段：
 
 ```text
 来自 Lite 或其他来源的数据
@@ -116,7 +116,7 @@ SciPlot 负责“可信可用数据”到“可投稿图形”的阶段：
   ↓
 Publication Check
   ↓
-PDF / SVG / PNG / TIFF
+PDF / PNG / TIFF
 ```
 
 Studio 的核心评价标准是：
@@ -339,7 +339,7 @@ Scene
 
 - 屏幕预览后端；
 - PDF 后端；
-- SVG 后端；
+- 可选 SVG 实验后端（不属于 V1 交付要求）；
 - PNG/TIFF 光栅后端。
 
 ### 5.6 字体与数学排版
@@ -347,15 +347,16 @@ Scene
 Studio 必须新增：
 
 - 字体发现、回退与授权信息；
-- deterministic Latin/Greek publication font，可根据体积与许可证决定是否 bundled；
-- CJK system fallback，并记录实际字体、metrics 和可嵌入状态；
+- bundled TeX Gyre Heros Regular/Italic/Bold/Bold Italic，并固定版本、许可证和 checksum；
+- Latin、Greek 与 V1 Scientific Symbol Core 使用同一字体家族；
+- CJK 等非 V1 script 给出明确 unsupported-script 诊断，不启用系统 fallback；
 - PDF 字体嵌入或子集化；
-- SVG 字体策略；
+- 可选 SVG 的字体策略与已知兼容边界；
 - 变量 italic、单位 upright、描述性下标 upright；
 - Greek glyph；
 - 真正的上下标布局；
 - 数学文字与普通文字混排；
-- 缺失 glyph 的可见警告和明确回退。
+- 缺失 glyph 的可见警告；V1 Core 缺字或 unsupported script 阻止出版导出。
 
 Lite 的界面字体加载代码可以提供字体资产和回退经验，但不能直接替代出版文字排版系统。
 
@@ -412,11 +413,13 @@ Palette metadata 必须随项目保存，旧项目不能因软件升级而静默
 Studio 必须提供：
 
 - PDF：默认首选，页面尺寸精确，矢量 geometry，真实文字，字体嵌入或明确回退；
-- SVG：正确的 viewBox 和物理尺寸，可继续编辑；
 - PNG：300、600、1200 dpi；
 - TIFF：300、600、1200 dpi；
 - 白色与显式透明背景；
 - 导出前检查报告。
+
+SVG 按 ADR-021 作为未来可选格式，不属于 V1 必须提供的输出，也不得在未经
+目标编辑器验证时宣称具有可移植的实时文字编辑能力。
 
 Lite 当前的 PNG 导出通过截取屏幕绘图区生成，适合快速分享，但不得作为 Studio 导出架构的基础。
 
@@ -537,7 +540,7 @@ Cargo feature 可以用于控制可选后端或平台依赖，但不能把两个
 
 ### 8.2 第二阶段
 
-增加“在 SciPlot 中打开”：
+增加“在 InstPlot Studio 中打开”：
 
 1. Lite 将选择的数据集写入临时交换包；
 2. 包中包含完整数据、alive 状态、列名、dataset ID、fit links 和必要 metadata；
@@ -586,7 +589,7 @@ Studio 可以继续使用 Rust 和 egui 构建：
 - legend 布局；
 - 字体与数学排版；
 - clipping；
-- PDF/SVG/PNG/TIFF 输出。
+- PDF/PNG/TIFF 输出；可选 SVG 不作为 V1 完成条件。
 
 egui 或其他 UI 工具只能显示 Scene 的预览，不应成为出版文件的事实来源。
 
@@ -635,7 +638,7 @@ egui 或其他 UI 工具只能显示 Scene 的预览，不应成为出版文件�
 
 ### Phase 4：出版检查与完整导出
 
-- PDF、SVG、PNG、TIFF；
+- PDF、PNG、TIFF；
 - 字体嵌入；
 - 灰度与 CVD 预览；
 - Publication Check；
@@ -644,7 +647,7 @@ egui 或其他 UI 工具只能显示 Scene 的预览，不应成为出版文件�
 
 ### Phase 5：产品级联动
 
-- “在 SciPlot 中打开”；
+- “在 InstPlot Studio 中打开”；
 - Studio 项目文件；
 - 独立安装包和更新通道；
 - 跨版本项目迁移；
@@ -685,7 +688,7 @@ egui 或其他 UI 工具只能显示 Scene 的预览，不应成为出版文件�
 5. Lite 导出的 source/fit 关系可被 Studio 完整恢复；
 6. 处理和拟合算法只有一份生产实现；
 7. Studio 样式修改不会改变 Lite 的源数据；
-8. Studio 预览与 PDF/SVG 使用同一布局结果；
+8. Studio 预览与 PDF 使用同一布局结果；可选 SVG 若启用也只能消费该结果；
 9. 屏幕降采样不会静默改变最终导出数据；
 10. 两个产品可以采用不同发布节奏而不破坏共享格式兼容性；
 11. 共享核心升级后，Lite 原有数据导入、处理、拟合和导出测试继续通过；
@@ -701,7 +704,7 @@ InstPlot Lite 的价值是：
 
 > 快速、可靠地把实验文件变成可信数据。
 
-SciPlot 的价值是：
+InstPlot Studio 的价值是：
 
 > 把可信数据变成语义正确、视觉一致、可验证、可投稿的科学图形。
 

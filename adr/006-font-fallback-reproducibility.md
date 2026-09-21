@@ -1,8 +1,12 @@
 # ADR-006: Font fallback and project reproducibility
 
-Status: Accepted for Part A
+Status: Superseded for V1 by ADR-020
 
 Date: 2026-09-20
+
+> Historical Part A fallback decision. ADR-020 removes CJK from the V1 product
+> scope and requires explicit unsupported-script diagnostics instead of system
+> CJK fallback.
 
 ## Decision
 

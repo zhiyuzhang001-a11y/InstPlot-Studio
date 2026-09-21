@@ -76,7 +76,7 @@ fn compile_axes(axes: &Axes, list: &mut DisplayList) -> Result<(), CompileError>
     let label_color = Color(0, 0, 0, 255);
     list.items.push(DisplayItem::GlyphRun(GlyphRun {
         source: axes.x.id,
-        text: axes.x.label.clone(),
+        label: axes.x.label.clone(),
         x: pt(axes.left.get() + axes.width.get() / 2.0)?,
         y: pt(axes.top.get() + axes.height.get() + 18.0)?,
         size: pt(9.0)?,
@@ -86,7 +86,7 @@ fn compile_axes(axes: &Axes, list: &mut DisplayList) -> Result<(), CompileError>
     }));
     list.items.push(DisplayItem::GlyphRun(GlyphRun {
         source: axes.y.id,
-        text: axes.y.label.clone(),
+        label: axes.y.label.clone(),
         x: pt(axes.left.get() - 24.0)?,
         y: pt(axes.top.get() + axes.height.get() / 2.0)?,
         size: pt(9.0)?,
@@ -166,7 +166,7 @@ fn compile_artist(
         }
         Artist::Text(text) => list.items.push(DisplayItem::GlyphRun(GlyphRun {
             source: text.id,
-            text: text.value.clone(),
+            label: text.value.clone(),
             x: text.x,
             y: text.y,
             size: text.size,
@@ -178,7 +178,7 @@ fn compile_artist(
             for (index, entry) in legend.entries.iter().enumerate() {
                 list.items.push(DisplayItem::GlyphRun(GlyphRun {
                     source: legend.id,
-                    text: entry.clone(),
+                    label: entry.clone(),
                     x: legend.x,
                     y: pt(legend.y.get() + index as f64 * legend.size.get() * 1.35)?,
                     size: legend.size,

@@ -4,6 +4,10 @@ Status: Accepted for Part A
 
 Date: 2026-09-20
 
+> The Plotine reuse decision remains active. Font-family and CJK comparisons in
+> this record describe the historical Part A prototype and are superseded by
+> ADR-020 for V1 typography acceptance.
+
 ## Decision
 
 Choose A5 option 3: only borrow or independently reimplement algorithms and test
@@ -25,9 +29,10 @@ algorithm was evaluated.
   system. A 300 dpi export therefore recomputes layout instead of consuming the
   same resolved point-space Display List as PDF and SVG.
 - Its cosmic-text/DejaVu path conflicts with A3's selected
-  Parley/fontique/HarfRust/skrifa and Source Sans 3 route.
+  Parley/fontique/HarfRust/skrifa and bundled TeX Gyre Heros route.
 - The PDF embeds a subset font and has a Unicode map, but extraction inserts
-  spaces between Latin glyphs and its embedded font misses the CJK probe.
+  spaces between Latin glyphs and it does not implement the V1 semantic-label
+  and explicit unsupported-script contract.
 - An adapter would duplicate or bypass SciPlot's semantic Figure IR, Label AST,
   stable node identity, layout constraints, and export diagnostics.
 - The dependency graph duplicates several font and rendering generations. The

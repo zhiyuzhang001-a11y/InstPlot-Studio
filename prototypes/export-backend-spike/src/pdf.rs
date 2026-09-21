@@ -163,9 +163,9 @@ fn draw_text(
             .map(|glyph| {
                 KrillaGlyph::new(
                     GlyphId::new(glyph.id),
-                    glyph.advance / text.size,
-                    glyph.x_offset / text.size,
-                    glyph.y_offset / text.size,
+                    glyph.advance / run.font_size,
+                    glyph.x_offset / run.font_size,
+                    glyph.y_offset / run.font_size,
                     0.0,
                     glyph.text_range.clone(),
                     None,
@@ -173,11 +173,11 @@ fn draw_text(
             })
             .collect::<Vec<_>>();
         surface.draw_glyphs(
-            Point::from_xy(text.x + run.start_x, text.y),
+            Point::from_xy(text.x + run.start_x, text.y + run.baseline_shift),
             &glyphs,
             font,
             &text.text,
-            text.size,
+            run.font_size,
             false,
         );
     }

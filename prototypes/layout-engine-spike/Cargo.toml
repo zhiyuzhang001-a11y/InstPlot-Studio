@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 parley = "0.11.1"
 studio-render-spike = { path = "../studio-render-spike" }
+text-shaping-spike = { path = "../text-shaping-spike" }
 
 [dev-dependencies]
 export-backend-spike = { path = "../export-backend-spike" }

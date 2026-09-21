@@ -1,4 +1,5 @@
 use core::fmt::Write;
+use text_shaping_spike::Label;
 
 use crate::{NodeId, Pt};
 
@@ -63,7 +64,7 @@ pub enum TextAnchor {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphRun {
     pub source: NodeId,
-    pub text: String,
+    pub label: Label,
     pub x: Pt,
     pub y: Pt,
     pub size: Pt,
@@ -193,7 +194,7 @@ pub fn to_svg(list: &DisplayList) -> SvgOutput {
                 .unwrap();
             }
             DisplayItem::GlyphRun(run) => {
-                writeln!(svg, "  <text data-node=\"{}\" x=\"{:.3}\" y=\"{:.3}\" font-size=\"{:.3}\" fill=\"{}\" text-anchor=\"{}\" transform=\"rotate({:.3} {:.3} {:.3})\">{}</text>", run.source.0, run.x.get(), run.y.get(), run.size.get(), hex(run.color), match run.anchor { TextAnchor::Start => "start", TextAnchor::Middle => "middle", TextAnchor::End => "end" }, run.rotation_degrees, run.x.get(), run.y.get(), escape(&run.text)).unwrap();
+                writeln!(svg, "  <text data-node=\"{}\" x=\"{:.3}\" y=\"{:.3}\" font-size=\"{:.3}\" fill=\"{}\" text-anchor=\"{}\" transform=\"rotate({:.3} {:.3} {:.3})\">{}</text>", run.source.0, run.x.get(), run.y.get(), run.size.get(), hex(run.color), match run.anchor { TextAnchor::Start => "start", TextAnchor::Middle => "middle", TextAnchor::End => "end" }, run.rotation_degrees, run.x.get(), run.y.get(), escape(&run.label.normalized_text())).unwrap();
             }
             DisplayItem::Image(image) => {
                 writeln!(svg, "  <image data-node=\"{}\" data-resource=\"{}\" x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" />", image.source.0, escape(&image.resource_id), image.x.get(), image.y.get(), image.width.get(), image.height.get()).unwrap();
@@ -264,7 +265,7 @@ fn snapshot_item(output: &mut String, item: &DisplayItem) {
             run.size.get(),
             run.rotation_degrees,
             run.anchor,
-            run.text
+            run.label.normalized_text()
         )
         .unwrap(),
         DisplayItem::Image(image) => write!(

@@ -41,17 +41,23 @@ fn pdf_has_physical_page_vector_paths_embedded_fonts_and_searchable_text() {
             embedded_font_streams += 1;
         }
     }
-    assert!(font_objects >= 2, "expected primary and CJK font objects");
-    assert!(embedded_font_streams >= 2, "expected embedded font subsets");
+    assert!(font_objects >= 1, "expected an embedded publication font");
+    assert!(
+        embedded_font_streams >= 1,
+        "expected an embedded font subset"
+    );
     assert_eq!(image_objects, 0, "the page must not be rasterized");
 
     let extracted = pdf_extract::extract_text_from_mem(&pdf).unwrap();
     assert!(extracted.contains("Experiment"), "{extracted:?}");
     assert!(extracted.contains("Fit"), "{extracted:?}");
-    assert!(extracted.contains("μ₀"), "{extracted:?}");
-    assert!(extracted.contains("H_DL (mT)"), "{extracted:?}");
-    assert!(extracted.contains("温度"), "{extracted:?}");
-    assert!(extracted.contains("T (K)"), "{extracted:?}");
+    assert!(extracted.contains("T ≤ 300 K"), "{extracted:?}");
+    let compact: String = extracted
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(compact.contains("μ0HDL(mT)"), "{extracted:?}");
+    assert!(compact.contains("CurrentdensityJe(Am−2)"), "{extracted:?}");
 }
 
 fn resolve_array(document: &Document, object: &Object) -> Vec<Object> {

@@ -114,6 +114,12 @@ def validate_semantics(manifest: dict, expected: dict) -> None:
         require(series[experiment]["semantic_identity"] == series[fit]["semantic_identity"], "experiment/fit identity differs")
         require(series[experiment]["color_role"] == series[fit]["color_role"], "experiment/fit color differs")
     require(series["theory"]["line"] != series["reference-zero"]["line"], "theory/reference need distinct dash patterns")
+    unsupported = manifest["labels"]["unsupported_script_probe"]
+    require(any("\u3400" <= character <= "\u9fff" for character in unsupported), "unsupported-script probe lacks CJK")
+    require(manifest["acceptance"]["unsupported_script_is_error"], "unsupported scripts must block V1 export")
+    require(expected["text"]["unsupported_script_is_error"], "expected contract must reject unsupported scripts")
+    require(manifest["acceptance"]["svg_export_optional"], "SVG must remain outside the V1 required export set")
+    require(expected["text"]["svg_export_optional"], "expected contract must mark SVG as optional")
 
 
 def validate_palettes(palettes: dict) -> None:
@@ -165,7 +171,7 @@ def main() -> int:
         print(f"A1 validation: FAIL: {error}", file=sys.stderr)
         return 1
     print("A1 validation: PASS")
-    print("fixture=publication-v1-single-axes series=5 corpus=12 outputs=PDF,SVG,PNG")
+    print("fixture=publication-v1-single-axes series=5 corpus=12 required_outputs=PDF,PNG optional_output=SVG")
     return 0
 
 

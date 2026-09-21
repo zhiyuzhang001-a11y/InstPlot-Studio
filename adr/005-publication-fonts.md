@@ -1,8 +1,12 @@
 # ADR-005: Deterministic publication fonts and CJK fallback
 
-Status: Accepted for Part A
+Status: Superseded by ADR-020
 
 Date: 2026-09-20
+
+> Historical Part A decision. The accepted V1 product typography profile is now
+> defined by ADR-020. The Source Sans 3 and CJK decisions below are retained only
+> to explain the existing prototype evidence.
 
 ## Decision
 

@@ -23,3 +23,15 @@ cargo run --release --locked --bin generate_fixture -- artifacts
 
 The generated directory is ignored. It contains PDF, SVG, white-background PNG
 at 300/600/1200 dpi, and a transparent 300 dpi PNG.
+
+Run the repository visual regression:
+
+```sh
+cargo run --release --locked --bin visual_regression
+```
+
+Expected PNGs live in `tests/visual-baselines/`; actual and amplified diff PNGs
+plus machine-readable metrics are written to `../../target/visual-regression/`.
+The matrix covers normal output at 300/600/1200 dpi plus grayscale and
+deuteranopia references at 300 dpi. Baselines are updated only by an intentional
+reviewed run with `--update`.

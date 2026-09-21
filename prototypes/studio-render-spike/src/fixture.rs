@@ -2,6 +2,7 @@ use crate::{
     Artist, Axes, Axis, Color, ErrorBar, Figure, Legend, Line, LineCap, LineJoin, Mm, NodeId, Pt,
     ReferenceLine, Scatter, Stroke, Text,
 };
+use text_shaping_spike::Label;
 
 fn pt(value: f64) -> Pt {
     Pt::new(value).unwrap()
@@ -15,6 +16,32 @@ fn stroke(color: Color, width: f64, dash: &[f64]) -> Stroke {
         join: LineJoin::Miter,
         dash: dash.iter().copied().map(pt).collect(),
     }
+}
+
+fn x_axis_label() -> Label {
+    Label::Group(vec![
+        Label::GreekVariable('μ'),
+        Label::VariableSubscript(Box::new(Label::Number("0".into()))),
+        Label::Variable("H".into()),
+        Label::DescriptiveSubscript(Box::new(Label::Text("DL".into()))),
+        Label::Text(" (".into()),
+        Label::Unit("mT".into()),
+        Label::Text(")".into()),
+    ])
+}
+
+fn y_axis_label() -> Label {
+    Label::Group(vec![
+        Label::Text("Current density ".into()),
+        Label::Variable("J".into()),
+        Label::VariableSubscript(Box::new(Label::Variable("e".into()))),
+        Label::Text(" (".into()),
+        Label::Unit("A".into()),
+        Label::UnitSeparator,
+        Label::Unit("m".into()),
+        Label::Superscript(Box::new(Label::Number("−2".into()))),
+        Label::Text(")".into()),
+    ])
 }
 
 /// The shared A1/A2 publication fixture used by later backend spikes.
@@ -33,13 +60,13 @@ pub fn fixed_figure() -> Figure {
             height: pt(132.0),
             x: Axis {
                 id: NodeId(3),
-                label: "μ₀H_DL (mT)".into(),
+                label: x_axis_label(),
                 minimum: -3.0,
                 maximum: 3.0,
             },
             y: Axis {
                 id: NodeId(4),
-                label: "Current density J_e (A m⁻²)".into(),
+                label: y_axis_label(),
                 minimum: -2.5,
                 maximum: 2.5,
             },
@@ -70,7 +97,7 @@ pub fn fixed_figure() -> Figure {
                     id: NodeId(14),
                     x: pt(48.0),
                     y: pt(28.0),
-                    value: "温度 T (K)".into(),
+                    value: Label::Text("T ≤ 300 K".into()),
                     size: pt(8.0),
                     color: gray,
                 }),
@@ -78,7 +105,7 @@ pub fn fixed_figure() -> Figure {
                     id: NodeId(15),
                     x: pt(164.0),
                     y: pt(30.0),
-                    entries: vec!["Experiment".into(), "Fit".into()],
+                    entries: vec![Label::Text("Experiment".into()), Label::Text("Fit".into())],
                     size: pt(8.0),
                     color: gray,
                 }),

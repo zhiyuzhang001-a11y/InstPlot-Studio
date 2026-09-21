@@ -81,13 +81,12 @@ On the local macOS host the real window was opened and visually inspected:
 - Native Retina, Windows scaling, and Linux HiDPI runs remain required in A8;
   the pure transform test covers 1× versus 2× arithmetic only.
 - The A2 placeholder `GlyphRun` contains source strings rather than A3 positioned
-  glyphs. This egui preview therefore shows missing CJK/default-font glyphs and
-  ignores text rotation. A7 must connect the resolved A3 runs or outlines; export
-  output is unaffected and already uses A4.
+  glyphs. This egui preview can therefore use UI-font metrics and ignores text
+  rotation. A7 must connect the resolved A3 runs or outlines before the preview
+  can be publication-faithful.
 - The local shell was inspected under a dark OS theme. Automatic OS-theme routing
   is provided by eframe, but light-mode and all three OS combinations remain A8
   evidence.
-- The first `publication-stack` test logs an ICU4X missing complex-script
-  segmentation-model warning already tracked by the A3/A4 CJK route. PDF export
-  still succeeds; this warning must be eliminated or converted to an explicit
-  diagnostic before Gate A.
+- Publication-label CJK is outside the V1 scope and must be rejected before
+  shaping. Localized UI text is a separate UI-font concern and does not authorize
+  publication export through a system fallback.

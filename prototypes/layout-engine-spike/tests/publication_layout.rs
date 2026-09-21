@@ -1,3 +1,4 @@
+use export_backend_spike::{FontOrigin, resolve};
 use layout_engine_spike::{
     LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize, layout,
     layout_with_measurer, marker_gallery_fixture, publication_fixture,
@@ -21,6 +22,14 @@ fn publication_fixture_is_deterministic_and_unclipped() {
         warning,
         LayoutWarning::NonConvergent { .. } | LayoutWarning::TextOutsideFigure { .. }
     )));
+    for diagnostic in resolve(&first.display_list).font_diagnostics() {
+        assert_eq!(
+            diagnostic.origin,
+            FontOrigin::BundledPrimary,
+            "{diagnostic:?}"
+        );
+        assert!(!diagnostic.missing_glyph, "{diagnostic:?}");
+    }
 
     let page = layout_engine_spike::Bounds {
         x: 0.0,

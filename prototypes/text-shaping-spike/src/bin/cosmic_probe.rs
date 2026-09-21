@@ -1,13 +1,16 @@
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as CosmicStyle};
+use cosmic_text::{
+    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as CosmicStyle, Weight,
+};
 use text_shaping_spike::{
     ProbeResult, ShapedGlyph, ShapedRun, Style, contains_missing_glyph, font_metadata,
-    validation_labels,
+    unsupported_v1_script, validation_labels,
 };
 
 const BASE_SIZE: f32 = 9.0;
-const UPRIGHT: &[u8] = include_bytes!("../../assets/fonts/SourceSans3-Regular.otf");
-const ITALIC: &[u8] = include_bytes!("../../assets/fonts/SourceSans3-It.otf");
-const BOLD: &[u8] = include_bytes!("../../assets/fonts/SourceSans3-Bold.otf");
+const UPRIGHT: &[u8] = include_bytes!("../../assets/fonts/TeXGyreHeros-Regular.otf");
+const ITALIC: &[u8] = include_bytes!("../../assets/fonts/TeXGyreHeros-Italic.otf");
+const BOLD: &[u8] = include_bytes!("../../assets/fonts/TeXGyreHeros-Bold.otf");
+const BOLD_ITALIC: &[u8] = include_bytes!("../../assets/fonts/TeXGyreHeros-BoldItalic.otf");
 
 fn main() {
     let result = shape_probe();
@@ -15,32 +18,46 @@ fn main() {
 }
 
 fn shape_probe() -> ProbeResult {
-    // Load bundled faces before system fonts. fontdb resolves equal family/style
-    // candidates by insertion order, so this keeps Latin/Greek deterministic while
-    // retaining system fallback for scripts not covered by Source Sans 3.
+    // V1 deliberately exposes only the four bundled publication faces. Unsupported
+    // scripts are rejected before shaping rather than resolved from system fonts.
     let mut db = cosmic_text::fontdb::Database::new();
     db.load_font_data(UPRIGHT.to_vec());
     db.load_font_data(ITALIC.to_vec());
     db.load_font_data(BOLD.to_vec());
-    db.load_system_fonts();
+    db.load_font_data(BOLD_ITALIC.to_vec());
     let locale = std::env::var("LANG").unwrap_or_else(|_| "en-US".into());
     let mut font_system = FontSystem::new_with_locale_and_db(locale, db);
-    font_system.db_mut().set_sans_serif_family("Source Sans 3");
+    font_system.db_mut().set_sans_serif_family("TeX Gyre Heros");
     let mut labels = Vec::new();
     let mut warnings = Vec::new();
 
     for (label_name, label) in validation_labels() {
+        let spans = label.spans();
+        if let Some(character) = spans
+            .iter()
+            .find_map(|span| unsupported_v1_script(&span.text))
+        {
+            warnings.push(format!(
+                "{label_name}: unsupported-script U+{:04X} {character}",
+                character as u32
+            ));
+            labels.push((label_name.into(), Vec::new()));
+            continue;
+        }
         let mut runs = Vec::new();
         let mut cursor_x = 0.0_f32;
-        for span in label.spans() {
+        for span in spans {
             let font_size = BASE_SIZE * span.scale;
-            let attrs = Attrs::new().family(Family::Name("Source Sans 3")).style(
-                if span.style == Style::Italic {
-                    CosmicStyle::Italic
-                } else {
-                    CosmicStyle::Normal
-                },
-            );
+            let (font_style, font_weight) = match span.style {
+                Style::Upright => (CosmicStyle::Normal, Weight::NORMAL),
+                Style::Italic => (CosmicStyle::Italic, Weight::NORMAL),
+                Style::Bold => (CosmicStyle::Normal, Weight::BOLD),
+                Style::BoldItalic => (CosmicStyle::Italic, Weight::BOLD),
+            };
+            let attrs = Attrs::new()
+                .family(Family::Name("TeX Gyre Heros"))
+                .style(font_style)
+                .weight(font_weight);
             let collected = {
                 let mut buffer = Buffer::new_empty(Metrics::new(font_size, font_size * 1.2));
                 buffer.set_size(Some(1000.0), Some(font_size * 2.0));

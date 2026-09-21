@@ -1,22 +1,22 @@
-# SciPlot 执行计划
+# InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划  
 > 状态：Draft V1  
 > 制定日期：2026-09-20  
-> 适用范围：SciPlot 启动验证、共享核心抽取、V1 开发与发布  
-> 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`
+> 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
+> 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
 
 ## 1. 计划目标
 
-本计划把 SciPlot 从技术调查推进到可执行工程，同时保护已经可用的 InstPlot Lite。
+本计划把 InstPlot Studio 从技术调查推进到可执行工程，同时保护已经可用的 InstPlot Lite。
 
 计划分为两个连续部分：
 
 1. **Part A：启动前技术验证**  
-   通过独立原型消除物理布局、字体、PDF、SVG、raster 和跨平台一致性的关键风险。
+   通过独立原型消除物理布局、字体、PDF、raster 和跨平台一致性的关键风险；SVG 仅保留为可选研究。
 
 2. **Part B：正式产品开发**  
-   在技术路线通过验证后，抽取 Lite 共享核心并建立独立的 SciPlot。
+   在技术路线通过验证后，抽取 Lite 共享核心并建立独立的 InstPlot Studio。
 
 Part A 未通过最终启动门槛前，不开始完整 Studio UI，不大规模重构 Lite，也不承诺正式项目文件格式。
 
@@ -26,7 +26,7 @@ Part A 未通过最终启动门槛前，不开始完整 Studio UI，不大规模
 
 ### 2.1 两个独立产品
 
-- InstPlot Lite 与 SciPlot 分别拥有独立 binary、安装包、版本号和发布节奏；
+- InstPlot Lite 与 InstPlot Studio 分别拥有独立 binary、安装包、版本号和发布节奏；
 - Studio 的大型出版依赖不得增加 Lite 的体积和启动成本；
 - 两者共享数据、处理、拟合和交换格式，不共享产品 UI。
 
@@ -47,7 +47,7 @@ Figure Document
   → physical layout
   → Display List
   → screen preview
-  → PDF / SVG / PNG
+  → PDF / PNG（可选 SVG）
   → structural and visual verification
 ```
 
@@ -103,7 +103,7 @@ A2  最小 Figure IR / Display List
  ↓
 A3  文字与字体技术验证
  ↓
-A4  PDF / SVG / Raster 后端验证
+A4  PDF / Raster 后端验证（可选 SVG 实验）
  ↓
 A5  Plotine 对照与复用决策
  ↓
@@ -135,6 +135,29 @@ B6  三平台打包、验收与预览发布
 ---
 
 # Part A：启动前技术验证
+
+## 当前检查点（2026-09-21，ADR-020 后）
+
+- **A0：可继续使用。** Lite 基线与 Studio 出版字体无耦合；跨平台证据仍按原计划补齐。
+- **A1：可继续使用。** 几何、数据、palette、尺寸和输出合同不变；正向文本 fixture
+  已迁移到 V1 支持范围，unsupported CJK 仅保留为负向 fixture，当前验证通过。
+- **A2：本机通过。** point-based Figure IR、稳定 node identity 和 Display List 保留，
+  `GlyphRun` 已接入 A3 semantic Label AST，不再扁平化 Unicode presentation characters。
+- **A3：本机迁移已通过。** 已固定 TeX Gyre Heros 2.004 四个真实 face、GUST
+  许可证和 checksum；新的 AST、U+03BC 规则与 unsupported-script 诊断通过本机测试。
+- **A4：本机通过。** PDF/raster 使用同一 semantic shaping 结果；bundled-only、
+  字体嵌入/subset、文本提取、结构与 raster 对照测试通过。SVG 原型按 ADR-021
+  保留为非阻断研究。
+- **A5：可继续使用。** Plotine 不进入生产依赖的结论不受字体更换影响。
+- **A6：可继续使用。** UI shell、file dialog 与 HiDPI 证据保留；本地化 UI 字体不等于
+  publication-label 字体策略。
+- **A7：本机通过。** 已在 bundled-only 断言下重新审查并冻结 TeX Gyre Heros metrics。
+- **A8：本机字体与视觉矩阵通过。** 五组 Heros baseline 已审查并零差异复跑；
+  Windows/Linux 原生矩阵和最终许可证/PDF-viewer 检查仍待完成。SVG editor
+  检查已由 ADR-021 移出 Gate A。
+
+因此，昨天的 A0–A8 主体架构继续有效，字体依赖的三个本机检查已经重新闭环。
+Gate A 当前仅因跨平台与最终审计证据保持 open。
 
 ## 4. A0：冻结 InstPlot Lite 基线
 
@@ -230,9 +253,12 @@ B6  三平台打包、验收与预览发布
 ```text
 μ₀H_DL (mT)
 Current density J_e (A m⁻²)
-温度 T (K)
+T ≤ 300 K
 Experiment / Fit / Theory
 ```
+
+另设 `温度 T (K)` 作为 unsupported-script 负向 fixture；它不得进入成功的
+出版输出，只用于验证 V1 明确拒绝 CJK 且不调用系统 fallback。
 
 #### A1.3 固定视觉参数
 
@@ -280,10 +306,11 @@ Part A 的目标不是实现完整 Palette Registry UI，而是确保颜色、�
 
 - preview；
 - PDF；
-- SVG；
 - 300 dpi PNG；
 - 600 dpi PNG；
 - 1200 dpi PNG。
+
+SVG 按 ADR-021 为非阻断可选实验，不属于 A1 必须输出。
 
 PDF 目标尺寸：
 
@@ -445,7 +472,7 @@ Display List 必须可以输出 deterministic debug representation，用于比�
 
 ### 7.1 目标
 
-选定唯一默认 shaping 路线，并证明它可以同时服务 preview、PDF 和 SVG。
+选定唯一默认 shaping 路线，并证明它可以同时服务 preview 和 PDF；可选 SVG 若启用必须复用同一结果。
 
 ### 7.2 候选
 
@@ -460,8 +487,8 @@ Display List 必须可以输出 deterministic debug representation，用于比�
 每个字体集合记录：
 
 - family and face names；
-- Regular/Italic/Bold；
-- Latin、Greek、math、CJK coverage；
+- Regular/Italic/Bold/Bold Italic；
+- Latin、Greek 和 V1 Scientific Symbol Core coverage；
 - OpenType tables；
 - embedding/subsetting 权利；
 - OFL 或其他许可证；
@@ -479,9 +506,8 @@ Display List 必须可以输出 deterministic debug representation，用于比�
 - descriptive subscript；
 - mathematical subscript；
 - superscript negative exponent；
-- mixed Chinese/Latin；
 - missing glyph；
-- fallback；
+- unsupported script；
 - rotated Y-axis label；
 - legend text；
 - PDF text extraction。
@@ -493,9 +519,9 @@ Display List 必须可以输出 deterministic debug representation，用于比�
 - source Unicode 可保留；
 - baseline 和 bounds 可测量；
 - italic/upright range 正确；
-- fallback deterministic；
-- deterministic Latin/Greek publication font 跨平台一致；
-- CJK system fallback 的 resolved font、metrics 和 warning 行为；
+- font selection deterministic；
+- bundled TeX Gyre Heros 四个真实 face 跨平台一致；
+- unsupported script 产生明确诊断且不触发系统字体；
 - binary-size impact；
 - build-time impact；
 - API stability；
@@ -507,11 +533,16 @@ Display List 必须可以输出 deterministic debug representation，用于比�
 Text
 Variable
 Upright
-Greek
-Subscript
+GreekVariable
+Number
+DescriptiveSubscript
+VariableSubscript
 Superscript
 Unit
+UnitSeparator
 Operator
+Emphasis
+BoldVariable
 Group
 ```
 
@@ -520,17 +551,19 @@ AST 到 glyph runs 的转换必须独立于 backend。
 ### 7.7 ADR
 
 - ADR-004：默认 text shaping engine；
-- ADR-005：deterministic Latin/Greek publication font 与 CJK system fallback；
-- ADR-006：font fallback 和项目可复现策略；
+- ADR-005：历史 Source Sans 3/CJK 决策，已由 ADR-020 取代；
+- ADR-006：历史 fallback 决策，V1 部分已由 ADR-020 取代；
 - ADR-007：V1 Label AST 与高级数学范围。
+- ADR-020：InstPlot Studio V1 typography profile。
 
 ### 7.8 完成条件
 
 - 选定一个默认 shaper；
-- preview/PDF/SVG 不使用不同 shaper；
+- preview/PDF 不使用不同 shaper；可选 SVG 不得另行 shaping；
 - 固定标签可以产生 deterministic glyph runs；
-- 默认 Latin/Greek publication font 在三平台产生一致 metrics；
-- CJK 使用系统 fallback，并记录实际 resolved font、版本和可嵌入状态；
+- TeX Gyre Heros 四个真实 face 在三平台产生一致 metrics；
+- Greek Core 和 Scientific Symbol Core 的每个 code point 均通过逐 face 检查；
+- CJK 等非 V1 script 产生明确 unsupported-script error，且不调用系统 fallback；
 - missing glyph 有明确 warning；
 - PDF 中混合文字可搜索和复制。
 
@@ -541,36 +574,35 @@ AST 到 glyph runs 的转换必须独立于 backend。
 - PDF 只能把所有文字转 outline；
 - preview 和 export 必须分别 shape；
 - 字体授权不允许嵌入；
-- fallback 无法记录或跨机器重现；
+- 出现未声明或不可复现的字体 fallback；
 - 数学布局无法返回稳定 bounds。
 
-### 7.10 字体体积与 CJK 策略
+### 7.10 字体体积与 unsupported-script 策略
 
-V1 不强制 bundled CJK font：
+V1 固定字体范围：
 
 ```text
-Latin/Greek publication font
-  deterministic and optionally bundled
+TeX Gyre Heros
+  bundled and deterministic
+  Regular / Italic / Bold / Bold Italic
+  Latin / Greek / V1 Scientific Symbol Core
 
-CJK
-  system fallback
-  resolved font recorded
-  behavior documented
+CJK and other unsupported scripts
+  explicit unsupported-script diagnostic
+  no system fallback
 ```
 
 要求：
 
-- 默认 Latin/Greek 路线必须满足跨平台确定性和 `<10 MiB` 总体架构目标；
-- CJK fallback 不要求三平台 glyph metrics 完全相同；
-- 使用 CJK 的项目必须记录实际字体身份；
-- PDF 导出前检查该系统字体是否允许并支持嵌入；
-- 无法嵌入时给出明确 error/warning 和替代字体建议，不能静默转位图；
-- 用户可以显式提供或安装可嵌入 CJK 字体；
-- 不得为了省体积而把中文 outline 永久写回 Figure Document。
+- 四个 bundled face 必须满足跨平台确定性和 `<10 MiB` 总体架构目标；
+- 必须固定版本、文件 checksum、GUST Font License 和 PDF/PostScript name；
+- U+03BC 是 micro 前缀与 Greek mu 的默认 Unicode 输出，语义节点决定 upright/italic；
+- U+00B5 只作为 legacy 输入接受，默认规范化为 U+03BC；
+- 非 V1 script 不得静默 fallback、转 outline 或转位图。
 
 ---
 
-## 8. A4：PDF、SVG 与 Raster 后端验证
+## 8. A4：PDF 与 Raster 后端验证（含可选 SVG 实验）
 
 ### 8.1 目标
 
@@ -604,6 +636,8 @@ CJK
 - Illustrator/Inkscape 等后续编辑兼容性抽样。
 
 ### 8.3 SVG Spike
+
+本节是 ADR-021 下保留的非阻断研究，不属于 Gate A 或 V1 完成条件。
 
 实现：
 
@@ -652,12 +686,13 @@ CJK
 
 ### 8.6 完成条件
 
-- 三个后端只读取同一 Display List；
-- PDF 和 SVG 保持 vector geometry；
+- 必需后端只读取同一 Display List；
+- PDF 保持 vector geometry；
 - PDF 文字可搜索且字体嵌入；
-- SVG 默认保留 text；
 - PNG 像素尺寸正确；
 - 后端之间没有独立 tick、legend 或 layout 代码。
+
+可选 SVG 原型若保留，仍应读取同一 Display List；其兼容性失败不阻断 Gate A。
 
 ---
 
@@ -681,7 +716,7 @@ CJK
 - mathtext；
 - PDF font embedding；
 - text extraction；
-- SVG/PDF/PNG parity；
+- PDF/PNG parity；可选 SVG 仅作研究对照；
 - marker/error bar；
 - clipping；
 - dependency tree；
@@ -898,7 +933,7 @@ Preview 使用 hit map，不重新解析几何。
 #### Backend structural tests
 
 - PDF page boxes、fonts、text、images；
-- SVG viewBox、paths、text、clipPath；
+- 可选 SVG 的 viewBox、paths、text、clipPath（非阻断）；
 - PNG dimensions、alpha、DPI metadata。
 
 #### Visual regression
@@ -916,11 +951,11 @@ Preview 使用 hit map，不重新解析几何。
 Windows、macOS、Linux 各验证：
 
 - build；
-- deterministic Latin/Greek font metrics；
-- CJK system fallback 的 resolved font、metrics、embedding state 和 warning；
+- deterministic TeX Gyre Heros four-face metrics；
+- Greek Core、Scientific Symbol Core 和 unsupported-script diagnostics；
 - preview；
 - PDF；
-- SVG；
+- 可选 SVG（非阻断）；
 - headless PNG；
 - file opening；
 - text extraction；
@@ -975,9 +1010,9 @@ Windows、macOS、Linux 各验证：
 ### Text
 
 - 唯一默认 shaper 已选定；
-- deterministic Latin/Greek publication font 已选定并完成授权检查；
-- CJK 使用 documented system fallback，不强制 bundled CJK font；
-- mixed Latin/Greek/CJK 正确；
+- TeX Gyre Heros 四个真实 face 已固定并完成授权检查；
+- Latin/Greek/Scientific Symbol Core 正确；
+- CJK 等非 V1 script 被明确拒绝且不产生系统 fallback；
 - italic/upright/subscript/superscript 正确；
 - 实际 resolved font、版本和可嵌入状态可记录；
 - missing glyph 或不可嵌入字体有明确 warning。
@@ -988,7 +1023,6 @@ Windows、macOS、Linux 各验证：
 - PDF path 为 vector；
 - PDF 字体嵌入/subset；
 - PDF 文字可搜索和复制；
-- SVG 尺寸、viewBox、path、text 和 clip 正确；
 - PNG 300/600/1200 dpi 正确；
 - TIFF 不属于 Gate A 必需项，但属于 V1 release 必需项；
 - 所有 backend 使用同一 layout result。
@@ -1041,8 +1075,8 @@ Windows、macOS、Linux 各验证：
 - PDF 无法保留真实文字；
 - 字体无法合法嵌入；
 - 输出尺寸依赖 window size；
-- deterministic Latin/Greek font metrics 不稳定；
-- CJK fallback 无法记录实际字体或无法在不可嵌入时给出警告；
+- TeX Gyre Heros 四个 face 的 metrics 不稳定；
+- Core 字符缺失或 unsupported script 被静默 fallback；
 - UI shell 使产物超过 `15 MiB` 且没有已验证的减重路线；
 - 候选依赖许可证与发行目标冲突；
 - 原型无法通过结构化自动测试。
@@ -1292,7 +1326,7 @@ V1 检查：
 
 ### 19.2 第二阶段
 
-实现“在 SciPlot 中打开”：
+实现“在 InstPlot Studio 中打开”：
 
 - Lite 生成版本化临时交换包；
 - 包含完整数据、alive state、column identity、fit links；
@@ -1330,7 +1364,7 @@ V1 检查：
 - offline launch；
 - sample project；
 - Lite export → Studio open；
-- PDF/SVG/PNG/TIFF export；
+- PDF/PNG/TIFF export；
 - publication check；
 - crash recovery；
 - project migration；
@@ -1347,7 +1381,7 @@ V1 检查：
 4. 在 89 mm × 65 mm 最终尺寸预览；
 5. 查看灰度/CVD 风险；
 6. 通过 Publication Check；
-7. 导出真实矢量 PDF/SVG；
+7. 导出具有真实文字和嵌入字体的矢量 PDF；
 8. 导出正确 DPI 的 PNG 和 TIFF；TIFF 是 V1 release 必需项，不是 Gate A 必需项；
 9. 保存并重新打开项目而不发生样式和颜色漂移。
 
@@ -1371,7 +1405,7 @@ V1 检查：
 ### 可以有限并行
 
 - A3 字体许可证调查与 shaper coding；
-- A4 SVG 和 PDF backend；
+- A4 PDF 与可选 SVG backend；
 - A5 Plotine 对照与 A4 后端实现；
 - A6 UI shell 可在 A2 完成后与 A3–A5 有限并行，但 export independence 验收要等 A4；
 - A8 测试工具可与 A7 layout 有限并行；
@@ -1425,7 +1459,7 @@ V1 检查：
 ### R1：字体跨平台漂移
 
 - 影响：布局和导出不一致；
-- 控制：deterministic Latin/Greek font、checksum、single shaper、layout snapshot；CJK fallback 记录 resolved font、metrics 和 embedding state；
+- 控制：固定 TeX Gyre Heros 四个 face、checksum、single shaper、layout snapshot；非 V1 script 明确拒绝；
 - gate：A3。
 
 ### R2：PDF 看起来正确但不可编辑

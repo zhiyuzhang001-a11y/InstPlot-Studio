@@ -6,7 +6,7 @@ palette_file = "palettes.toml"
 expected_file = "expected.toml"
 benchmark_corpus = "../../benchmarks/publication-corpus-v1/manifest.toml"
 data_license = "CC0-1.0"
-data_origin = "Synthetic values authored for SciPlot validation; no experimental data."
+data_origin = "Synthetic values authored for InstPlot Studio validation; no experimental data."
 rounding_rule = "round-half-away-from-zero"
 
 [figure]
@@ -30,7 +30,7 @@ note = "Reference values for comparing implementations; not frozen product defau
 [labels]
 x = "μ₀H_DL (mT)"
 y = "Current density J_e (A m⁻²)"
-fallback_probe = "温度 T (K)"
+unsupported_script_probe = "温度 T (K)"
 legend = ["Experiment A", "Fit A", "Experiment B", "Theory", "Reference"]
 
 [axes]
@@ -123,14 +123,16 @@ rule = "A result fails when any tolerance is exceeded outside the one-pixel anti
 same_layout_for_all_backends = true
 pdf_text_searchable = true
 pdf_paths_vector = true
-svg_text_preserved = true
+svg_export_optional = true
 missing_glyph_warning = true
+unsupported_script_is_error = true
 grayscale_reference_required = true
 cvd_reference_required = true
 required_cvd_condition = "deuteranopia"
 deterministic_snapshot = true
 
 [provenance]
-frozen_on = "2026-09-20"
-owner = "SciPlot"
+frozen_on = "2026-09-21"
+export_scope_adr = "ADR-021"
+owner = "InstPlot Studio"
 change_policy = "Any change requires a fixture version bump or an ADR explaining compatibility."

@@ -1,107 +1,65 @@
-# A4 — PDF, SVG, and raster backend validation
+# A4 — PDF and raster backend validation with optional SVG research
 
-Status: **backend routes selected; local structural and renderer evidence complete**
+Status: **backend architecture and ADR-020 typography closure locally complete**
 
-Date: 2026-09-20
+Updated: 2026-09-21
 
-## Decision
+## Reusable decision
 
-One resolved Display List is the only backend input. Plain A2 text placeholders
-are resolved once by the A3 Parley route into font identity, source Unicode,
-cluster byte ranges, glyph IDs, offsets, and advances. No backend computes axes,
-ticks, legends, fallback, or line layout.
+One resolved Display List remains the only backend input. PDF uses Krilla and
+raster uses direct tiny-skia mapping. The optional SVG research serializer also
+consumes that Display List but is not a V1 or Gate A requirement under ADR-021.
+Backends must consume the same source Unicode, selected font, glyph IDs, and
+positions without independently shaping or laying out text.
 
-- PDF: Krilla 0.8.2 low-level positioned glyph API.
-- SVG: SciPlot-owned serializer over resolved items, keeping real text and exact
-  cluster origins while recording glyph IDs and fallback identity.
-- Raster: direct tiny-skia mapping, including glyph outlines from the already
-  selected glyph IDs. SVG → usvg/resvg remains a comparison oracle and fallback.
+The existing physical-page, path, clip, paint, metadata, image, DPI, and direct
+raster architecture remains valid. The earlier structural evidence that PDF is
+not a whole-page image remains required; SVG self-containment remains research evidence.
 
-## PDF evidence
+## Typography migration status
 
-The PDF adapter maps page size, path fill/stroke, dash/cap/join, rectangular clip
-scopes, rotation, positioned glyph runs, metadata, RGBA images, and transparency.
-Krilla subsets and embeds the actual fonts; text is not converted to outlines.
+The backend prototype now embeds the four bundled TeX Gyre Heros faces and no
+longer loads system fonts for V1 publication labels. Positive fixture text was
+migrated to the V1-supported script set; CJK is retained only as an explicit
+unsupported-script input fixture.
 
-The fixed artifact is 8,040 bytes. `pdfinfo` reports one PDF 1.7 page at
-252.283 × 184.252 pt, matching 89 × 65 mm. lopdf structural tests find multiple
-font objects and embedded font streams and find no whole-page image. Pure-Rust
-text extraction preserves Latin, Greek, subscript/superscript Unicode, Chinese,
-and legend text. Extraction tools may insert whitespace at fallback-run
-boundaries; the characters remain searchable and copyable.
+The Figure model and Display List now carry the semantic Label AST. A4 shapes
+each span once, selecting its real upright/italic/bold/bold-italic face, scale,
+and baseline shift. U+2080/U+207B presentation characters are no longer required.
+The U+202F `UnitSeparator` uses deterministic 0.2 em positioning while retaining
+its source range for searchable/copyable output.
 
-Poppler and macOS Quick Look both rendered the PDF correctly without cropping.
-Illustrator/Inkscape import sampling remains a manual A8 matrix item because
-neither application is installed on this host.
+The bundled-font diagnostic, PDF embedding/subsetting and extraction checks,
+direct raster comparison, and missing-glyph diagnostic all pass locally. SVG
+structural parsing also passes as a non-blocking experiment. No successful
+publication run resolves through a system font.
 
-## SVG evidence
+## Reusable raster contract
 
-The serializer emits point-valued physical width and height, a matching point
-viewBox, paths, fill/stroke properties, dash/cap/join, clipPath scopes, metadata,
-rotation, and data-URI RGBA images. It embeds the pinned Source Sans OTF as a
-data URI and records the resolved system CJK face/version without a temporary
-external file.
-
-Each text cluster has its resolved absolute origin and glyph ID metadata while
-the element content remains the original Unicode. The fixed SVG is 450,344
-bytes, dominated by the embedded deterministic font. roxmltree and usvg 0.48.1
-both parse it, and resvg rasterizes it without clipping.
-
-## Raster evidence
-
-The direct tiny-skia path maps Display List geometry, clip scopes, alpha, dash,
-cap/join, rotated text, resolved glyph outlines, and RGBA image resources. It
-does not perform shaping. The comparison route serializes the same list to SVG
-and rasterizes with usvg/resvg; a 300 dpi channel-difference guard keeps the two
-implementations within the declared prototype tolerance.
-
-Both white and transparent backgrounds pass. PNG output is RGBA, contains
-software and DPI text metadata plus physical pixels-per-metre, and has the exact
-A1 round-half-away dimensions:
+The exact A1 round-half-away dimensions remain unchanged:
 
 - 300 dpi: 1051 × 768 px;
 - 600 dpi: 2102 × 1535 px;
 - 1200 dpi: 4205 × 3071 px.
 
-The same `RasterImage { width, height, rgba, dpi }` buffer can feed a future TIFF
-encoder without changing layout or rasterization.
+Normal, transparent, grayscale, and deuteranopia routes pass against the newly
+reviewed TeX Gyre Heros baselines.
 
-## Size and runtime
+## Remaining gate evidence
 
-On the current Apple Silicon macOS host:
-
-- clean release build observed during the spike: 29.62 s;
-- cached generation of PDF, SVG, four PNGs: 0.14 s;
-- generator binary before strip: 6,093,424 bytes;
-- stripped generator binary: 5,455,736 bytes;
-- mandatory bundled font/license assets remain 922,053 bytes and are already
-  represented in this standalone binary measurement.
-
-The full A3+A4 validation executable remains below the 10 MiB architecture
-target. Test-only PDF parsing/extraction crates are dev-dependencies and are not
-part of the release binary.
+- complete native Windows/Linux and PDF-viewer sampling in A8.
 
 ## Verification
 
 ```sh
-cargo fmt --manifest-path prototypes/studio-render-spike/Cargo.toml --check
-cargo test --manifest-path prototypes/studio-render-spike/Cargo.toml --locked
 cargo fmt --manifest-path prototypes/export-backend-spike/Cargo.toml --check
-cargo test --manifest-path prototypes/export-backend-spike/Cargo.toml --locked --all-features --tests
-cargo run --release --locked --manifest-path prototypes/export-backend-spike/Cargo.toml \
-  --bin generate_fixture -- prototypes/export-backend-spike/artifacts
-pdfinfo prototypes/export-backend-spike/artifacts/a4-fixture.pdf
+cargo test --manifest-path prototypes/export-backend-spike/Cargo.toml \
+  --locked --all-features --tests
 ```
-
-## Remaining gate evidence
-
-A4 is locally complete. A8 still owns three-platform execution, additional PDF
-viewer/editor sampling, and committed regression thresholds. If any backend
-needs to reshape text or recalculate layout, ADR-002 and ADR-004 must be reopened.
 
 ## Sources
 
 - Krilla documentation: <https://docs.rs/krilla/0.8.2/krilla/>
-- Krilla repository and examples: <https://github.com/LaurenzV/krilla>
+- Krilla repository: <https://github.com/LaurenzV/krilla>
 - usvg documentation: <https://docs.rs/usvg/0.48.1/usvg/>
 - resvg rendering API: <https://docs.rs/resvg/0.48.1/resvg/>

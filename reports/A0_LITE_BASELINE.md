@@ -10,6 +10,9 @@ Captured: 2026-09-20, macOS arm64
 - Commit: `4e95a75f602daf77b9f0c8fb4a1ea0b56353da4a`
 - Rust: `rustc 1.98.0 (88d9e12ae 2026-08-18)`
 - Cargo: `cargo 1.98.0 (797e8a9bc 2026-08-05)`
+- Clippy: `clippy 0.1.98 (88d9e12ae1 2026-08-18)`, installed in the
+  `1.98.0-aarch64-apple-darwin` rustup toolchain; it is not installed in the
+  machine's default `stable-aarch64-apple-darwin` toolchain
 - Host: `aarch64-apple-darwin`
 - Declared CI platforms: Ubuntu 22.04, macOS 15, Windows latest
 

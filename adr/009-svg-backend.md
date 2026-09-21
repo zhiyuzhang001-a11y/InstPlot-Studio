@@ -1,8 +1,16 @@
 # ADR-009: SVG backend
 
-Status: Accepted for Part A
+Status: Superseded as a V1 requirement by ADR-021; prototype retained
 
 Date: 2026-09-20
+
+> The direct-SVG backend decision remains active. Its Source Sans/CJK font
+> details are superseded by ADR-020 and require new typography fixtures.
+
+> ADR-021 removes SVG from the Gate A and V1 required export set after native
+> Illustrator testing showed that embedded OTF `@font-face` data URLs do not
+> provide portable editable text. The implementation remains useful research,
+> but its compatibility no longer blocks the product.
 
 ## Decision
 
@@ -11,10 +19,11 @@ adapter because its primitives map directly to SVG and doing so preserves point
 size, source node IDs, font provenance, and text policy without another layout
 abstraction.
 
-Pinned Source Sans is embedded as a data-URI font. Text remains Unicode text;
-each shaped cluster receives its resolved origin and glyph ID metadata. CJK uses
-the recorded system fallback identity. Paths, clipPath, paint, dash/cap/join,
-rotation, metadata, and RGBA images are self-contained.
+The selected bundled TeX Gyre Heros face is embedded as a data-URI font. Text
+remains Unicode text; each shaped cluster receives its resolved origin and glyph
+ID metadata. Unsupported V1 scripts fail before serialization and cannot select
+a system font. Paths, clipPath, paint, dash/cap/join, rotation, metadata, and
+RGBA images are self-contained.
 
 ## Evidence and consequences
 

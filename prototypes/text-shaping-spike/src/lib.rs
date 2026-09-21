@@ -3,11 +3,16 @@ pub enum Label {
     Text(String),
     Variable(String),
     Upright(String),
-    Greek(char),
-    Subscript { body: Box<Label>, descriptive: bool },
+    GreekVariable(char),
+    Number(String),
+    DescriptiveSubscript(Box<Label>),
+    VariableSubscript(Box<Label>),
     Superscript(Box<Label>),
     Unit(String),
+    UnitSeparator,
     Operator(String),
+    Emphasis(String),
+    BoldVariable(String),
     Group(Vec<Label>),
 }
 
@@ -15,6 +20,8 @@ pub enum Label {
 pub enum Style {
     Upright,
     Italic,
+    Bold,
+    BoldItalic,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +30,7 @@ pub struct Span {
     pub style: Style,
     pub scale: f32,
     pub baseline_shift_em: f32,
+    pub is_unit_separator: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +40,7 @@ pub struct FontMetadata {
     pub version: String,
     pub index: u32,
     pub embedding: String,
+    pub embedding_allowed: bool,
     pub subsetting_allowed: bool,
 }
 
@@ -70,7 +79,7 @@ impl ProbeResult {
             for run in runs {
                 writeln!(
                     output,
-                    "RUN source={:?} font={:?} ps={:?} version={:?} index={} size={:.3} style={:?} embedding={} subset={}",
+                    "RUN source={:?} font={:?} ps={:?} version={:?} index={} size={:.3} style={:?} embedding={} allowed={} subset={}",
                     run.source,
                     run.font.full_name,
                     run.font.postscript_name,
@@ -79,6 +88,7 @@ impl ProbeResult {
                     run.font_size,
                     run.style,
                     run.font.embedding,
+                    run.font.embedding_allowed,
                     run.font.subsetting_allowed
                 )
                 .unwrap();
@@ -109,6 +119,7 @@ pub fn font_metadata(data: &[u8], index: u32) -> FontMetadata {
             version: "<unparseable>".into(),
             index,
             embedding: "unknown".into(),
+            embedding_allowed: false,
             subsetting_allowed: false,
         };
     };
@@ -119,12 +130,14 @@ pub fn font_metadata(data: &[u8], index: u32) -> FontMetadata {
             .find_map(|name| name.to_string())
             .unwrap_or_else(|| "<unknown>".into())
     };
+    let permissions = face.permissions();
     FontMetadata {
         full_name: name(name_id::FULL_NAME),
         postscript_name: name(name_id::POST_SCRIPT_NAME),
         version: name(name_id::VERSION),
         index,
-        embedding: format!("{:?}", face.permissions()),
+        embedding: format!("{permissions:?}"),
+        embedding_allowed: !matches!(permissions, Some(ttf_parser::Permissions::Restricted)),
         subsetting_allowed: face.is_subsetting_allowed(),
     }
 }
@@ -136,36 +149,102 @@ pub fn contains_missing_glyph(run: &ShapedRun) -> bool {
         && run.glyphs.iter().any(|glyph| glyph.id == 0)
 }
 
+pub fn unsupported_v1_script(text: &str) -> Option<char> {
+    text.chars().find(|character| {
+        matches!(
+            *character as u32,
+            0x3040..=0x30FF
+                | 0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xAC00..=0xD7AF
+                | 0xF900..=0xFAFF
+                | 0x20000..=0x2FA1F
+        )
+    })
+}
+
 impl Label {
+    pub fn normalized_text(&self) -> String {
+        self.spans().into_iter().map(|span| span.text).collect()
+    }
+
     pub fn spans(&self) -> Vec<Span> {
         let mut spans = Vec::new();
-        self.push_spans(&mut spans, Style::Upright, 1.0, 0.0);
+        self.push_spans(&mut spans, None, 1.0, 0.0);
         spans
     }
 
-    fn push_spans(&self, spans: &mut Vec<Span>, inherited: Style, scale: f32, shift: f32) {
+    fn push_spans(
+        &self,
+        spans: &mut Vec<Span>,
+        style_override: Option<Style>,
+        scale: f32,
+        shift: f32,
+    ) {
         match self {
-            Self::Text(text) | Self::Upright(text) | Self::Unit(text) | Self::Operator(text) => {
-                push(spans, text, Style::Upright, scale, shift)
+            Self::Text(text) | Self::Upright(text) | Self::Number(text) | Self::Operator(text) => {
+                push(
+                    spans,
+                    text,
+                    style_override.unwrap_or(Style::Upright),
+                    scale,
+                    shift,
+                )
             }
-            Self::Variable(text) => push(spans, text, Style::Italic, scale, shift),
-            Self::Greek(character) => push(spans, &character.to_string(), inherited, scale, shift),
-            Self::Subscript { body, descriptive } => body.push_spans(
+            Self::Variable(text) => push(
                 spans,
-                if *descriptive {
-                    Style::Upright
-                } else {
-                    Style::Italic
-                },
-                scale * 0.72,
-                shift + 0.22,
+                text,
+                style_override.unwrap_or(Style::Italic),
+                scale,
+                shift,
             ),
-            Self::Superscript(body) => {
-                body.push_spans(spans, inherited, scale * 0.72, shift - 0.38)
+            Self::GreekVariable(character) => push(
+                spans,
+                &character.to_string(),
+                style_override.unwrap_or(Style::Italic),
+                scale,
+                shift,
+            ),
+            Self::Unit(text) => push(
+                spans,
+                &text.replace('\u{00B5}', "μ"),
+                style_override.unwrap_or(Style::Upright),
+                scale,
+                shift,
+            ),
+            Self::UnitSeparator => spans.push(Span {
+                text: "\u{202F}".into(),
+                style: style_override.unwrap_or(Style::Upright),
+                scale,
+                baseline_shift_em: shift,
+                is_unit_separator: true,
+            }),
+            Self::DescriptiveSubscript(body) => {
+                body.push_spans(spans, Some(Style::Upright), scale * 0.72, shift + 0.22)
             }
+            Self::VariableSubscript(body) => {
+                body.push_spans(spans, Some(Style::Italic), scale * 0.72, shift + 0.22)
+            }
+            Self::Superscript(body) => {
+                body.push_spans(spans, style_override, scale * 0.72, shift - 0.38)
+            }
+            Self::Emphasis(text) => push(
+                spans,
+                text,
+                style_override.unwrap_or(Style::Bold),
+                scale,
+                shift,
+            ),
+            Self::BoldVariable(text) => push(
+                spans,
+                text,
+                style_override.unwrap_or(Style::BoldItalic),
+                scale,
+                shift,
+            ),
             Self::Group(children) => {
                 for child in children {
-                    child.push_spans(spans, inherited, scale, shift);
+                    child.push_spans(spans, style_override, scale, shift);
                 }
             }
         }
@@ -181,8 +260,10 @@ fn push(spans: &mut Vec<Span>, text: &str, style: Style, scale: f32, baseline_sh
         style,
         scale,
         baseline_shift_em,
+        is_unit_separator: false,
     };
     if let Some(previous) = spans.last_mut()
+        && !previous.is_unit_separator
         && previous.style == next.style
         && previous.scale == next.scale
         && previous.baseline_shift_em == next.baseline_shift_em
@@ -203,41 +284,46 @@ pub fn validation_labels() -> Vec<(&'static str, Label)> {
             "italic-variable-upright-unit",
             Label::Group(vec![
                 Label::Variable("J".into()),
-                Label::Subscript {
-                    body: Box::new(Label::Upright("e".into())),
-                    descriptive: true,
-                },
+                Label::VariableSubscript(Box::new(Label::Variable("e".into()))),
                 Label::Text(" (".into()),
-                Label::Unit("A m".into()),
-                Label::Superscript(Box::new(Label::Operator("−2".into()))),
+                Label::Unit("A".into()),
+                Label::UnitSeparator,
+                Label::Unit("m".into()),
+                Label::Superscript(Box::new(Label::Number("−2".into()))),
                 Label::Text(")".into()),
             ]),
         ),
         (
             "greek-and-math-subscript",
             Label::Group(vec![
-                Label::Greek('μ'),
-                Label::Subscript {
-                    body: Box::new(Label::Variable("0".into())),
-                    descriptive: false,
-                },
+                Label::GreekVariable('μ'),
+                Label::VariableSubscript(Box::new(Label::Number("0".into()))),
                 Label::Variable("H".into()),
-                Label::Subscript {
-                    body: Box::new(Label::Upright("DL".into())),
-                    descriptive: true,
-                },
+                Label::DescriptiveSubscript(Box::new(Label::Upright("DL".into()))),
                 Label::Text(" (".into()),
                 Label::Unit("mT".into()),
                 Label::Text(")".into()),
             ]),
         ),
-        ("mixed-cjk-latin", Label::Text("温度 T (K)".into())),
+        ("unsupported-cjk", Label::Text("温度 T (K)".into())),
         ("missing-glyph", Label::Text("missing: \u{10FFFF}".into())),
         (
             "rotated-y-label",
-            Label::Text("Current density J_e (A m⁻²)".into()),
+            Label::Group(vec![
+                Label::Text("Current density ".into()),
+                Label::Variable("J".into()),
+                Label::VariableSubscript(Box::new(Label::Variable("e".into()))),
+                Label::Text(" (".into()),
+                Label::Unit("A".into()),
+                Label::UnitSeparator,
+                Label::Unit("m".into()),
+                Label::Superscript(Box::new(Label::Number("−2".into()))),
+                Label::Text(")".into()),
+            ]),
         ),
         ("legend", Label::Text("Experiment / Fit / Theory".into())),
+        ("panel-label", Label::Emphasis("(a)".into())),
+        ("bold-variable", Label::BoldVariable("H".into())),
     ]
 }
 
@@ -249,7 +335,7 @@ mod tests {
     fn semantic_ranges_do_not_collapse_style() {
         let spans = validation_labels()[1].1.spans();
         assert_eq!(spans[0].style, Style::Italic);
-        assert_eq!(spans[1].style, Style::Upright);
+        assert_eq!(spans[1].style, Style::Italic);
         assert!(spans[1].baseline_shift_em > 0.0);
         assert!(spans.iter().any(|span| span.baseline_shift_em < 0.0));
     }
@@ -258,5 +344,21 @@ mod tests {
     fn greek_remains_unicode() {
         let spans = validation_labels()[2].1.spans();
         assert!(spans.iter().any(|span| span.text.contains('μ')));
+        assert_eq!(spans[0].style, Style::Italic);
+        assert_eq!(spans[1].text, "0");
+        assert_eq!(spans[1].style, Style::Italic);
+    }
+
+    #[test]
+    fn legacy_micro_sign_is_normalized_in_units() {
+        let spans = Label::Unit("µm".into()).spans();
+        assert_eq!(spans[0].text, "μm");
+        assert_eq!(spans[0].style, Style::Upright);
+    }
+
+    #[test]
+    fn cjk_is_an_explicitly_unsupported_v1_script() {
+        assert_eq!(unsupported_v1_script("温度 T (K)"), Some('温'));
+        assert_eq!(unsupported_v1_script("μ₀H_DL (mT)"), None);
     }
 }

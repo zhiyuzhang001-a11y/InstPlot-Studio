@@ -36,9 +36,19 @@ pub fn rasterize_via_svg(
 ) -> RasterImage {
     let (width, height, mut pixmap) = empty_pixmap(list, dpi, background);
     let mut database = resvg::usvg::fontdb::Database::new();
-    database.load_system_fonts();
-    let mut options = resvg::usvg::Options::default();
-    options.fontdb = Arc::new(database);
+    for bytes in [
+        include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Regular.otf").as_slice(),
+        include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Italic.otf").as_slice(),
+        include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Bold.otf").as_slice(),
+        include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf")
+            .as_slice(),
+    ] {
+        database.load_font_data(bytes.to_vec());
+    }
+    let options = resvg::usvg::Options {
+        fontdb: Arc::new(database),
+        ..Default::default()
+    };
     let svg = to_svg(list);
     let tree = resvg::usvg::Tree::from_str(&svg, &options).expect("backend-generated SVG");
     let scale = dpi as f32 / 96.0;
@@ -240,12 +250,12 @@ fn draw_text(pixmap: &mut Pixmap, text: &ResolvedText, scale: f32, clip: Option<
         let Ok(face) = Face::parse(run.font_data.as_slice(), run.font_index) else {
             continue;
         };
-        let font_scale = text.size / face.units_per_em() as f32;
+        let font_scale = run.font_size / face.units_per_em() as f32;
         let mut cursor_x = text.x + run.start_x;
         for glyph in &run.glyphs {
             let mut builder = GlyphPathBuilder::new(
                 cursor_x + glyph.x_offset,
-                text.y - glyph.y_offset,
+                text.y + run.baseline_shift - glyph.y_offset,
                 font_scale,
                 text.rotation_degrees,
                 text.x,
@@ -386,7 +396,7 @@ fn asset_pixmap(asset: &RasterAsset) -> Option<Pixmap> {
         return None;
     }
     let mut premultiplied = Vec::with_capacity(asset.rgba.len());
-    for pixel in asset.rgba.chunks_exact(4) {
+    for pixel in asset.rgba.as_chunks::<4>().0 {
         let value = ColorU8::from_rgba(pixel[0], pixel[1], pixel[2], pixel[3]).premultiply();
         premultiplied.extend_from_slice(&[value.red(), value.green(), value.blue(), value.alpha()]);
     }

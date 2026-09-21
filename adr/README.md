@@ -23,3 +23,5 @@ alternatives, and an exit strategy.
 - [ADR-017: Deterministic single-Axes layout](017-single-axes-layout.md)
 - [ADR-018: Legend auto-placement](018-legend-auto-placement.md)
 - [ADR-019: Preview overlay and document-edit boundary](019-preview-overlay-edit-boundary.md)
+- [ADR-020: InstPlot Studio V1 typography profile](020-instplot-studio-typography-profile.md)
+- [ADR-021: PDF-first V1 export scope](021-pdf-first-v1-export-scope.md)

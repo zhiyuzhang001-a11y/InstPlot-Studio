@@ -15,16 +15,32 @@ fn raster_dimensions_background_alpha_and_png_metadata_are_correct() {
     ] {
         let transparent = rasterize_via_svg(&resolved, dpi, Background::Transparent);
         assert_eq!((transparent.width, transparent.height), expected);
-        assert!(transparent.rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
         assert!(
             transparent
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] == 0)
+        );
+        assert!(
+            transparent
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[3] == 255)
         );
 
         let white = rasterize_via_svg(&resolved, dpi, Background::White);
-        assert!(white.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(
+            white
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == 255)
+        );
 
         let png = encode_png(&white).unwrap();
         let decoder = png::Decoder::new(Cursor::new(png));

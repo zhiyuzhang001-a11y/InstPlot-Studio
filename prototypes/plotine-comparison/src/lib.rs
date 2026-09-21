@@ -71,7 +71,7 @@ pub fn fixture(dpi: f64) -> Figure {
                 .width(0.7)
                 .linestyle(LineStyle::Dotted)
                 .label("Reference");
-            axes.text(-2.8, 2.1, "温度 T (K)")
+            axes.text(-2.8, 2.1, "T ≤ 300 K")
                 .color(Color::rgb(102, 102, 102))
                 .size(8.0);
             axes.legend(Legend::TopRight);

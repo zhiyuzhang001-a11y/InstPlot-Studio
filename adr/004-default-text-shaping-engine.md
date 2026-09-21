@@ -4,19 +4,22 @@ Status: Accepted for Part A
 
 Date: 2026-09-20
 
+> The shaping-engine decision remains active. Its Source Sans/CJK corpus was
+> historical Part A evidence and must be rerun against ADR-020.
+
 ## Decision
 
-Use Parley + fontique + HarfRust + skrifa as SciPlot's only default text shaping
+Use Parley + fontique + HarfRust + skrifa as InstPlot Studio's only default text shaping
 route. The layout compiler shapes source Unicode once into resolved glyph runs.
 Preview, PDF, SVG, and raster backends consume the same glyph IDs, positions,
 font identity, and source text and must not shape independently.
 
 ## Evidence
 
-Parley 0.11.1 passed the A3 corpus for styled Latin, Greek, semantic subscript and
-superscript spans, system CJK fallback, and explicit missing glyph reporting. A
-repeat run is identical on the current host. With a pinned bundled face, Parley
-and cosmic-text returned identical glyph IDs, X positions, and advances.
+Parley 0.11.1 passed the original comparison corpus and remains selected. The
+ADR-020 rerun now covers the four bundled TeX Gyre Heros faces, semantic style
+selection, U+00B5 normalization, explicit missing glyphs, and pre-shaping
+rejection of unsupported CJK without system fallback.
 
 The stripped comparison probe was 2,648,824 bytes, only 26,688 bytes larger than
 the cosmic-text probe. The selected stack is MIT-compatible: Parley, fontique,

@@ -9,6 +9,7 @@ map; GUI and export backends do not make layout decisions.
 ```sh
 cargo fmt --check
 cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 cargo run --locked --example generate -- artifacts
 ```
 
@@ -55,11 +56,11 @@ figure width, but must do so through the same layout contract.
 
 ## Known Part A follow-ups
 
-- The layout measurer uses the selected Parley engine and pinned Source Sans 3
+- The layout measurer uses the selected Parley engine and pinned TeX Gyre Heros
   regular face. A7 source labels remain strings in the A2 placeholder GlyphRun;
   full Label AST span styles and positioned A3 glyph runs must replace that
   placeholder during production consolidation.
-- CJK measurement/export still emits the previously recorded ICU4X complex-script
-  model warning on this host. The system fallback renders correctly locally, but
-  A8 must normalize the diagnostic and record all three platform font identities.
-- A8 must add visual-diff thresholds and cross-platform normalized snapshots.
+- CJK is outside the V1 publication scope. The typography preflight must reject
+  unsupported scripts before layout instead of resolving a system fallback.
+- A8 visual-diff thresholds and macOS baselines are established; Windows/Linux
+  native results and any required platform-normalized baselines remain.

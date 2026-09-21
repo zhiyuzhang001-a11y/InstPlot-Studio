@@ -1,16 +1,20 @@
-# SciPlot 技术背景调查与验证路线
+# InstPlot Studio 技术背景调查与验证路线
 
 > 文档性质：正式开发前的技术调查、候选评估与原型验收规范  
 > 状态：Research Draft V1  
 > 调查日期：2026-09-20  
-> 适用产品：SciPlot  
+> 适用产品：InstPlot Studio
 > 相关文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`PUBLICATION_PLOTTING_DESIGN_SPEC.md`、`scientific-publication-color-system-spec.md`
+
+> 范围更新（2026-09-21）：ADR-021 已将 SVG 降为非阻断可选实验。本文中
+> 对 SVG 的候选调查仍作为技术背景保留，但所有“必须”“通过条件”和启动门槛
+> 均以 PDF/PNG 为准；SVG 不再是 Gate A 或 V1 发布条件。
 
 ## 1. 目的
 
-SciPlot 的产品目标和双产品边界已经基本明确，但正式开发前仍存在高风险技术问题：
+InstPlot Studio 的产品目标和双产品边界已经基本明确，但正式开发前仍存在高风险技术问题：
 
-- 屏幕预览与 PDF/SVG/PNG/TIFF 如何共享同一布局；
+- 屏幕预览与 PDF/PNG/TIFF 如何共享同一布局，以及可选 SVG 如何复用该结果；
 - 如何以 mm 和 pt 而不是屏幕像素定义图形；
 - 如何进行字体发现、fallback、shaping、数学排版和 PDF 字体嵌入；
 - 如何设计可持久化、可验证的 Figure Document；
@@ -59,7 +63,7 @@ Backend-neutral Display List（统一使用 pt）
 - mm 只在用户输入、文档 metadata 和单位转换边界出现；
 - 屏幕像素只在预览缩放和 raster 输出边界出现；
 - release executable/app core 加 mandatory runtime assets 的架构目标为 `≤10 MiB`，`≤12 MiB` 为 soft ceiling，`>15 MiB` 必须架构复审；
-- Latin/Greek publication font 追求确定性并可选择 bundled，CJK 默认使用记录实际字体身份的 system fallback；
+- InstPlot Studio V1 bundle TeX Gyre Heros 四个真实 face；CJK 等非 V1 script 明确拒绝，不使用系统 fallback；
 - Part A 即固定最小 color contract，并用 Publication Visual Benchmark Corpus 校准默认视觉系统；
 - Gate A 前必须完成极小 UI shell spike，验证 HiDPI、scaling、file dialog、keyboard、启动、内存和体积。
 
@@ -94,7 +98,7 @@ Backend-neutral Display List（统一使用 pt）
 
 ## 3.1 IronLAB：最有价值的架构参考
 
-IronLAB 是当前调查中与 SciPlot 技术目标最接近的 Rust 项目。它已经实现或明确设计了：
+IronLAB 是当前调查中与 InstPlot Studio 技术目标最接近的 Rust 项目。它已经实现或明确设计了：
 
 - retained Figure IR；
 - 固定物理尺寸 figure；
@@ -552,20 +556,19 @@ Parley 提供 styled ranges、font selection、shaping、line layout 和测量�
 
 需要验证：
 
-- Latin + Greek + 中文混合 fallback；
+- Latin、Greek 与 V1 Scientific Symbol Core 的统一字体覆盖；
 - italic variable 与 upright unit 的 range shaping；
 - 同一 shaped run 写入 Krilla 后的 glyph positioning；
-- macOS/Windows/Linux 使用 deterministic Latin/Greek font 时是否完全一致；
-- CJK system fallback 能否记录 resolved font、metrics、version 和 embedding state；
-- system font 模式是否会导致项目跨机器漂移。
+- macOS/Windows/Linux 使用 bundled TeX Gyre Heros 时是否完全一致；
+- unsupported script 是否在 shaping 前产生稳定、明确的错误；
+- 是否存在未声明的系统字体 fallback。
 
 推荐策略：
 
-- Latin/Greek publication font 使用版本锁定的确定性资源，可按体积与授权结果选择 bundled；
-- CJK 默认使用 system fallback，不为三平台一致性强制打包大型 CJK 字体；
-- 项目保存 font family、font source、version/checksum 和 fallback 结果；
-- CJK fallback 无法嵌入 PDF 时必须警告，并允许用户提供或安装可嵌入字体；
-- 缺字时产生 warning，不静默替换后继续导出。
+- TeX Gyre Heros 四个 face 使用版本锁定的 bundled 资源；
+- 项目保存 font family、font source、version/checksum 和 coverage 结果；
+- CJK 等非 V1 script 不启用系统 fallback；
+- Core 缺字阻止导出，非 Core 缺字产生 warning，不静默替换后继续导出。
 
 ## 6.3 另一文字候选：cosmic-text
 
@@ -732,11 +735,10 @@ Display List
 
 建议：
 
-- Latin/Greek 默认使用确定性 publication font，可根据体积与许可证结果选择 bundled；
-- CJK 默认使用系统 fallback，同时在文档中记录实际 resolved font resource；
-- 对系统字体保存 PostScript name、版本、checksum（可获得时）、metrics 和 embedding state；
-- 找不到完全相同字体时进入 degraded state 并警告；
-- CJK 字体不可合法嵌入 PDF 时必须警告并要求用户选择可嵌入字体，不能静默栅格化文字；
+- 默认使用 bundled TeX Gyre Heros 四个真实 face；
+- 保存 PostScript name、版本、checksum、metrics、coverage 和 embedding state；
+- 找不到完全相同的 bundled font bytes 时阻止确定性出版导出；
+- CJK 等非 V1 script 明确报错，不能静默 fallback、outline 或栅格化；
 - 不在没有提示的情况下重新 layout 后覆盖旧项目结果。
 
 现有 Lite 内置字体可用于 UI 和过渡测试，但 Studio 需要重新确认：
@@ -763,7 +765,8 @@ Studio V1 不需要通用 constraint solver。建议有限迭代：
 8. 达到稳定或最大 3–4 次后停止；
 9. 未收敛时选择保守 margins 并产生 warning。
 
-必须用长负数、科学计数、Greek、上下标和中文标签测试。
+必须用长负数、科学计数、Greek 和语义上下标测试；另用中文标签作为
+unsupported-script 负向 fixture，验证它在 shaping/export 前被明确拒绝。
 
 ## 7.4 Tick locator 与 formatter
 
@@ -849,14 +852,14 @@ V1 可先使用确定性 coarse-grid 算法，不需要机器学习。
 - 一条 reference baseline；
 - 至少两个 series；
 - 包含负值、接近零值和科学计数量级；
-- 包含中文、Latin、Greek、上下标和单位。
+- 包含 Latin、Greek、上下标和单位，并另设 CJK unsupported-script 负向 fixture。
 
 推荐标签：
 
 ```text
 μ₀H_DL (mT)
 Current density J_e (A m⁻²)
-温度 T (K)
+T ≤ 300 K
 ```
 
 ## 9.2 原型输出
@@ -865,11 +868,12 @@ Current density J_e (A m⁻²)
 
 - egui 屏幕预览；
 - PDF；
-- SVG；
 - 300 dpi PNG；
 - 600 dpi PNG；
 - 1200 dpi PNG；
 - TIFF 不要求在 Gate A 前完成，但必须在 V1 release 前完成，并与 PNG 共享 raster buffer。
+
+SVG 是 ADR-021 下的可选实验输出，不属于本节的必需集合。
 
 ## 9.3 物理尺寸验收
 
@@ -897,13 +901,12 @@ height = 65 / 25.4 × 72 = 184.25197 pt
 - PDF 中普通文字可搜索、选择和复制；
 - PDF 嵌入或 subset 所需字体；
 - 不把整页文字转为位图；
-- SVG 默认保留 text；
-- preview/PDF/SVG 的 glyph advances 来自同一次 shaping；
+- preview/PDF 的 glyph advances 来自同一次 shaping；可选 SVG 不得重新 shaping；
 - italic variable、upright unit、upright descriptive subscript 正确；
 - Greek 使用真实 Unicode glyph；
 - 缺失 glyph 产生可见 warning；
-- 三个平台使用 deterministic Latin/Greek font 时布局一致；
-- CJK system fallback 的实际字体、metrics、embedding state 和跨平台差异被记录并可解释。
+- 三个平台使用同一组 TeX Gyre Heros font bytes 时布局一致；
+- CJK 等非 V1 script 产生明确诊断且不调用系统字体。
 
 ## 9.5 图元验收
 
@@ -942,7 +945,7 @@ PDF：
 - 没有整页 raster image；
 - metadata 记录 producer/version。
 
-SVG：
+可选 SVG（非阻断研究）：
 
 - 可被 usvg 解析；
 - `width`/`height` 与 viewBox 一致；
@@ -971,7 +974,7 @@ Raster：
 - 一个固定 axes 和固定 tick 的 figure；
 - deterministic Display List snapshot。
 
-通过条件：SVG 和 PNG 显示相同 geometry，物理尺寸计算正确。
+通过条件：PDF 和 PNG 显示相同 geometry，物理尺寸计算正确。
 
 ### Spike B：文字路线比较
 
@@ -1016,7 +1019,7 @@ Raster：
 - physical size；
 - text shaping；
 - PDF text；
-- SVG/PDF/PNG parity；
+- PDF/PNG parity；可选 SVG 只作研究对照；
 - dependency size；
 - 是否可以只依赖低层 crate；
 - 是否容易注入 InstPlot semantic style。
@@ -1041,7 +1044,7 @@ Raster：
 建立：
 
 - Display List JSON snapshot；
-- SVG structural test；
+- 可选 SVG structural test（非阻断）；
 - PDF structural test；
 - resvg/Poppler raster golden；
 - perceptual diff threshold；
@@ -1098,7 +1101,7 @@ Raster：
 - reference PNG；
 - normal-color、grayscale、CVD variants；
 - 多 DPI；
-- Latin/Greek 使用固定 deterministic font；CJK baseline 记录实际 system fallback，不假设三平台像素一致；
+- Latin/Greek/Core 使用固定 TeX Gyre Heros font bytes；unsupported script fixture 验证不会调用系统 fallback；
 - diff 失败时保留 expected、actual、diff artifacts。
 
 视觉回归只能发现外观变化，不能替代真实文字、字体嵌入和物理尺寸结构测试。
@@ -1161,11 +1164,11 @@ Corpus 用于校准产品默认值和专家视觉评审，不复制论文图的�
 3. SVG backend 直接手写 serializer，还是建立在现有 SVG crate 上；
 4. raster backend 直接消费 Display List，还是先经过 SVG；
 5. 是否复用 Plotine 的 scale/tick/mathtext/backend；
-6. deterministic Latin/Greek publication font 的具体字体、许可证和是否 bundled；
+6. TeX Gyre Heros 的具体版本、许可证、四个 face checksum 和 Core coverage；
 7. project container 使用 ZIP+JSON、单 JSON 还是其他格式；
 8. dense artist 的 vector/raster 阈值；
 9. V1 TIFF encoder、compression 和 metadata 方案；Gate A 不要求 TIFF；
-10. CJK system fallback 项目的跨机器恢复、embedding 和 warning 策略；
+10. unsupported-script 诊断和旧项目兼容策略；
 11. GUI framework 在体积、启动、内存与三平台行为上的最终选择。
 
 这些问题不应通过偏好决定，必须由原型数据决定。
@@ -1181,14 +1184,14 @@ Corpus 用于校准产品默认值和专家视觉评审，不复制论文图的�
 3. 默认文字 shaping 路线已选定；
 4. 89 mm × 65 mm 的 PDF page 精确输出；
 5. PDF 字体嵌入和 text extraction 通过；
-6. SVG、PDF、PNG 使用同一 layout result；
+6. preview、PDF、PNG 使用同一 layout result；可选 SVG 若启用也只能消费该结果；
 7. open marker、dash、error bar、clip 通过；
 8. 300/600/1200 dpi 像素尺寸通过；
 9. Display List snapshot 和 visual regression 已建立；
 10. Plotine 复用决策已有书面 ADR；
 11. 所有生产候选依赖已完成许可证检查；
 12. 原型在 Windows、macOS、Linux 至少各验证一次；
-13. deterministic Latin/Greek font 路线通过，CJK fallback 可记录实际字体和 embedding state；
+13. TeX Gyre Heros 四个 face 路线通过，Core coverage 完整且 unsupported script 不 fallback；
 14. Part A color contract 已固定，并通过基础 grayscale/CVD fixture；
 15. Publication Visual Benchmark Corpus 已建立并完成第一轮默认参数校准；
 16. UI shell 的 HiDPI、file dialog、keyboard 和 headless export independence 已通过；
