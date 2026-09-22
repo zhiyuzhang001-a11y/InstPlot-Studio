@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1–B3.5 DONE；B3.6 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B3 DONE；B4 READY）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,7 +1533,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B3.6 — 让 Preview、PDF、PNG 消费同一个正式 layout result 与 Display List。**
+> **B4 — 扩展 palette/semantic registry，并建立 Publication Check。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1553,7 +1553,9 @@ B3.4 正式 line/scatter 证据见
 [`../reports/B3_4_BASIC_ARTISTS.md`](../reports/B3_4_BASIC_ARTISTS.md)。
 B3.5 完整单轴 artist 证据见
 [`../reports/B3_5_COMPLETE_ARTISTS.md`](../reports/B3_5_COMPLETE_ARTISTS.md)。
-后续按 B3 → B4 → B5 → B6 顺序执行。
+B3.6 单一 Display List 与 Preview/PDF/PNG 闭环证据见
+[`../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md`](../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md)。
+后续按 B4 → B5 → B6 顺序执行。
 
 ---
 

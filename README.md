@@ -44,7 +44,8 @@ scientific baseline shifts and the rotated Y label. B3.4 is complete: embedded
 linear line, scatter and composed line-plus-marker artists now flow through the
 same formal layout and preview. B3.5 is complete: log axes, error bars,
 reference/baseline lines, semantic annotations and the explicit legend now use
-the formal layout. B3.6 is next: close the shared Preview/PDF/PNG path. See
+the formal layout. B3.6 is complete: Preview, PDF and PNG now consume one
+formal layout result and resolved Display List. B3 is closed; B4 is next. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -95,6 +96,12 @@ Validate the B3.5 complete artist framework with:
 
 ```sh
 python3 scripts/validate_b3_5.py
+```
+
+Validate the B3.6 single Display List pipeline with:
+
+```sh
+python3 scripts/validate_b3_6.py
 ```
 
 The release binary also exposes window-independent project checks:

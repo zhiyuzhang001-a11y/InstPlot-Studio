@@ -4,12 +4,16 @@ mod document;
 mod export;
 mod preview;
 mod project;
+mod render;
 mod session;
 
 pub use document::{
     AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, SeriesDescriptor, SeriesKind,
 };
-pub use export::{FixedPdfExportError, fixed_figure_pdf, save_fixed_figure_pdf};
+pub use export::{
+    FixedPdfExportError, figure_pdf, figure_png, fixed_figure_pdf, fixed_figure_png,
+    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
+};
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
     ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord, AxisRecord, AxisScale,
@@ -20,6 +24,7 @@ pub use project::{
     ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
     SourceFingerprint, SourceState, StrokeStyle, TypographyProfile, open_project, save_project,
 };
+pub use render::{ResolvedFigure, resolve_document};
 pub use session::{ImportOutcome, StudioSession};
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";

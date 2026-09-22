@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0–B2、B3.1–B3.5 DONE；B3.6 READY）
+> 状态：ACTIVE（B0–B3 DONE；B4 READY）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -155,13 +155,12 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 
 ## 10. 当前可执行任务
 
-**B0–B2 已完成。** B2 的正式 schema、项目格式、原子保存、备份恢复、迁移和
+**B0–B3 已完成。** B2 的正式 schema、项目格式、原子保存、备份恢复、迁移和
 外部 source-change 证据见
 [`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)，
 容器决策见
 [`../adr/022-versioned-project-container.md`](../adr/022-versioned-project-container.md)。
-当前任务切换为 **B3.6 让 Preview、PDF、PNG 只消费同一个正式 layout result
-与 Display List，并关闭 B3 垂直切片**。
+当前任务切换为 **B4 扩展 palette/semantic registry 并建立 Publication Check**。
 B3.1 的正式模块提升与兼容回归证据见
 [`../reports/B3_1_LAYOUT_PROMOTION.md`](../reports/B3_1_LAYOUT_PROMOTION.md)，B3.2
 正式坐标轴与裁切证据见
@@ -172,6 +171,8 @@ B3.4 正式 line/scatter 证据见
 [`../reports/B3_4_BASIC_ARTISTS.md`](../reports/B3_4_BASIC_ARTISTS.md)。
 B3.5 完整单轴 artist 证据见
 [`../reports/B3_5_COMPLETE_ARTISTS.md`](../reports/B3_5_COMPLETE_ARTISTS.md)。
+B3.6 单一 Display List 与 Preview/PDF/PNG 闭环证据见
+[`../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md`](../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md)。
 
-B3 按本计划第 6 节顺序实施；Preview、PDF 和 PNG 必须继续只消费同一个 layout
-result 与 Display List，不得在 UI 内建立第二套布局状态。
+B4 必须延续已关闭的单一 layout result 与 Display List，不得在 UI、检查器或
+导出端建立第二套绘图状态。

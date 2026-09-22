@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use eframe::egui;
-use export_backend_spike::{ResolvedDisplayList, resolve};
+use export_backend_spike::ResolvedDisplayList;
 use instplot_studio::{
     AxisRanges, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
-    PreviewAdapter, SeriesDescriptor, StudioSession, product_info, save_fixed_figure_pdf,
+    PreviewAdapter, SeriesDescriptor, StudioSession, product_info, resolve_document,
+    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
 };
 
 fn main() {
@@ -28,6 +29,11 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
             println!("exported_pdf={} bytes={size}", path.display());
             Ok(())
         }
+        StartupCommand::ExportFixedPng(path) => {
+            let size = save_fixed_figure_png(&path, 300)?;
+            println!("exported_png={} dpi=300 bytes={size}", path.display());
+            Ok(())
+        }
         StartupCommand::CreateProject(path) => {
             let document = FigureDocument::fixed();
             document.save(&path)?;
@@ -40,7 +46,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
         }
         StartupCommand::CheckProject(path) => {
             let (document, report) = FigureDocument::open(&path)?;
-            document.layout_axes()?;
+            document.layout_figure()?;
             println!(
                 "checked_project={} schema={} source={:?} warnings={}",
                 path.display(),
@@ -62,6 +68,7 @@ enum StartupCommand {
     Gui,
     ProductInfo,
     ExportFixedPdf(PathBuf),
+    ExportFixedPng(PathBuf),
     CreateProject(PathBuf),
     CheckProject(PathBuf),
 }
@@ -75,6 +82,9 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--export-fixed-pdf" => {
                 Ok(Self::ExportFixedPdf(path.into()))
             }
+            (Some(flag), Some(path), None) if flag == "--export-fixed-png" => {
+                Ok(Self::ExportFixedPng(path.into()))
+            }
             (Some(flag), Some(path), None) if flag == "--create-project" => {
                 Ok(Self::CreateProject(path.into()))
             }
@@ -82,7 +92,7 @@ impl StartupCommand {
                 Ok(Self::CheckProject(path.into()))
             }
             _ => Err(
-                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --create-project PATH | --check-project PATH]",
+                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --export-fixed-png PATH | --create-project PATH | --check-project PATH]",
             ),
         }
     }
@@ -230,20 +240,38 @@ impl StudioApp {
         }
     }
 
-    fn export_fixed_pdf(&mut self) {
+    fn export_pdf(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export fixed publication figure")
+            .set_title("Export publication figure")
             .add_filter("PDF", &["pdf"])
-            .set_file_name("instplot-studio-fixed.pdf")
+            .set_file_name("instplot-studio-figure.pdf")
             .save_file()
         else {
             return;
         };
-        self.export_fixed_pdf_to(&path);
+        self.export_pdf_to(&path);
     }
 
-    fn export_fixed_pdf_to(&mut self, path: &Path) {
-        match save_fixed_figure_pdf(path) {
+    fn export_pdf_to(&mut self, path: &Path) {
+        match save_figure_pdf(&self.document, path) {
+            Ok(size) => {
+                self.status = format!("Exported {} bytes to {}", size, path.display());
+                self.clear_warning("Export failed:");
+            }
+            Err(error) => self.push_warning(format!("Export failed: {error}")),
+        }
+    }
+
+    fn export_png(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Export publication figure")
+            .add_filter("PNG", &["png"])
+            .set_file_name("instplot-studio-figure.png")
+            .save_file()
+        else {
+            return;
+        };
+        match save_figure_png(&self.document, &path, 300) {
             Ok(size) => {
                 self.status = format!("Exported {} bytes to {}", size, path.display());
                 self.clear_warning("Export failed:");
@@ -373,8 +401,11 @@ impl eframe::App for StudioApp {
                 if ui.button("Save project as…").clicked() {
                     self.save_project(true);
                 }
-                if ui.button("Export fixed PDF…").clicked() {
-                    self.export_fixed_pdf();
+                if ui.button("Export PDF…").clicked() {
+                    self.export_pdf();
+                }
+                if ui.button("Export PNG…").clicked() {
+                    self.export_png();
                 }
                 ui.separator();
                 ui.label(&self.status);
@@ -453,9 +484,7 @@ impl eframe::App for StudioApp {
 fn resolved_preview(
     document: &FigureDocument,
 ) -> Result<ResolvedDisplayList, instplot_studio::DocumentLayoutError> {
-    document
-        .layout_figure()
-        .map(|layout| resolve(&layout.result.display_list))
+    resolve_document(document).map(|resolved| resolved.display)
 }
 
 fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
@@ -488,6 +517,14 @@ mod tests {
             ])
             .unwrap(),
             StartupCommand::ExportFixedPdf(PathBuf::from("figure.pdf"))
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--export-fixed-png"),
+                OsString::from("figure.png")
+            ])
+            .unwrap(),
+            StartupCommand::ExportFixedPng(PathBuf::from("figure.png"))
         );
         assert_eq!(
             StartupCommand::parse([
