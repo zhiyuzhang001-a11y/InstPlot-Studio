@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0.1–B0.4 DONE）
+> 状态：ACTIVE（B0 DONE；B1 READY）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -52,11 +52,14 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 2. 依次抽取 `instplot-core`（**DONE**，见
    [`../reports/B0_CORE_EXTRACTION.md`](../reports/B0_CORE_EXTRACTION.md)）、`instplot-io`
    （**DONE**，见 [`../reports/B0_IO_EXTRACTION.md`](../reports/B0_IO_EXTRACTION.md)）、`instplot-processing`
-   （第一段 **DONE**，见
+   （**DONE**，见
    [`../reports/B0_PROCESSING_EXTRACTION.md`](../reports/B0_PROCESSING_EXTRACTION.md)）、
-   `instplot-fitting`；每次只移动一个边界，不同时改行为。
-3. 让 Lite 成为共享 crates 的消费者，再建立 workspace root。
-4. 记录每步的测试、数据 round-trip、release size 和 memory 变化。
+   `instplot-fitting`（**DONE**）；每次只移动一个边界，不同时改行为。
+3. 让 Lite 成为共享 crates 的消费者，再建立 workspace root。**DONE**。
+4. 记录每步的测试、数据 round-trip、release size 和 memory 变化。**DONE**。
+
+完整结项证据见
+[`../reports/B0_SHARED_CORE_CLOSEOUT.md`](../reports/B0_SHARED_CORE_CLOSEOUT.md)。
 
 ### 完成条件
 
@@ -152,8 +155,8 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 
 ## 10. 当前可执行任务
 
-**B0.1–B0.4 已完成。** 当前任务是 **B0.5 `instplot-fitting` 抽取**：移动拟合与
-唯一 expression implementation 及其 12 项测试，为 B0.6 完成 processing 公式接线
-提供单一依赖。
+**B0 已完成。** 当前任务切换为 **B1.1 独立 Studio 应用边界与最小 binary
+bootstrap**：先固定产品 package/binary、依赖方向和最小窗口边界，再接入共享数据读取。
 
-本步不创建 Studio app，也不改变拟合算法、公式语义或展示文本。
+本步不得复制 Lite `app.rs`，不得提前实现 B2 的正式项目格式，也不得把 Studio
+字体、渲染或 GUI 依赖带回 Lite workspace。

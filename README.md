@@ -25,10 +25,11 @@ Windows 10 manual scaling/input/PDF review pass. Linux and physical Retina
 checks are explicitly deferred to a release that claims those targets; they are
 not represented as passed.
 
-Part B is active. B0.1 through B0.4 are complete, including shared core, I/O and
-independent processing algorithms; B0.5 now extracts fitting and expressions, followed by the
-independent Studio application, formal Figure Document, and the single-axes
-production slice. See
+Part B is active. B0 is complete: Lite now consumes the shared core, I/O,
+processing, fitting, and expression crates from one Cargo workspace, while an
+independent Studio-side consumer proves that the shared data model can be used
+through a pinned Git revision. B1 is next: establish the independent Studio
+application before the formal Figure Document and single-axes production slice. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Validate the A1 contract with:

@@ -193,10 +193,14 @@ agreed smoke-process memory measurement before and after each extraction.
    expression implementation; document the one-way
    `instplot-processing -> instplot-fitting` edge unless an ADR selects a small
    expression crate instead.
-6. **B0.7 application/workspace closeout** — move the Lite binary under the
-   application boundary, create the workspace root, run all release and
-   dependency audits, and prove the Studio prototype can consume
-   `instplot-core` without copying it.
+6. **B0.7 application/workspace closeout** — keep the existing repository-root
+   package as the explicit Lite application package, add the Cargo workspace at
+   that same root, run all release and dependency audits, and prove the Studio
+   prototype can consume `instplot-core` without copying it. This preserves the
+   established assets, installer and release paths while still giving the four
+   shared crates one authoritative lockfile; a physical `apps/instplot-lite`
+   directory move would add packaging churn without changing the dependency
+   boundary and is therefore not part of B0.
 
 Each item is its own reviewable commit. Do not combine a file move with schema,
 error-message, algorithm, dependency-version or GUI changes.
