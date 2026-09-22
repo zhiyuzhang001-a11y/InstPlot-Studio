@@ -13,6 +13,10 @@ pub enum EditGroup {
     AxisYMaximum,
     FigureWidth,
     FigureHeight,
+    AxisXSettings,
+    AxisYSettings,
+    ArtistProperties,
+    SemanticLabel,
 }
 
 pub enum EditCommand {
@@ -457,5 +461,110 @@ mod tests {
                 .any(|series| series.id == "series-1")
         );
         assert!(!history.is_dirty(&document));
+    }
+
+    #[test]
+    fn p4_through_p7_visible_edits_share_undo_redo_and_round_trip() {
+        let mut document = FigureDocument::fixed();
+        let original = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+
+        let mut x_axis = document.axis_record(AxisDimension::X);
+        x_axis.minimum = -4.0;
+        x_axis.maximum = 4.0;
+        x_axis.formatter = crate::FormatterSpec::Scientific { precision: 2 };
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAxisRecord {
+                    dimension: AxisDimension::X,
+                    record: x_axis,
+                },
+                None,
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAxisLabel {
+                    dimension: AxisDimension::X,
+                    nodes: vec![
+                        LabelNode::GreekVariable('μ'),
+                        LabelNode::UnitSeparator,
+                        LabelNode::Unit("m".to_owned()),
+                    ],
+                },
+                None,
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetFigureSize {
+                    width_mm: 89.0,
+                    height_mm: 65.0,
+                },
+                None,
+            )
+            .unwrap();
+
+        let mut line = document.artist_record("node-11").unwrap();
+        let crate::ArtistProperties::Line { stroke, .. } = &mut line.properties else {
+            panic!("node-11 must remain a line")
+        };
+        stroke.width_pt = 1.25;
+        stroke.dash_pt = vec![4.0, 2.4];
+        history
+            .execute(&mut document, EditCommand::SetArtistRecord(line), None)
+            .unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSemanticLabel {
+                    label_id: "label-temperature".to_owned(),
+                    nodes: vec![
+                        LabelNode::Variable("T".to_owned()),
+                        LabelNode::Operator("=".to_owned()),
+                        LabelNode::Number("250".to_owned()),
+                        LabelNode::Unit("K".to_owned()),
+                    ],
+                },
+                None,
+            )
+            .unwrap();
+        let mut export = document.export_preferences().clone();
+        export.selected_raster_dpi = 600;
+        export.transparent_background = true;
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetExportPreferences(export),
+                None,
+            )
+            .unwrap();
+
+        let edited = document.project().clone();
+        assert_ne!(edited, original);
+        assert!(history.is_dirty(&document));
+        for _ in 0..6 {
+            history.undo(&mut document).unwrap();
+        }
+        assert_eq!(document.project(), &original);
+        assert!(!history.is_dirty(&document));
+        for _ in 0..6 {
+            history.redo(&mut document).unwrap();
+        }
+        assert_eq!(document.project(), &edited);
+
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let decoded = crate::project::decode_project(&encoded).unwrap();
+        assert_eq!(decoded, edited);
+        assert_eq!(
+            document.compile().unwrap(),
+            FigureDocument::from_project(decoded)
+                .unwrap()
+                .compile()
+                .unwrap()
+        );
     }
 }

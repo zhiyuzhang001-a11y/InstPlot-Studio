@@ -1,7 +1,7 @@
 use export_backend_spike::{FontOrigin, resolve};
 use layout_engine_spike::{
-    LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout,
-    layout_with_measurer, marker_gallery_fixture, publication_fixture,
+    Formatter, LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize,
+    TickDirection, layout, layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
 use studio_render_spike::{DisplayItem, NodeId, PathVerb};
 use text_shaping_spike::Label;
@@ -234,6 +234,77 @@ fn large_greek_and_scripted_labels_keep_balanced_clearance() {
         warning,
         LayoutWarning::TextOutsideFigure { .. }
     )));
+}
+
+#[test]
+fn p4_size_tick_and_long_label_matrix_is_unclipped_and_axis_independent() {
+    for width_mm in [85.0, 89.0] {
+        for scientific in [false, true] {
+            let mut chart = publication_fixture();
+            chart.width_pt = width_mm / 25.4 * 72.0;
+            chart.x.minimum = -12_500.0;
+            chart.x.maximum = 25_000.0;
+            chart.x.formatter = if scientific {
+                Formatter::Scientific { precision: 2 }
+            } else {
+                Formatter::Decimal { precision: 1 }
+            };
+            chart.x.label = Label::Group(vec![
+                Label::Text("Applied field ".into()),
+                Label::GreekVariable('μ'),
+                Label::VariableSubscript(Box::new(Label::Text("maximum".into()))),
+                Label::Text(" (".into()),
+                Label::Unit("mT".into()),
+                Label::Text(")".into()),
+            ]);
+            chart.y.label = Label::Group(vec![
+                Label::Text("Current density ".into()),
+                Label::Variable("J".into()),
+                Label::VariableSubscript(Box::new(Label::Variable("e".into()))),
+                Label::Text(" (".into()),
+                Label::Unit("A".into()),
+                Label::UnitSeparator,
+                Label::Unit("m".into()),
+                Label::Superscript(Box::new(Label::Number("−2".into()))),
+                Label::Text(")".into()),
+            ]);
+
+            let result = layout(&chart).unwrap();
+            let x_tick_bottom = result
+                .x_axis
+                .major
+                .iter()
+                .map(|tick| tick.label_bounds.bottom())
+                .fold(result.axes.bottom(), f64::max);
+            let y_tick_left = result
+                .y_axis
+                .major
+                .iter()
+                .map(|tick| tick.label_bounds.x)
+                .fold(result.axes.x, f64::min);
+            assert!((result.x_label_bounds.y - x_tick_bottom - 4.0).abs() < 1e-9);
+            assert!((y_tick_left - result.y_label_bounds.right() - 4.0).abs() < 1e-9);
+            assert!((chart.height_pt - result.x_label_bounds.bottom() - 6.0).abs() < 1e-9);
+            assert!((result.y_label_bounds.x - 6.0).abs() < 1e-9);
+            assert!(result.axes.width >= 20.0 && result.axes.height >= 20.0);
+            assert!(!result.warnings.iter().any(|warning| matches!(
+                warning,
+                LayoutWarning::TextOutsideFigure { .. }
+                    | LayoutWarning::InsufficientPlotArea { .. }
+            )));
+        }
+    }
+
+    let base = layout(&publication_fixture()).unwrap();
+    let mut long_x = publication_fixture();
+    long_x.x.label = Label::Text("A deliberately much longer horizontal label with unit".into());
+    let long_x = layout(&long_x).unwrap();
+    assert!((base.axes.x - long_x.axes.x).abs() < 1e-9);
+
+    let mut long_y = publication_fixture();
+    long_y.y.label = Label::Text("A deliberately much longer vertical label with unit".into());
+    let long_y = layout(&long_y).unwrap();
+    assert!((base.axes.y - long_y.axes.y).abs() < 1e-9);
 }
 
 fn axis_segments(items: &[DisplayItem], source: NodeId) -> Vec<((f64, f64), (f64, f64))> {

@@ -15,6 +15,11 @@
 - 输入 fixture 前后 hash 不变；tracked files 不含本机用户绝对路径。
 - release binary 为 6,571,392 bytes，低于既定 12 MiB 上限。
 - release GUI 本机真实启动并到达 first canvas，耗时 162 ms；检查后立即结束进程，没有持续监控。
+- 完成逐项收尾审计：P4–P7 的可见文档修改统一进入 EditHistory，并以一条自动测试证明
+  Undo/Redo、保存重开和 resolved Display List 一致；连续拖动与文本输入按一次用户操作合并。
+- Publication Check 的透明 palette 风险现在指向第一个实际受影响的 artist，可由 finding
+  跳转到对象与 Inspector；P4 自动组合矩阵覆盖 85/89 mm、两类 formatter、负数/大数 tick
+  与长 Greek/上下标/单位标签。
 
 ## 自动审计结果
 

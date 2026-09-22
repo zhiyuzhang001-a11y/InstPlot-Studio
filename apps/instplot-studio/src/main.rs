@@ -1090,6 +1090,8 @@ impl StudioApp {
         };
         let mut record = self.document.axis_record(dimension);
         let mut changed = false;
+        let mut continuous_change = false;
+        let mut finish_coalescing = false;
         let mut fixed_ticks = match dimension {
             AxisDimension::X => self.x_fixed_ticks.clone(),
             AxisDimension::Y => self.y_fixed_ticks.clone(),
@@ -1150,13 +1152,14 @@ impl StudioApp {
                 });
             match &mut record.locator {
                 LocatorSpec::Auto { target_count } => {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(target_count)
-                                .range(2..=20)
-                                .prefix(format!("{}: ", self.language.text(Text::TargetTickCount))),
-                        )
-                        .changed();
+                    let response = ui.add(
+                        egui::DragValue::new(target_count)
+                            .range(2..=20)
+                            .prefix(format!("{}: ", self.language.text(Text::TargetTickCount))),
+                    );
+                    changed |= response.changed();
+                    continuous_change |= response.changed();
+                    finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 }
                 LocatorSpec::Fixed { values } => {
                     ui.label(self.language.text(Text::FixedTickValues));
@@ -1211,13 +1214,14 @@ impl StudioApp {
             if let FormatterSpec::Decimal { precision } | FormatterSpec::Scientific { precision } =
                 &mut record.formatter
             {
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(precision)
-                            .range(0..=15)
-                            .prefix(format!("{}: ", self.language.text(Text::Precision))),
-                    )
-                    .changed();
+                let response = ui.add(
+                    egui::DragValue::new(precision)
+                        .range(0..=15)
+                        .prefix(format!("{}: ", self.language.text(Text::Precision))),
+                );
+                changed |= response.changed();
+                continuous_change |= response.changed();
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
             }
 
             ui.separator();
@@ -1312,13 +1316,14 @@ impl StudioApp {
                     self.language.text(Text::LabelTickPad),
                 ),
             ] {
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(value)
-                            .range(0.0..=72.0)
-                            .prefix(format!("{label}: ")),
-                    )
-                    .changed();
+                let response = ui.add(
+                    egui::DragValue::new(value)
+                        .range(0.0..=72.0)
+                        .prefix(format!("{label}: ")),
+                );
+                changed |= response.changed();
+                continuous_change |= response.changed();
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
             }
         });
         match dimension {
@@ -1329,7 +1334,18 @@ impl StudioApp {
             self.push_error("fixed-ticks", error);
         }
         if changed {
-            self.execute_document_edit(EditCommand::SetAxisRecord { dimension, record }, title);
+            let group = continuous_change.then_some(match dimension {
+                AxisDimension::X => EditGroup::AxisXSettings,
+                AxisDimension::Y => EditGroup::AxisYSettings,
+            });
+            self.execute_document_edit_with_group(
+                EditCommand::SetAxisRecord { dimension, record },
+                title,
+                group,
+            );
+        }
+        if finish_coalescing {
+            self.edit_history.finish_coalescing();
         }
         self.axis_label_editor(ui, dimension);
     }
@@ -1975,6 +1991,8 @@ impl StudioApp {
         };
         let palette = self.document.palette_colors().to_vec();
         let mut changed = false;
+        let mut continuous_change = false;
+        let mut finish_coalescing = false;
         let mut semantic_labels = Vec::new();
         ui.separator();
         ui.collapsing(self.language.text(Text::ArtistProperties), |ui| {
@@ -1983,7 +2001,10 @@ impl StudioApp {
             }
             match &mut record.properties {
                 ArtistProperties::Line { stroke, .. } => {
-                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                    let edit = stroke_editor(ui, self.language, stroke, &palette);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                 }
                 ArtistProperties::Scatter { marker, .. } => {
                     changed |= color_editor(ui, self.language, &mut marker.color_id, &palette);
@@ -2006,27 +2027,34 @@ impl StudioApp {
                                     .changed();
                             }
                         });
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut marker.size_pt)
-                                .range(0.1..=72.0)
-                                .prefix(format!("{}: ", self.language.text(Text::MarkerSize))),
-                        )
-                        .changed();
+                    let response = ui.add(
+                        egui::DragValue::new(&mut marker.size_pt)
+                            .range(0.1..=72.0)
+                            .prefix(format!("{}: ", self.language.text(Text::MarkerSize))),
+                    );
+                    let edit = continuous_edit(&response);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                 }
                 ArtistProperties::ErrorBar {
                     cap_width_pt,
                     stroke,
                     ..
                 } => {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(cap_width_pt)
-                                .range(0.1..=72.0)
-                                .prefix(format!("{}: ", self.language.text(Text::CapWidth))),
-                        )
-                        .changed();
-                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                    let response = ui.add(
+                        egui::DragValue::new(cap_width_pt)
+                            .range(0.1..=72.0)
+                            .prefix(format!("{}: ", self.language.text(Text::CapWidth))),
+                    );
+                    let edit = continuous_edit(&response);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
+                    let edit = stroke_editor(ui, self.language, stroke, &palette);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                 }
                 ArtistProperties::ReferenceLine {
                     orientation,
@@ -2050,20 +2078,28 @@ impl StudioApp {
                                     .changed();
                             }
                         });
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(value)
-                                .prefix(format!("{}: ", self.language.text(Text::Value))),
-                        )
-                        .changed();
-                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                    let response = ui.add(
+                        egui::DragValue::new(value)
+                            .prefix(format!("{}: ", self.language.text(Text::Value))),
+                    );
+                    let edit = continuous_edit(&response);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
+                    let edit = stroke_editor(ui, self.language, stroke, &palette);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                 }
                 ArtistProperties::Annotation {
                     label_id,
                     x_pt,
                     y_pt,
                 } => {
-                    changed |= position_editor(ui, self.language, x_pt, y_pt);
+                    let edit = position_editor(ui, self.language, x_pt, y_pt);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                     semantic_labels.push(label_id.clone());
                 }
                 ArtistProperties::Legend {
@@ -2071,7 +2107,10 @@ impl StudioApp {
                     x_pt,
                     y_pt,
                 } => {
-                    changed |= position_editor(ui, self.language, x_pt, y_pt);
+                    let edit = position_editor(ui, self.language, x_pt, y_pt);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
                     ui.label(self.language.text(Text::LegendEntries));
                     let mut move_entry = None;
                     let entry_count = entries.len();
@@ -2096,10 +2135,14 @@ impl StudioApp {
             }
         });
         if changed {
-            self.execute_document_edit(
+            self.execute_document_edit_with_group(
                 EditCommand::SetArtistRecord(record),
                 self.language.text(Text::ArtistProperties),
+                continuous_change.then_some(EditGroup::ArtistProperties),
             );
+        }
+        if finish_coalescing {
+            self.edit_history.finish_coalescing();
         }
         for label_id in semantic_labels {
             self.semantic_label_editor(ui, &label_id);
@@ -2112,6 +2155,8 @@ impl StudioApp {
         };
         let mut draft = LabelDraft::from_nodes(nodes);
         let mut changed = false;
+        let mut continuous_change = false;
+        let mut finish_coalescing = false;
         let mut remove = None;
         ui.collapsing(
             format!("{} · {label_id}", self.language.text(Text::SemanticLabel)),
@@ -2132,7 +2177,10 @@ impl StudioApp {
                                 }
                             });
                         if part.kind != LabelPartKind::UnitSeparator {
-                            changed |= ui.text_edit_singleline(&mut part.value).changed();
+                            let response = ui.text_edit_singleline(&mut part.value);
+                            changed |= response.changed();
+                            continuous_change |= response.changed();
+                            finish_coalescing |= response.lost_focus();
                         }
                         if ui.small_button("−").clicked() {
                             remove = Some(index);
@@ -2155,16 +2203,20 @@ impl StudioApp {
         if changed {
             match draft.to_nodes() {
                 Ok(nodes) => {
-                    self.execute_document_edit(
+                    self.execute_document_edit_with_group(
                         EditCommand::SetSemanticLabel {
                             label_id: label_id.to_owned(),
                             nodes,
                         },
                         self.language.text(Text::ApplyLabel),
+                        continuous_change.then_some(EditGroup::SemanticLabel),
                     );
                 }
                 Err(error) => self.push_error("semantic-label", error),
             }
+        }
+        if finish_coalescing {
+            self.edit_history.finish_coalescing();
         }
     }
 }
@@ -2222,15 +2274,17 @@ fn stroke_editor(
     language: UiLanguage,
     stroke: &mut StrokeStyle,
     palette: &[instplot_studio::PaletteColor],
-) -> bool {
-    let mut changed = color_editor(ui, language, &mut stroke.color_id, palette);
-    changed |= ui
-        .add(
-            egui::DragValue::new(&mut stroke.width_pt)
-                .range(0.1..=72.0)
-                .prefix(format!("{}: ", language.text(Text::LineWidth))),
-        )
-        .changed();
+) -> UiEdit {
+    let mut edit = UiEdit {
+        changed: color_editor(ui, language, &mut stroke.color_id, palette),
+        ..UiEdit::default()
+    };
+    let response = ui.add(
+        egui::DragValue::new(&mut stroke.width_pt)
+            .range(0.1..=72.0)
+            .prefix(format!("{}: ", language.text(Text::LineWidth))),
+    );
+    edit.merge(continuous_edit(&response));
     let selected = dash_name(language, &stroke.dash_pt);
     ui.label(language.text(Text::Dash));
     egui::ComboBox::from_id_salt("artist-dash")
@@ -2242,12 +2296,12 @@ fn stroke_editor(
                 (Text::Dotted, vec![0.8, 1.8]),
                 (Text::DashDot, vec![4.0, 2.0, 0.8, 2.0]),
             ] {
-                changed |= ui
+                edit.changed |= ui
                     .selectable_value(&mut stroke.dash_pt, pattern, language.text(name))
                     .changed();
             }
         });
-    changed
+    edit
 }
 
 fn position_editor(
@@ -2255,14 +2309,37 @@ fn position_editor(
     language: UiLanguage,
     x_pt: &mut f64,
     y_pt: &mut f64,
-) -> bool {
-    let mut changed = ui
-        .add(egui::DragValue::new(x_pt).prefix(format!("{}: ", language.text(Text::XPosition))))
-        .changed();
-    changed |= ui
-        .add(egui::DragValue::new(y_pt).prefix(format!("{}: ", language.text(Text::YPosition))))
-        .changed();
-    changed
+) -> UiEdit {
+    let x =
+        ui.add(egui::DragValue::new(x_pt).prefix(format!("{}: ", language.text(Text::XPosition))));
+    let y =
+        ui.add(egui::DragValue::new(y_pt).prefix(format!("{}: ", language.text(Text::YPosition))));
+    let mut edit = continuous_edit(&x);
+    edit.merge(continuous_edit(&y));
+    edit
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct UiEdit {
+    changed: bool,
+    continuous: bool,
+    finish: bool,
+}
+
+impl UiEdit {
+    fn merge(&mut self, other: Self) {
+        self.changed |= other.changed;
+        self.continuous |= other.continuous;
+        self.finish |= other.finish;
+    }
+}
+
+fn continuous_edit(response: &egui::Response) -> UiEdit {
+    UiEdit {
+        changed: response.changed(),
+        continuous: response.changed(),
+        finish: response.drag_stopped() || response.lost_focus(),
+    }
 }
 
 fn artist_role_name(language: UiLanguage, role: ArtistRole) -> &'static str {

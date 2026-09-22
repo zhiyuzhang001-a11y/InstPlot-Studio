@@ -1,6 +1,6 @@
 # B5P P4 axes、标签、刻度与图尺寸验收
 
-> 状态：DONE（自动验收完成；完整 GUI 组合矩阵并入 P8）  
+> 状态：DONE（自动验收完成；最终 GUI 目视确认并入 P8）
 > 日期：2026-09-22  
 > 上位计划：`docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`
 
@@ -33,6 +33,9 @@
 ## 验证结果
 
 - layout snapshot 覆盖四边 spine、内/外/双向 tick、label side 和 decoration bounds。
+- 自动组合矩阵覆盖 85/89 mm、decimal/scientific formatter、负数/大数 tick、长 Greek/
+  上下标/单位标签；逐项验证无 clipping/overlap warning、6/4/4 pt 几何约束以及 X/Y
+  decoration 相互独立。
 - Studio tests 覆盖 autoscale 原子失败、89×65 mm、fixed/scientific tick、语义 Greek/下标/单位、
   schema 2 migration、保存重开和 resolved display list 一致性。
 - `scripts/validate_b5p_p0.py`：25/25 通过，所有 P0 数据与输入 hash 保持不变。
@@ -41,5 +44,4 @@
 ## 后续边界
 
 - line、marker、error bar、reference、annotation 和 legend 的属性编辑属于 P5。
-- 真实 GUI 的 85/89 mm、长标签、科学计数和窗口尺寸组合检查集中在 P8，避免每个阶段重复
-  启动长时间人工流程。
+- 真实 GUI 的最终目视检查集中在 P8，避免每个阶段重复启动长时间人工流程。

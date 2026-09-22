@@ -294,14 +294,16 @@ P8 稳定化与人工验收
 P0 已完成，真实样例、结构化验证和分级问题清单见
 [`../reports/B5P_P0_WORKFLOW_BASELINE.md`](../reports/B5P_P0_WORKFLOW_BASELINE.md)。P1 的编辑事务、
 dirty 状态、Undo/Redo、保存点与未保存保护已完成，证据见
-[`../reports/B5P_P1_EDIT_TRANSACTIONS.md`](../reports/B5P_P1_EDIT_TRANSACTIONS.md)。当前任务是
-P3 的数据绑定与 series 管理证据见
+[`../reports/B5P_P1_EDIT_TRANSACTIONS.md`](../reports/B5P_P1_EDIT_TRANSACTIONS.md)。P2 的项目生命周期
+与工作区骨架证据见
+[`../reports/B5P_P2_WORKSPACE_LIFECYCLE.md`](../reports/B5P_P2_WORKSPACE_LIFECYCLE.md)。P3 的数据绑定
+与 series 管理证据见
 [`../reports/B5P_P3_DATA_SERIES.md`](../reports/B5P_P3_DATA_SERIES.md)，P4 的 axes、语义标签、
 刻度和尺寸证据见 [`../reports/B5P_P4_AXES_LABELS_SIZE.md`](../reports/B5P_P4_AXES_LABELS_SIZE.md)。
 P5 的 artist、颜色、legend 和 annotation 编辑证据见
-[`../reports/B5P_P5_ARTIST_EDITING.md`](../reports/B5P_P5_ARTIST_EDITING.md)。当前任务是
-P6 的正式 hit map、选择反馈和纯 view-state 缩放证据见
-[`../reports/B5P_P6_CANVAS_INTERACTION.md`](../reports/B5P_P6_CANVAS_INTERACTION.md)。当前任务是
+[`../reports/B5P_P5_ARTIST_EDITING.md`](../reports/B5P_P5_ARTIST_EDITING.md)。P6 的正式 hit map、选择反馈
+和纯 view-state 缩放证据见
+[`../reports/B5P_P6_CANVAS_INTERACTION.md`](../reports/B5P_P6_CANVAS_INTERACTION.md)。
 P7 的 finding 分组/定位和导出设置闭环证据见
 [`../reports/B5P_P7_PUBLICATION_EXPORT.md`](../reports/B5P_P7_PUBLICATION_EXPORT.md)。当前任务是
 **P8：稳定化、人工验收与阶段关闭**；自动审计证据和当前唯一待确认项见

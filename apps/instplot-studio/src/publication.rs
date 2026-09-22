@@ -521,6 +521,16 @@ fn transparency(project: &ProjectDocument) -> PublicationFinding {
         .iter()
         .find(|color| color.rgba[3] != 255);
     let risky = project.export_preferences.transparent_background || transparent_color.is_some();
+    let node_id = transparent_color
+        .and_then(|color| {
+            project
+                .figure
+                .artists
+                .iter()
+                .find(|artist| color_id(artist) == Some(color.id.as_str()))
+                .map(|artist| artist.id.clone())
+        })
+        .or_else(|| Some(project.figure.id.clone()));
     finding(
         "transparency",
         if risky {
@@ -528,9 +538,7 @@ fn transparency(project: &ProjectDocument) -> PublicationFinding {
         } else {
             CheckSeverity::Information
         },
-        transparent_color
-            .map(|color| color.id.clone())
-            .or_else(|| Some(project.figure.id.clone())),
+        node_id,
         if risky {
             "transparent background or palette alpha requires journal-specific verification"
         } else {
@@ -744,6 +752,39 @@ mod tests {
         assert!(report.findings.iter().any(|finding| {
             finding.rule_id == "transparency" && finding.severity == CheckSeverity::Warning
         }));
+    }
+
+    #[test]
+    fn transparent_palette_finding_targets_the_first_affected_artist() {
+        let mut project = ProjectDocument::fixed_fixture();
+        let blue = project
+            .palette
+            .colors
+            .iter_mut()
+            .find(|color| color.id == "blue")
+            .unwrap();
+        blue.rgba[3] = 128;
+        let expected_artist_id = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| color_id(artist) == Some("blue"))
+            .unwrap()
+            .id
+            .clone();
+
+        let document = FigureDocument::from_project(project).unwrap();
+        let report = report(&document, 300);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "transparency")
+            .unwrap();
+        assert_eq!(finding.severity, CheckSeverity::Warning);
+        assert_eq!(
+            finding.node_id.as_deref(),
+            Some(expected_artist_id.as_str())
+        );
     }
 
     #[test]
