@@ -1352,6 +1352,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "instplot-layout"
+version = "0.1.0"
+dependencies = [
+ "export-backend-spike",
+ "parley",
+ "studio-render-spike",
+ "text-shaping-spike",
+]
+
+[[package]]
 name = "instplot-studio"
 version = "0.1.0"
 dependencies = [
@@ -1360,6 +1370,7 @@ dependencies = [
  "export-backend-spike",
  "instplot-core",
  "instplot-io",
+ "instplot-layout",
  "rfd",
  "serde",
  "serde_json",

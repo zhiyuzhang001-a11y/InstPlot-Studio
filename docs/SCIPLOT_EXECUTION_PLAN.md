@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B2 DONE；B3 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1 DONE；B3.2 READY）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,7 +1533,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B3.1 — 将 A7 scale、locator、formatter 和有限迭代布局迁入正式模块。**
+> **B3.2 — 固定正式 axes rectangle、spines、ticks、grid、labels 与 clipping。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1543,6 +1543,8 @@ B0 已完成，完整证据见
 [`../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md`](../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md)，
 B2 完整证据见
 [`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)。
+B3.1 正式布局模块提升证据见
+[`../reports/B3_1_LAYOUT_PROMOTION.md`](../reports/B3_1_LAYOUT_PROMOTION.md)。
 后续按 B3 → B4 → B5 → B6 顺序执行。
 
 ---

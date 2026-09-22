@@ -33,8 +33,11 @@ through a pinned Git revision. B1 is complete: the independent
 exposes the minimum editing panels and exports the fixed PDF without creating a
 window. B2 is complete: the formal versioned Figure Document, strict `.instplot`
 JSON project format, atomic save, backup recovery, migration and external-source
-change diagnostics are implemented. B3 is next: promote the validated layout
-stack into the formal single-axes production slice. See
+change diagnostics are implemented. B3.1 is complete: the validated A7 scale,
+locator, formatter and bounded single-axes layout now live in the formal
+`instplot-layout` crate while the historical spike remains a compatibility test
+facade. B3.2 is next: connect the formal axes decorations and clipping to the
+versioned Figure Document. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -55,6 +58,12 @@ Run the complete repeatable B2 project-format validation with:
 
 ```sh
 python3 scripts/validate_b2.py
+```
+
+Validate the formal B3.1 layout promotion with:
+
+```sh
+python3 scripts/validate_b3_1.py
 ```
 
 The release binary also exposes window-independent project checks:

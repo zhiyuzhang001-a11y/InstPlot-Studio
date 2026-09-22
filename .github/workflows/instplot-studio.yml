@@ -7,12 +7,14 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "apps/**"
+      - "crates/**"
       - "prototypes/export-backend-spike/**"
       - "prototypes/studio-render-spike/**"
       - "prototypes/text-shaping-spike/**"
       - "prototypes/ui-shell-spike/**"
       - "scripts/validate_b1.py"
       - "scripts/validate_b2.py"
+      - "scripts/validate_b3_1.py"
       - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
@@ -22,12 +24,14 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "apps/**"
+      - "crates/**"
       - "prototypes/export-backend-spike/**"
       - "prototypes/studio-render-spike/**"
       - "prototypes/text-shaping-spike/**"
       - "prototypes/ui-shell-spike/**"
       - "scripts/validate_b1.py"
       - "scripts/validate_b2.py"
+      - "scripts/validate_b3_1.py"
       - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
@@ -64,6 +68,9 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --locked
+
+      - name: Run promoted A7 compatibility tests
+        run: cargo test --manifest-path prototypes/layout-engine-spike/Cargo.toml --locked
 
       - name: Run Clippy
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings

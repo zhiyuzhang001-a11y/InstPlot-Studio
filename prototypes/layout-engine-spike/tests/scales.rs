@@ -1,4 +1,6 @@
-use layout_engine_spike::{Locator, Scale, collision_stride, format_ticks, minor_ticks};
+use layout_engine_spike::{
+    Formatter, Locator, Scale, collision_stride, format_ticks, format_ticks_with, minor_ticks,
+};
 
 #[test]
 fn linear_log_fixed_and_minor_locators_are_deterministic() {
@@ -31,6 +33,25 @@ fn scalar_and_shared_exponent_formatting_suppress_negative_zero() {
     let scientific = format_ticks(&[10_000.0, 20_000.0], Some(10_000.0));
     assert_eq!(scientific.shared_exponent, Some(3));
     assert_eq!(scientific.labels, ["10", "20"]);
+}
+
+#[test]
+fn explicit_decimal_and_scientific_formatters_are_deterministic() {
+    let decimal = format_ticks_with(
+        &[-0.000_000_1, 1.25],
+        None,
+        &Formatter::Decimal { precision: 2 },
+    );
+    assert_eq!(decimal.labels, ["0", "1.25"]);
+    assert_eq!(decimal.shared_exponent, None);
+
+    let scientific = format_ticks_with(
+        &[0.0, 12_500.0],
+        None,
+        &Formatter::Scientific { precision: 2 },
+    );
+    assert_eq!(scientific.labels, ["0.00e0", "1.25e4"]);
+    assert_eq!(scientific.shared_exponent, None);
 }
 
 #[test]

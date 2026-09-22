@@ -7,7 +7,7 @@ use studio_render_spike::{
 use text_shaping_spike::Label;
 
 use crate::model::{Chart, DashStyle, DataPoint, MarkerShape, MarkerStyle, Series};
-use crate::scale::{Scale, collision_stride, format_ticks, minor_ticks};
+use crate::scale::{Scale, collision_stride, minor_ticks};
 use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
 
 const TICK_FONT: f64 = 8.0;
@@ -388,7 +388,7 @@ fn axis_layout(
         .locator
         .major_ticks(axis.scale, axis.minimum, axis.maximum, length);
     let step = values.windows(2).next().map(|pair| pair[1] - pair[0]);
-    let formatted = format_ticks(&values, step);
+    let formatted = crate::format_ticks_with(&values, step, &axis.formatter);
     let positions: Vec<f64> = values
         .iter()
         .map(|value| {

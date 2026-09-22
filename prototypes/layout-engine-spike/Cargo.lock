@@ -401,6 +401,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "instplot-layout"
+version = "0.1.0"
+dependencies = [
+ "parley",
+ "studio-render-spike",
+ "text-shaping-spike",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -450,9 +459,8 @@ name = "layout-engine-spike"
 version = "0.1.0"
 dependencies = [
  "export-backend-spike",
- "parley",
+ "instplot-layout",
  "studio-render-spike",
- "text-shaping-spike",
 ]
 
 [[package]]

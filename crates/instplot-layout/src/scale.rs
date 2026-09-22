@@ -94,7 +94,42 @@ pub struct FormattedTicks {
     pub shared_exponent: Option<i32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Formatter {
+    Auto,
+    Decimal { precision: usize },
+    Scientific { precision: usize },
+}
+
 pub fn format_ticks(values: &[f64], step: Option<f64>) -> FormattedTicks {
+    format_ticks_with(values, step, &Formatter::Auto)
+}
+
+pub fn format_ticks_with(
+    values: &[f64],
+    step: Option<f64>,
+    formatter: &Formatter,
+) -> FormattedTicks {
+    match formatter {
+        Formatter::Auto => format_ticks_auto(values, step),
+        Formatter::Decimal { precision } => FormattedTicks {
+            labels: values
+                .iter()
+                .map(|value| trim_number(format!("{:.precision$}", clean_zero(*value))))
+                .collect(),
+            shared_exponent: None,
+        },
+        Formatter::Scientific { precision } => FormattedTicks {
+            labels: values
+                .iter()
+                .map(|value| format!("{:.precision$e}", clean_zero(*value)))
+                .collect(),
+            shared_exponent: None,
+        },
+    }
+}
+
+fn format_ticks_auto(values: &[f64], step: Option<f64>) -> FormattedTicks {
     let max_abs = values.iter().copied().map(f64::abs).fold(0.0, f64::max);
     let exponent = if max_abs >= 10_000.0 || (max_abs > 0.0 && max_abs < 0.001) {
         Some((max_abs.log10().floor() as i32).div_euclid(3) * 3)

@@ -155,7 +155,13 @@ def main() -> int:
             f"rev={EXPECTED_REVISION}" in git_dependencies.get(name, "")
             for name in ("instplot-core", "instplot-io")
         )
-        checks.append(fact("workspace-members", members == ["instplot-studio"], repr(members)))
+        checks.append(
+            fact(
+                "workspace-members",
+                members == ["instplot-studio", "instplot-layout"],
+                repr(members),
+            )
+        )
         checks.append(
             fact(
                 "shared-revision",

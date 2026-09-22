@@ -6,12 +6,14 @@ use text_shaping_spike::{Label, Span, Style};
 
 const PRIMARY_FAMILY: &str = "InstPlot Studio TeX Gyre Heros";
 const REGULAR: &[u8] =
-    include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Regular.otf");
+    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Regular.otf");
 const ITALIC: &[u8] =
-    include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Italic.otf");
-const BOLD: &[u8] = include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-Bold.otf");
-const BOLD_ITALIC: &[u8] =
-    include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf");
+    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Italic.otf");
+const BOLD: &[u8] =
+    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Bold.otf");
+const BOLD_ITALIC: &[u8] = include_bytes!(
+    "../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf"
+);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextSize {

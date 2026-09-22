@@ -1,5 +1,9 @@
 # A7 single-Axes layout spike
 
+The implementation has been promoted to the production `instplot-layout` crate.
+This package remains as the accepted A7 compatibility facade: its unchanged
+snapshots, examples and regression tests execute the production implementation.
+
 This crate turns a semantic single-Axes chart into the A2 point-space Display
 List. It owns scale, tick, layout, marks, legend placement, warnings, and the hit
 map; GUI and export backends do not make layout decisions.
