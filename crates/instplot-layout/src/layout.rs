@@ -657,7 +657,8 @@ fn draw_axes(
         stroke: Some(stroke(Color(45, 50, 55, 255), 0.6, DashStyle::Solid)),
     });
     for tick in &x_axis.major {
-        tick_mark(list, chart.x.id, tick.position, axes.bottom(), true, 4.0);
+        tick_mark(list, chart.x.id, tick.position, axes.bottom(), 0.0, -4.0);
+        tick_mark(list, chart.x.id, tick.position, axes.y, 0.0, 4.0);
         text(
             list,
             chart.x.id,
@@ -684,13 +685,22 @@ fn draw_axes(
                 chart.x.id,
                 axes.x + fraction * axes.width,
                 axes.bottom(),
-                true,
+                0.0,
+                -2.0,
+            );
+            tick_mark(
+                list,
+                chart.x.id,
+                axes.x + fraction * axes.width,
+                axes.y,
+                0.0,
                 2.0,
             );
         }
     }
     for tick in &y_axis.major {
-        tick_mark(list, chart.y.id, axes.x, tick.position, false, 4.0);
+        tick_mark(list, chart.y.id, axes.x, tick.position, 4.0, 0.0);
+        tick_mark(list, chart.y.id, axes.right(), tick.position, -4.0, 0.0);
         text(
             list,
             chart.y.id,
@@ -720,8 +730,16 @@ fn draw_axes(
                 chart.y.id,
                 axes.x,
                 axes.bottom() - fraction * axes.height,
-                false,
                 2.0,
+                0.0,
+            );
+            tick_mark(
+                list,
+                chart.y.id,
+                axes.right(),
+                axes.bottom() - fraction * axes.height,
+                -2.0,
+                0.0,
             );
         }
     }
@@ -1131,18 +1149,13 @@ fn draw_legend(
     });
 }
 
-fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, vertical: bool, length: f64) {
-    let end = if vertical {
-        (x, y + length)
-    } else {
-        (x - length, y)
-    };
+fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, dx: f64, dy: f64) {
     list.items.push(DisplayItem::Path {
         source: node,
         path: Path {
             verbs: vec![
                 PathVerb::MoveTo(pt(x), pt(y)),
-                PathVerb::LineTo(pt(end.0), pt(end.1)),
+                PathVerb::LineTo(pt(x + dx), pt(y + dy)),
             ],
         },
         fill: None,

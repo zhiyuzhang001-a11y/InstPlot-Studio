@@ -3,7 +3,7 @@ use layout_engine_spike::{
     LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize, layout,
     layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
-use studio_render_spike::DisplayItem;
+use studio_render_spike::{DisplayItem, NodeId, PathVerb};
 
 #[test]
 fn publication_fixture_is_deterministic_and_unclipped() {
@@ -17,6 +17,48 @@ fn publication_fixture_is_deterministic_and_unclipped() {
     );
     assert_eq!(first.display_list.width.get(), chart.width_pt);
     assert_eq!(first.display_list.height.get(), chart.height_pt);
+    let x_ticks = axis_segments(&first.display_list.items, chart.x.id);
+    let y_ticks = axis_segments(&first.display_list.items, chart.y.id);
+    let x_tick_count = first.x_axis.major.len() + first.x_axis.minor.len();
+    let y_tick_count = first.y_axis.major.len() + first.y_axis.minor.len();
+    assert_eq!(x_ticks.len(), x_tick_count * 2);
+    assert_eq!(y_ticks.len(), y_tick_count * 2);
+    assert_eq!(
+        x_ticks
+            .iter()
+            .filter(|((_, start_y), (_, end_y))| {
+                *start_y == first.axes.bottom() && end_y < start_y
+            })
+            .count(),
+        x_tick_count
+    );
+    assert_eq!(
+        x_ticks
+            .iter()
+            .filter(|((_, start_y), (_, end_y))| {
+                *start_y == first.axes.y && end_y > start_y
+            })
+            .count(),
+        x_tick_count
+    );
+    assert_eq!(
+        y_ticks
+            .iter()
+            .filter(|((start_x, _), (end_x, _))| {
+                *start_x == first.axes.x && end_x > start_x
+            })
+            .count(),
+        y_tick_count
+    );
+    assert_eq!(
+        y_ticks
+            .iter()
+            .filter(|((start_x, _), (end_x, _))| {
+                *start_x == first.axes.right() && end_x < start_x
+            })
+            .count(),
+        y_tick_count
+    );
     let clip_rectangles: Vec<_> = first
         .display_list
         .items
@@ -127,6 +169,25 @@ fn publication_fixture_is_deterministic_and_unclipped() {
         first.hit_map.hit_test(point.0, point.1, 2.0).unwrap().node,
         series.node
     );
+}
+
+fn axis_segments(items: &[DisplayItem], source: NodeId) -> Vec<((f64, f64), (f64, f64))> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Path { source: node, path, .. }
+                if *node == source
+                    && matches!(path.verbs.as_slice(), [PathVerb::MoveTo(..), PathVerb::LineTo(..)]) =>
+            {
+                let [PathVerb::MoveTo(x1, y1), PathVerb::LineTo(x2, y2)] = path.verbs.as_slice()
+                else {
+                    unreachable!()
+                };
+                Some(((x1.get(), y1.get()), (x2.get(), y2.get())))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
