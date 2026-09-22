@@ -1555,48 +1555,50 @@ impl StudioApp {
 
     fn series_tree(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.language.text(Text::Series));
-        ui.collapsing(self.language.text(Text::FixedFigure), |ui| {
-            let axes = &self.document.project().figure.axes[0];
-            for (id, label) in [
-                (axes.id.clone(), self.language.text(Text::AxesObject)),
-                (axes.x.id.clone(), self.language.text(Text::XAxis)),
-                (axes.y.id.clone(), self.language.text(Text::YAxis)),
-            ] {
-                if ui
-                    .selectable_label(
-                        self.selected_canvas_node.as_deref() == Some(id.as_str()),
-                        label,
-                    )
-                    .clicked()
-                {
-                    self.selected_canvas_node = Some(id);
-                    self.selected_series = None;
+        egui::CollapsingHeader::new(self.language.text(Text::FixedFigure))
+            .default_open(true)
+            .show(ui, |ui| {
+                let axes = &self.document.project().figure.axes[0];
+                for (id, label) in [
+                    (axes.id.clone(), self.language.text(Text::AxesObject)),
+                    (axes.x.id.clone(), self.language.text(Text::XAxis)),
+                    (axes.y.id.clone(), self.language.text(Text::YAxis)),
+                ] {
+                    if ui
+                        .selectable_label(
+                            self.selected_canvas_node.as_deref() == Some(id.as_str()),
+                            label,
+                        )
+                        .clicked()
+                    {
+                        self.selected_canvas_node = Some(id);
+                        self.selected_series = None;
+                    }
                 }
-            }
-            for series in self.document.series() {
-                let selected = self.selected_series.as_deref() == Some(series.id.as_str());
-                ui.horizontal(|ui| {
-                    let mut visible = series.visible;
-                    if ui.checkbox(&mut visible, "").changed() {
-                        self.execute_document_edit(
-                            EditCommand::SetSeriesVisible {
-                                artist_id: series.id.clone(),
-                                visible,
-                            },
-                            self.language.text(Text::Visible),
+                for series in self.document.series() {
+                    let selected = self.selected_series.as_deref() == Some(series.id.as_str());
+                    ui.horizontal(|ui| {
+                        let mut visible = series.visible;
+                        if ui.checkbox(&mut visible, "").changed() {
+                            self.execute_document_edit(
+                                EditCommand::SetSeriesVisible {
+                                    artist_id: series.id.clone(),
+                                    visible,
+                                },
+                                self.language.text(Text::Visible),
+                            );
+                        }
+                        let label = format!(
+                            "{} · {}",
+                            series.label,
+                            series_kind_name(self.language, series.kind)
                         );
-                    }
-                    let label = format!(
-                        "{} · {}",
-                        series.label,
-                        series_kind_name(self.language, series.kind)
-                    );
-                    if ui.selectable_label(selected, label).clicked() {
-                        self.select_series_for_editing(&series);
-                    }
-                });
-            }
-        });
+                        if ui.selectable_label(selected, label).clicked() {
+                            self.select_series_for_editing(&series);
+                        }
+                    });
+                }
+            });
         if let Some(selected_id) = self.selected_series.clone()
             && let Some(series) = self
                 .document
@@ -2582,7 +2584,9 @@ impl eframe::App for StudioApp {
 
         egui::Panel::left("series_tree")
             .default_size(230.0)
-            .show(ui, |ui| self.series_tree(ui));
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.series_tree(ui));
+            });
 
         egui::Panel::right("inspector")
             .default_size(300.0)
