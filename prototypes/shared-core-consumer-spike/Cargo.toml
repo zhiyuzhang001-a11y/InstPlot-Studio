@@ -1,0 +1,8 @@
+[package]
+name = "shared-core-consumer-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+instplot-core = { git = "https://github.com/zhiyuzhang001-a11y/InstPlot-Lite.git", rev = "80ad374044d91dd3c306a384fc7f07ba82cac429" }
