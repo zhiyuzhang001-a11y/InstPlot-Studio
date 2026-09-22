@@ -53,11 +53,12 @@ changed pixels.
 ## Remaining A8 evidence
 
 - Windows automated validation passed all 21 checks in GitHub Actions at commit
-  `7d89c666f964d96e49cd72f67fba480bbe0532f8`; Windows GUI scaling, target-viewer,
-  and native-input checks still require an interactive Windows host. The exact
-  procedure and result template are in `reports/WINDOWS_PART_A_MANUAL_CHECKLIST.md`.
-  Linux is deferred by the current product-owner decision and is not recorded
-  as passed.
+  `7d89c666f964d96e49cd72f67fba480bbe0532f8`. The product owner completed the
+  Windows 10 manual review on 2026-09-22: 100%/125%/150%/200% scaling and a live
+  scale change, Unicode keyboard/clipboard input, the native Open dialog, and
+  Microsoft Edge PDF rendering/search/copy all passed. Structured evidence is
+  recorded in `reports/A8_WINDOWS_MANUAL_EVIDENCE.json`. Linux is deferred by
+  the current product-owner decision and is not recorded as passed.
 - Repeat the UI preview on a real Retina display, or an accepted Apple
   high-resolution simulation followed by release-time hardware confirmation.
   The attached T2752Q reports 2560×1440 at 1.0 pixels per point and Quartz Debug

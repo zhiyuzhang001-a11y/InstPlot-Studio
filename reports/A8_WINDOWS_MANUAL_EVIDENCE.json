@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "platform": "Windows",
+  "reviewer": "Product owner interactive Windows review",
+  "observed_at_utc": "2026-09-22T02:38:09Z",
+  "checks": [
+    {
+      "id": "windows-scaling",
+      "requirement": "Inspect preview at 100%, 125%, 150%, and 200% Windows display scaling, including one live scale change; export geometry must remain unchanged.",
+      "result": "pass",
+      "notes": "Windows 10 review passed at 100%, 125%, 150%, and 200%, including a live scale change. The observed 125% evidence reported UI pixels/point=1.25 and preview framebuffer=473 x 345 px at 1.50x canvas zoom. No scale-specific blur, overlap, clipping, stale redraw, crash, or hit-area offset was observed. The previously documented A6 placeholder y-axis text limitation was unchanged and was not introduced by Windows scaling.",
+      "artifacts": []
+    },
+    {
+      "id": "windows-pdf-viewer",
+      "requirement": "Open the generated PDF in the target Windows viewer, verify page size, vector appearance, search, selection, and copied μ/Greek/script text.",
+      "result": "pass",
+      "notes": "Opened InstPlot-Studio-Part-A.pdf in Microsoft Edge on Windows 10. The product owner reported normal rendering at 400% zoom, successful searches for μ0HDL and Experiment, correct selection/copy into plain text, and no missing glyphs, boxes, overlap, clipping, or page-sized rasterization.",
+      "artifacts": []
+    },
+    {
+      "id": "windows-ui-input",
+      "requirement": "Exercise native file dialog and keyboard input on Windows without changing headless export output.",
+      "result": "pass",
+      "notes": "Keyboard text input and paste of μ0 α β ≤ m−2 displayed correctly. Ctrl+O opened the native Windows file dialog; cancelling returned to a responsive application with unchanged canvas state.",
+      "artifacts": []
+    }
+  ]
+}
