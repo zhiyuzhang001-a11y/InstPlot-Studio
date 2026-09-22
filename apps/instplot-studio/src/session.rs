@@ -10,7 +10,7 @@ pub struct ImportOutcome {
     pub replaced: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct StudioSession {
     datasets: Vec<DataSet>,
 }

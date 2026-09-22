@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE（P0 DONE；P1 next）
+> 状态：ACTIVE（P0–P1 DONE；P2 next）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  
@@ -57,9 +57,9 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 - 四条 spine 默认可见。
 - 四条 spine 默认都绘制 major/minor tick mark，刻度方向朝内。
 - tick mark 从 spine 起画，不在 tick mark 与 spine 之间引入空隙；tick label 与 spine 的
-  初始默认间距为 3.5 pt。
-- axis label 与其最外侧 tick label 边界的初始默认间距为 4.0 pt；不得把 axis label
-  固定到页面边缘来间接制造间距。
+  默认间距为 4.0 pt。
+- X/Y axis label 的实际墨迹外缘分别固定距画布底边/左边 6.0 pt，axis label 与最近的
+  tick label 边界间距为 4.0 pt；文字增大时只向内调整 axes rectangle。
 - 默认只在 bottom/left 显示 tick label，避免重复标签；top/right 标签以后可显式开启。
 - 自动范围应留出稳定的小边距；用户手动范围不得被普通重绘静默覆盖。
 - source 数据默认用 marker，fit/theory 默认用 line；同一 source/fit 关系优先共享颜色。
@@ -70,7 +70,7 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 间距取值依据：Matplotlib 当前默认 `xtick/ytick.major.pad = 3.5 pt`、
 `axes.labelpad = 4.0 pt`；PGFPlots 的 `near ticklabel` 方案根据实际 tick-label 尺寸动态
 放置 axis label；Nature 的官方要求强调轴线、刻度、单位、可读性和无重叠，并未规定
-统一的固定间距。P4 因此采用上述数值作为起点，以边界和视觉矩阵决定是否微调，而不把
+统一的固定间距。P4 的实际样张比较最终采用 6/4/4 pt 外向内约束，而不把
 某一期刊不存在的间距要求写成硬性标准。参考：
 [Matplotlib defaults](https://github.com/matplotlib/matplotlib/blob/main/lib/matplotlib/mpl-data/matplotlibrc)、
 [PGFPlots axis descriptions](https://tikz.dev/pgfplots/reference-axisdescription)、
@@ -114,6 +114,7 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 工作：
 
 - 整理 File/Edit/View/Export 的菜单结构和常用快捷键；
+- 建立集中式 UI 文案层，明确中文/英文界面策略；不得继续在控件代码中散落硬编码文案。
 - 区分 Open Data、Open Project 和从 Lite 打开的语义；
 - 标题栏显示项目名与未保存状态；
 - 打开项目时恢复文档数据并清理旧 session 选择，避免混合前一个项目的数据；
@@ -291,5 +292,7 @@ P8 稳定化与人工验收
 ```
 
 P0 已完成，真实样例、结构化验证和分级问题清单见
-[`../reports/B5P_P0_WORKFLOW_BASELINE.md`](../reports/B5P_P0_WORKFLOW_BASELINE.md)。当前任务是
-**P1：编辑事务、dirty 状态、Undo/Redo 和 schema 演进基础**。
+[`../reports/B5P_P0_WORKFLOW_BASELINE.md`](../reports/B5P_P0_WORKFLOW_BASELINE.md)。P1 的编辑事务、
+dirty 状态、Undo/Redo、保存点与未保存保护已完成，证据见
+[`../reports/B5P_P1_EDIT_TRANSACTIONS.md`](../reports/B5P_P1_EDIT_TRANSACTIONS.md)。当前任务是
+**P2：项目生命周期与工作区骨架**。

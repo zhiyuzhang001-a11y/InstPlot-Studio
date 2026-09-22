@@ -1,6 +1,7 @@
 //! Product boundary and non-UI application services for InstPlot Studio.
 
 mod document;
+mod editing;
 mod export;
 mod handoff;
 mod palette;
@@ -14,6 +15,7 @@ mod session;
 pub use document::{
     AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, SeriesDescriptor, SeriesKind,
 };
+pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
 pub use export::{
     FixedPdfExportError, figure_pdf, figure_png, fixed_figure_pdf, fixed_figure_png,
     save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,

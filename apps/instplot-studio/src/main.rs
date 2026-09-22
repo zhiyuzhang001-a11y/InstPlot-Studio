@@ -5,11 +5,11 @@ use std::time::Instant;
 
 use eframe::egui;
 use instplot_studio::{
-    AxisRanges, CheckSeverity, EguiPreviewAdapter, FigureDocument, HandoffCleanup, HandoffImport,
-    OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport, ResolvedFigure,
-    SeriesDescriptor, StudioSession, check_publication, import_handoff, product_info,
-    resolve_document, save_figure_pdf, save_figure_png, save_fixed_figure_pdf,
-    save_fixed_figure_png, write_handoff,
+    AxisRanges, CheckSeverity, EditCommand, EditGroup, EditHistory, EguiPreviewAdapter,
+    FigureDocument, HandoffCleanup, HandoffImport, OpenProjectSource, PRODUCT_NAME, PreviewAdapter,
+    PublicationReport, ResolvedFigure, SeriesDescriptor, StudioSession, check_publication,
+    import_handoff, product_info, resolve_document, save_figure_pdf, save_figure_png,
+    save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
 };
 
 fn main() {
@@ -188,11 +188,21 @@ struct StudioApp {
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
     project_path: Option<PathBuf>,
+    edit_history: EditHistory,
+    pending_action: Option<PendingAction>,
+    allow_close: bool,
     canvas_zoom: f32,
     warnings: Vec<String>,
     status: String,
     first_frame: bool,
     started: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingAction {
+    OpenLiteHandoff,
+    OpenProject,
+    Exit,
 }
 
 impl StudioApp {
@@ -205,6 +215,7 @@ impl StudioApp {
             options.zoom_with_keyboard = true;
         });
         ui_shell_spike::install_publication_fonts(&creation.egui_ctx);
+        let startup_unsaved = startup.is_some();
         let (document, datasets, status) = startup.map_or_else(
             || (FigureDocument::fixed(), Vec::new(), "Ready".to_owned()),
             |imported| {
@@ -223,6 +234,7 @@ impl StudioApp {
         let publication_report = check_publication(&document, &resolved, 300);
         let mut session = StudioSession::default();
         session.replace_datasets(datasets);
+        let edit_history = EditHistory::new(&document, !startup_unsaved);
         Self {
             session,
             document,
@@ -231,6 +243,9 @@ impl StudioApp {
             preview: EguiPreviewAdapter,
             selected_series: None,
             project_path: None,
+            edit_history,
+            pending_action: None,
+            allow_close: false,
             canvas_zoom: 1.5,
             warnings: Vec::new(),
             status,
@@ -250,25 +265,28 @@ impl StudioApp {
         else {
             return;
         };
-        match self.session.import_data_file(&path) {
+        let mut candidate_session = self.session.clone();
+        match candidate_session.import_data_file(&path) {
             Ok(outcome) => {
-                if let Err(error) = self
-                    .document
-                    .sync_external_datasets(self.session.datasets())
+                let mut candidate_document = self.document.clone();
+                if let Err(error) =
+                    candidate_document.sync_external_datasets(candidate_session.datasets())
                 {
                     self.push_warning(format!("Project data-source update failed: {error}"));
                     return;
                 }
-                match resolved_preview(&self.document) {
-                    Ok(resolved) => {
-                        self.publication_report = check_publication(&self.document, &resolved, 300);
-                        self.resolved = resolved;
-                    }
+                let resolved = match resolved_preview(&candidate_document) {
+                    Ok(resolved) => resolved,
                     Err(error) => {
                         self.push_warning(format!("Project layout failed: {error}"));
                         return;
                     }
-                }
+                };
+                self.document = candidate_document;
+                self.session = candidate_session;
+                self.edit_history.rebase_after_external_change();
+                self.publication_report = check_publication(&self.document, &resolved, 300);
+                self.resolved = resolved;
                 self.status = format!(
                     "Imported {} dataset(s): {} added, {} replaced",
                     outcome.read, outcome.added, outcome.replaced
@@ -293,6 +311,7 @@ impl StudioApp {
                     self.publication_report = check_publication(&imported.document, &resolved, 300);
                     self.session.replace_datasets(imported.datasets);
                     self.document = imported.document;
+                    self.edit_history.reset(&self.document, false);
                     self.resolved = resolved;
                     self.project_path = None;
                     self.selected_series = None;
@@ -322,6 +341,7 @@ impl StudioApp {
                     let opened_primary = report.source == OpenProjectSource::Primary;
                     self.publication_report = check_publication(&document, &resolved, 300);
                     self.document = document;
+                    self.edit_history.reset(&self.document, opened_primary);
                     self.resolved = resolved;
                     self.project_path = opened_primary.then(|| path.clone());
                     self.warnings.extend(report.warnings);
@@ -340,7 +360,7 @@ impl StudioApp {
         }
     }
 
-    fn save_project(&mut self, save_as: bool) {
+    fn save_project(&mut self, save_as: bool) -> bool {
         let path = if !save_as {
             self.project_path.clone()
         } else {
@@ -354,15 +374,20 @@ impl StudioApp {
                 .save_file()
         });
         let Some(path) = path else {
-            return;
+            return false;
         };
         match self.document.save(&path) {
             Ok(()) => {
                 self.project_path = Some(path.clone());
+                self.edit_history.mark_saved(&self.document);
                 self.status = format!("Saved project {}", path.display());
                 self.clear_warning("Save project failed:");
+                true
             }
-            Err(error) => self.push_warning(format!("Save project failed: {error}")),
+            Err(error) => {
+                self.push_warning(format!("Save project failed: {error}"));
+                false
+            }
         }
     }
 
@@ -406,20 +431,105 @@ impl StudioApp {
         }
     }
 
-    fn apply_ranges(&mut self, ranges: AxisRanges) {
-        match self.document.set_axis_ranges(ranges) {
-            Ok(()) => match resolved_preview(&self.document) {
-                Ok(resolved) => {
-                    self.publication_report = check_publication(&self.document, &resolved, 300);
-                    self.resolved = resolved;
-                    self.status = "Figure Document updated".to_owned();
-                    self.clear_warning("Layout failed:");
-                    self.clear_warning("Invalid axes:");
-                }
-                Err(error) => self.push_warning(format!("Layout failed: {error}")),
-            },
+    fn apply_ranges(&mut self, ranges: AxisRanges, group: EditGroup) {
+        match self.edit_history.execute(
+            &mut self.document,
+            EditCommand::SetAxisRanges(ranges),
+            Some(group),
+        ) {
+            Ok(outcome) if outcome.changed && self.refresh_document("Layout failed:") => {
+                self.status = outcome.description;
+                self.clear_warning("Invalid axes:");
+            }
+            Ok(_) => {}
             Err(error) => self.push_warning(format!("Invalid axes: {error}")),
         }
+    }
+
+    fn refresh_document(&mut self, warning_prefix: &str) -> bool {
+        match resolved_preview(&self.document) {
+            Ok(resolved) => {
+                self.publication_report = check_publication(&self.document, &resolved, 300);
+                self.resolved = resolved;
+                self.clear_warning(warning_prefix);
+                true
+            }
+            Err(error) => {
+                self.push_warning(format!("{warning_prefix} {error}"));
+                false
+            }
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(description) = self.edit_history.undo(&mut self.document)
+            && self.refresh_document("Undo layout failed:")
+        {
+            self.status = format!("Undo: {description}");
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(description) = self.edit_history.redo(&mut self.document)
+            && self.refresh_document("Redo layout failed:")
+        {
+            self.status = format!("Redo: {description}");
+        }
+    }
+
+    fn request_replacement(&mut self, action: PendingAction) {
+        if self.edit_history.is_dirty(&self.document) {
+            self.pending_action = Some(action);
+        } else {
+            self.perform_action(action);
+        }
+    }
+
+    fn perform_action(&mut self, action: PendingAction) {
+        self.pending_action = None;
+        match action {
+            PendingAction::OpenLiteHandoff => self.open_lite_handoff(),
+            PendingAction::OpenProject => self.open_project(),
+            PendingAction::Exit => {
+                // The close command is issued by the confirmation dialog, which has the context.
+            }
+        }
+    }
+
+    fn unsaved_dialog(&mut self, context: &egui::Context) {
+        let Some(action) = self.pending_action else {
+            return;
+        };
+        egui::Window::new("Unsaved changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(context, |ui| {
+                ui.label("The current project has unsaved changes.");
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() && self.save_project(false) {
+                        if action == PendingAction::Exit {
+                            self.allow_close = true;
+                            context.send_viewport_cmd(egui::ViewportCommand::Close);
+                            self.pending_action = None;
+                        } else {
+                            self.perform_action(action);
+                        }
+                    }
+                    if ui.button("Discard").clicked() {
+                        if action == PendingAction::Exit {
+                            self.allow_close = true;
+                            context.send_viewport_cmd(egui::ViewportCommand::Close);
+                            self.pending_action = None;
+                        } else {
+                            self.perform_action(action);
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.pending_action = None;
+                    }
+                });
+            });
     }
 
     fn push_warning(&mut self, warning: String) {
@@ -472,25 +582,45 @@ impl StudioApp {
         ui.separator();
         ui.label("Axes ranges");
         let mut ranges = self.document.axis_ranges();
-        let mut changed = false;
+        let mut changed_group = None;
+        let mut finish_coalescing = false;
         egui::Grid::new("axis_ranges")
             .num_columns(2)
             .show(ui, |ui| {
                 ui.label("X min");
-                changed |= ui.add(egui::DragValue::new(&mut ranges.x_min)).changed();
+                let response = ui.add(egui::DragValue::new(&mut ranges.x_min));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisXMinimum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
                 ui.label("X max");
-                changed |= ui.add(egui::DragValue::new(&mut ranges.x_max)).changed();
+                let response = ui.add(egui::DragValue::new(&mut ranges.x_max));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisXMaximum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
                 ui.label("Y min");
-                changed |= ui.add(egui::DragValue::new(&mut ranges.y_min)).changed();
+                let response = ui.add(egui::DragValue::new(&mut ranges.y_min));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisYMinimum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
                 ui.label("Y max");
-                changed |= ui.add(egui::DragValue::new(&mut ranges.y_max)).changed();
+                let response = ui.add(egui::DragValue::new(&mut ranges.y_max));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisYMaximum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
             });
-        if changed {
-            self.apply_ranges(ranges);
+        if let Some(group) = changed_group {
+            self.apply_ranges(ranges, group);
+        }
+        if finish_coalescing {
+            self.edit_history.finish_coalescing();
         }
 
         ui.separator();
@@ -534,6 +664,16 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
+        let dirty = self.edit_history.is_dirty(&self.document);
+        context.send_viewport_cmd(egui::ViewportCommand::Title(if dirty {
+            format!("{PRODUCT_NAME} — Unsaved")
+        } else {
+            PRODUCT_NAME.to_owned()
+        }));
+        if context.input(|input| input.viewport().close_requested()) && dirty && !self.allow_close {
+            context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending_action = Some(PendingAction::Exit);
+        }
         if context.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
                 egui::Modifiers::COMMAND,
@@ -542,25 +682,78 @@ impl eframe::App for StudioApp {
         }) {
             self.open_data();
         }
+        if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
+                egui::Key::S,
+            ))
+        }) {
+            self.save_project(false);
+        }
+        if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::Z,
+            ))
+        }) {
+            self.redo();
+        } else if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
+                egui::Key::Z,
+            ))
+        }) {
+            self.undo();
+        }
 
         egui::Panel::top("product_header").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.heading(PRODUCT_NAME);
+                ui.heading(if dirty {
+                    format!("{PRODUCT_NAME} *")
+                } else {
+                    PRODUCT_NAME.to_owned()
+                });
                 ui.separator();
                 if ui.button("Open data…").clicked() {
                     self.open_data();
                 }
                 if ui.button("Open from Lite…").clicked() {
-                    self.open_lite_handoff();
+                    self.request_replacement(PendingAction::OpenLiteHandoff);
                 }
                 if ui.button("Open project…").clicked() {
-                    self.open_project();
+                    self.request_replacement(PendingAction::OpenProject);
                 }
                 if ui.button("Save project").clicked() {
                     self.save_project(false);
                 }
                 if ui.button("Save project as…").clicked() {
                     self.save_project(true);
+                }
+                let undo_text = self
+                    .edit_history
+                    .undo_description()
+                    .map_or_else(|| "Undo".to_owned(), |value| format!("Undo {value}"));
+                if ui
+                    .add_enabled(
+                        self.edit_history.undo_description().is_some(),
+                        egui::Button::new(undo_text),
+                    )
+                    .clicked()
+                {
+                    self.undo();
+                }
+                let redo_text = self
+                    .edit_history
+                    .redo_description()
+                    .map_or_else(|| "Redo".to_owned(), |value| format!("Redo {value}"));
+                if ui
+                    .add_enabled(
+                        self.edit_history.redo_description().is_some(),
+                        egui::Button::new(redo_text),
+                    )
+                    .clicked()
+                {
+                    self.redo();
                 }
                 if ui.button("Export PDF…").clicked() {
                     self.export_pdf();
@@ -641,6 +834,7 @@ impl eframe::App for StudioApp {
                 context.pixels_per_point()
             );
         }
+        self.unsaved_dialog(&context);
     }
 }
 
