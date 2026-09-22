@@ -763,10 +763,6 @@ def manual_items(profile: str) -> list[dict[str, Any]]:
         ]
     return [
         {
-            "id": "macos-retina-preview",
-            "requirement": "Inspect the preview on a Retina display and confirm export is independent of window scale.",
-        },
-        {
             "id": "macos-pdf-viewer",
             "requirement": "Open the generated PDF in Preview/target viewer and verify vectors, clipping, search, selection, and copied semantic text.",
         },

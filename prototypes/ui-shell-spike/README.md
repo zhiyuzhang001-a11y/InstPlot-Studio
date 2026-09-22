@@ -78,8 +78,10 @@ On the local macOS host the real window was opened and visually inspected:
 
 ## Open evidence and prototype limitations
 
-- Native Retina, Windows scaling, and Linux HiDPI runs remain required in A8;
-  the pure transform test covers 1× versus 2× arithmetic only.
+- Windows scaling passed at 100%/125%/150%/200%. Native Retina and Linux HiDPI
+  runs are deferred by the product owner and do not block Gate A; the pure
+  transform test covers 1× versus 2× arithmetic. Retina hardware remains a
+  release-time check when such hardware is available.
 - The A2 placeholder `GlyphRun` contains source strings rather than A3 positioned
   glyphs. This egui preview can therefore use UI-font metrics and ignores text
   rotation. A7 must connect the resolved A3 runs or outlines before the preview

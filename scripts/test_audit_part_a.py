@@ -36,6 +36,11 @@ class AuditHelpersTest(unittest.TestCase):
         self.assertIn("125%", scaling["requirement"])
         self.assertIn("live scale change", scaling["requirement"])
 
+    def test_retina_is_not_a_part_a_manual_gate(self) -> None:
+        ids = {item["id"] for item in audit.manual_items("current")}
+        self.assertNotIn("macos-retina-preview", ids)
+        self.assertIn("macos-pdf-viewer", ids)
+
     def test_automated_scope_is_explicit_in_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
@@ -94,18 +99,17 @@ class AuditHelpersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             evidence_path = Path(directory) / "manual.json"
             evidence_path.write_text(
-                '{"reviewer":"Codex","observed_at_utc":"2026-09-21T00:00:00Z",'
-                '"checks":[{"id":"macos-retina-preview","result":"blocked",'
-                '"notes":"No Retina display attached.","artifacts":[]}]}'
+                '{"reviewer":"Codex","observed_at_utc":"2026-09-22T00:00:00Z",'
+                '"checks":[{"id":"windows-scaling","result":"blocked",'
+                '"notes":"No interactive Windows host.","artifacts":[]}]}'
             )
             checks = audit.check_manual_evidence(
-                Path(directory), "current", evidence_path
+                Path(directory), "windows", evidence_path
             )
-            retina = next(
-                check for check in checks if check.check_id == "macos-retina-preview"
+            scaling = next(
+                check for check in checks if check.check_id == "windows-scaling"
             )
-            self.assertEqual(retina.status, "blocked")
-
+            self.assertEqual(scaling.status, "blocked")
 
 if __name__ == "__main__":
     unittest.main()

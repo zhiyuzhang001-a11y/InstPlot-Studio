@@ -762,7 +762,8 @@ ADR 只能选择以下之一：
 - native file dialog；
 - keyboard shortcut 和文字输入；
 - canvas zoom；
-- Retina/HiDPI；
+- HiDPI transform（Gate A 要求 1×/2× arithmetic 与 Windows 实机 scaling；
+  Retina 实机无设备时延后到发布前）；
 - Windows display scaling；
 - light/dark OS 环境下的可读性，但出版画布保持白底；
 - headless export 与 window renderer 解耦。
@@ -795,7 +796,7 @@ ADR 只能选择以下之一：
 ### 10.6 完成条件
 
 - 三平台可以启动并显示相同 Display List；
-- Retina/Windows scaling 下 figure physical preview scale 行为明确；
+- 1×/2× transform 与 Windows scaling 下 figure physical preview scale 行为明确；
 - native file dialog 和 keyboard input 工作；
 - headless export 不要求创建可见窗口；
 - executable + mandatory assets 满足 size budget，或触发规定的架构复审；
@@ -1040,7 +1041,8 @@ Windows、macOS、Linux 各验证：
 - release executable/app core 加 mandatory runtime assets 的测量边界固定；
 - 目标为 `≤10 MiB`，`≤12 MiB` 为 soft ceiling，`>15 MiB` 触发架构复审并阻止 Gate A；
 - UI shell 已验证 window、canvas、side inspector、file dialog 和 keyboard input；
-- macOS Retina、Windows scaling 和 Linux HiDPI 至少各完成一次验证；
+- Windows scaling 完成人工验证；macOS Retina 与 Linux HiDPI 在无设备或已明确
+  延后的情况下不阻挡 Gate A，但发布声明相应平台支持前必须补验；
 - export 与 window size、screen scale 和 UI 生命周期无关；
 - cold startup、idle memory 和 release size 已记录为可复测 baseline。
 

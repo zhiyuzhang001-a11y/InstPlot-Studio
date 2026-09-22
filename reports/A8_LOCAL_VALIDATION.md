@@ -50,7 +50,7 @@ A7 Heros metric snapshot passes, and the new normal 300/600/1200 dpi, grayscale,
 and deuteranopia baselines were visually reviewed and reproduce with zero
 changed pixels.
 
-## Remaining A8 evidence
+## Completed A8 evidence and deferred platforms
 
 - Windows automated validation passed all 21 checks in GitHub Actions at commit
   `7d89c666f964d96e49cd72f67fba480bbe0532f8`. The product owner completed the
@@ -59,10 +59,11 @@ changed pixels.
   Microsoft Edge PDF rendering/search/copy all passed. Structured evidence is
   recorded in `reports/A8_WINDOWS_MANUAL_EVIDENCE.json`. Linux is deferred by
   the current product-owner decision and is not recorded as passed.
-- Repeat the UI preview on a real Retina display, or an accepted Apple
-  high-resolution simulation followed by release-time hardware confirmation.
-  The attached T2752Q reports 2560×1440 at 1.0 pixels per point and Quartz Debug
-  is not installed, so this host cannot supply 2× manual evidence.
+- The attached T2752Q reports 2560×1440 at 1.0 pixels per point and Quartz Debug
+  is not installed. By product-owner decision on 2026-09-22, physical Retina
+  evidence is deferred and is not a Gate A requirement. The 1×/2× transform
+  arithmetic remains unit tested; suitable Retina hardware should be checked
+  before a release that claims support for it.
 
 The macOS Preview check for the generated PDF passed on 2026-09-21: the page,
 vector geometry, clipping, labels, Greek quantity symbol, and scripted text
@@ -86,9 +87,12 @@ required export set, so the limitation is no longer a Gate A failure and must
 not be represented as a passed editor-compatibility result.
 
 After applying ADR-021 and installing the pinned `cargo-audit` 0.22.2 tool, the
-complete local audit reports 16 passes, zero failures, one blocked item, and two
-informational warnings. The only local blocker is genuine Retina evidence; the
-Windows automated scope is defined in `.github/workflows/part-a-windows-audit.yml`.
+last complete local audit reported 16 passes, zero failures, one now-retired
+Retina blocker, and two informational warnings. Applying the 2026-09-22 manual
+gate policy to the structured evidence returns the required macOS PDF item as
+passed with no remaining manual blocker. The Windows automated scope is defined
+in `.github/workflows/part-a-windows-audit.yml` and its manual evidence also
+passes all three required items.
 
-Gate A remains open for those cross-platform and final audit items; the three
-reopened local typography checks are closed.
+Gate A / Part A is closed. Physical Retina and Linux HiDPI checks are deferred;
+they must not be represented as passed.

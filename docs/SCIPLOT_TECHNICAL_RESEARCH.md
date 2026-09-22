@@ -1056,7 +1056,8 @@ Raster：
 
 只实现 window、真实 Display List canvas、side inspector、file dialog 和 keyboard input，不实现正式 property editor。验证：
 
-- macOS Retina、Windows scaling、Linux HiDPI；
+- 1×/2× transform 与 Windows scaling；macOS Retina、Linux HiDPI 在无设备时
+  可由产品负责人明确延后到发布门槛；
 - headless export 不依赖 window、screen scale 或 UI 生命周期；
 - stripped release executable/app core 加 mandatory runtime assets 的体积；
 - cold startup 和 idle memory；
