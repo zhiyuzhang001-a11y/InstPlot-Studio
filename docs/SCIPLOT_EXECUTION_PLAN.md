@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0.1–B0.3 DONE）
+> 状态：Part A DONE；Part B ACTIVE（B0.1–B0.4 DONE）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1532,7 +1532,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B0.4 — 抽取 `instplot-processing` 的独立数值算法与类型。**
+> **B0.5 — 抽取 `instplot-fitting` 与唯一 expression implementation。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1540,7 +1540,8 @@ B0.1 盘点结果见
 [`../reports/B0_SHARED_CORE_INVENTORY.md`](../reports/B0_SHARED_CORE_INVENTORY.md)。
 B0.2 的实现与验证证据见
 [`../reports/B0_CORE_EXTRACTION.md`](../reports/B0_CORE_EXTRACTION.md)，B0.3 证据见
-[`../reports/B0_IO_EXTRACTION.md`](../reports/B0_IO_EXTRACTION.md)。后续仍按
+[`../reports/B0_IO_EXTRACTION.md`](../reports/B0_IO_EXTRACTION.md)，B0.4 证据见
+[`../reports/B0_PROCESSING_EXTRACTION.md`](../reports/B0_PROCESSING_EXTRACTION.md)。后续仍按
 B0 → B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
 
 ---

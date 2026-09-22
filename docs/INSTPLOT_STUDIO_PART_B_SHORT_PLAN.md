@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0.1–B0.3 DONE）
+> 状态：ACTIVE（B0.1–B0.4 DONE）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -51,7 +51,9 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
    [`../reports/B0_SHARED_CORE_INVENTORY.md`](../reports/B0_SHARED_CORE_INVENTORY.md)。
 2. 依次抽取 `instplot-core`（**DONE**，见
    [`../reports/B0_CORE_EXTRACTION.md`](../reports/B0_CORE_EXTRACTION.md)）、`instplot-io`
-   （**DONE**，见 [`../reports/B0_IO_EXTRACTION.md`](../reports/B0_IO_EXTRACTION.md)）、`instplot-processing`、
+   （**DONE**，见 [`../reports/B0_IO_EXTRACTION.md`](../reports/B0_IO_EXTRACTION.md)）、`instplot-processing`
+   （第一段 **DONE**，见
+   [`../reports/B0_PROCESSING_EXTRACTION.md`](../reports/B0_PROCESSING_EXTRACTION.md)）、
    `instplot-fitting`；每次只移动一个边界，不同时改行为。
 3. 让 Lite 成为共享 crates 的消费者，再建立 workspace root。
 4. 记录每步的测试、数据 round-trip、release size 和 memory 变化。
@@ -150,8 +152,8 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 
 ## 10. 当前可执行任务
 
-**B0.1–B0.3 已完成。** 当前任务是 **B0.4 `instplot-processing` 第一段抽取**：
-先移动独立的数值算法和类型，公式分支暂留为 Lite 薄适配层，等待 B0.5 的唯一
-expression implementation。
+**B0.1–B0.4 已完成。** 当前任务是 **B0.5 `instplot-fitting` 抽取**：移动拟合与
+唯一 expression implementation 及其 12 项测试，为 B0.6 完成 processing 公式接线
+提供单一依赖。
 
-本步不移动 fitting，不创建 Studio app，也不改变算法和数据语义。
+本步不创建 Studio app，也不改变拟合算法、公式语义或展示文本。

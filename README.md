@@ -25,8 +25,8 @@ Windows 10 manual scaling/input/PDF review pass. Linux and physical Retina
 checks are explicitly deferred to a release that claims those targets; they are
 not represented as passed.
 
-Part B is active. B0.1 inventory, B0.2 `instplot-core`, and B0.3 `instplot-io`
-are complete; B0.4 now extracts the independent processing algorithms, followed by the
+Part B is active. B0.1 through B0.4 are complete, including shared core, I/O and
+independent processing algorithms; B0.5 now extracts fitting and expressions, followed by the
 independent Studio application, formal Figure Document, and the single-axes
 production slice. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
