@@ -56,12 +56,25 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 - 单 axes；默认最终图尺寸继续以 89 mm × 65 mm 为基准，可在允许范围内编辑。
 - 四条 spine 默认可见。
 - 四条 spine 默认都绘制 major/minor tick mark，刻度方向朝内。
+- tick mark 从 spine 起画，不在 tick mark 与 spine 之间引入空隙；tick label 与 spine 的
+  初始默认间距为 3.5 pt。
+- axis label 与其最外侧 tick label 边界的初始默认间距为 4.0 pt；不得把 axis label
+  固定到页面边缘来间接制造间距。
 - 默认只在 bottom/left 显示 tick label，避免重复标签；top/right 标签以后可显式开启。
 - 自动范围应留出稳定的小边距；用户手动范围不得被普通重绘静默覆盖。
 - source 数据默认用 marker，fit/theory 默认用 line；同一 source/fit 关系优先共享颜色。
 - 默认颜色来自已冻结的 publication palette；不能只靠颜色区分时使用 marker/dash 冗余。
 - TeX Gyre Heros、语义变量斜体、描述性下标 upright、U+03BC 规则保持不变。
 - 画布缩放和面板宽度属于 view state，不改变 PDF/PNG 的物理尺寸与布局。
+
+间距取值依据：Matplotlib 当前默认 `xtick/ytick.major.pad = 3.5 pt`、
+`axes.labelpad = 4.0 pt`；PGFPlots 的 `near ticklabel` 方案根据实际 tick-label 尺寸动态
+放置 axis label；Nature 的官方要求强调轴线、刻度、单位、可读性和无重叠，并未规定
+统一的固定间距。P4 因此采用上述数值作为起点，以边界和视觉矩阵决定是否微调，而不把
+某一期刊不存在的间距要求写成硬性标准。参考：
+[Matplotlib defaults](https://github.com/matplotlib/matplotlib/blob/main/lib/matplotlib/mpl-data/matplotlibrc)、
+[PGFPlots axis descriptions](https://tikz.dev/pgfplots/reference-axisdescription)、
+[Nature figure specifications](https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/)。
 
 ## 5. 分阶段实施
 
@@ -140,6 +153,11 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 - 实现 axis label 的语义编辑入口，覆盖 plain text、变量、Greek、上下标和单位；
 - 将四边 spine、major/minor tick、tick direction、tick label side 和 grid 状态纳入文档；
 - 落实“四条 spine 有刻度、刻度朝内”的默认值；
+- X/Y 分别根据自身 tick label 的实际边界放置 axis label：先放 spine 与向内 tick，
+  再以 3.5 pt pad 放 tick label，最后以 4.0 pt pad 放 axis label；一侧的长文字不得
+  改变另一侧的语义间距；
+- margin 必须由所有 decoration 的 union bounds 加外缘安全距离计算；空间不足时缩小
+  axes rectangle 或给出明确 warning，不能覆盖、裁切或静默减小字体；
 - 支持 figure width/height 与常用期刊尺寸预设，仍以毫米作为项目事实；
 - range、log-domain 或标签解析错误就地显示，不提交半有效状态。
 
@@ -148,6 +166,8 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 - 轴的所有 V1 常用设置无需改项目文件即可完成；
 - 最终尺寸、preview、PDF 和 raster 的几何一致；
 - 四边刻度、内向刻度和 bottom/left 标签默认值有 snapshot 与视觉回归。
+- 85 mm 与 89 mm 宽度、普通/负数/科学计数 tick、长单位和上下标标签的组合矩阵均无
+  overlap 或 clipping；改变 X decoration 不得无原因改变 Y 间距，反之亦然。
 
 ### P5：artist、颜色与 legend/annotation 编辑
 

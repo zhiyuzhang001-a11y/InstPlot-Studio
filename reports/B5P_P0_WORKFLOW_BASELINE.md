@@ -61,6 +61,10 @@ PNG dimensions, source immutability, workspace tests and Clippy.
    and it always means Open Data rather than distinguishing data from projects.
 6. PNG export is fixed at 300 dpi in the GUI. Figure size, background and raster choices are stored
    in the project model but do not have a complete product workflow.
+7. The axes rectangle is visually too wide relative to its height. The 89 mm × 65 mm figure is
+   landscape, but the effect is amplified by a roughly 7 pt spine-to-tick-label offset, an effective
+   8 pt tick-label-to-axis-label gap and bottom-edge-anchored X label. P4 must calculate both axis
+   labels from measured tick-label bounds instead of fixed page-edge positions.
 
 ### Visible polish issues
 
