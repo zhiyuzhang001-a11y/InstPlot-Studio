@@ -248,6 +248,8 @@ pub enum ReferenceOrientation {
 pub struct LegendEntry {
     pub artist_id: String,
     pub label_id: String,
+    #[serde(default = "default_true")]
+    pub visible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -632,10 +634,12 @@ impl ProjectDocument {
                                 LegendEntry {
                                     artist_id: artist_ids[3].clone(),
                                     label_id: "label-experiment".to_owned(),
+                                    visible: true,
                                 },
                                 LegendEntry {
                                     artist_id: artist_ids[1].clone(),
                                     label_id: "label-fit".to_owned(),
+                                    visible: true,
                                 },
                             ],
                             x_pt: 164.0,

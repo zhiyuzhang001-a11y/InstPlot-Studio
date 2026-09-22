@@ -292,6 +292,7 @@ impl FigureDocument {
             legend_entries.push(LegendEntry {
                 artist_id: artist_id.clone(),
                 label_id,
+                visible: true,
             });
             project.figure.axes[0].artist_ids.push(artist_id);
             collect_plotted_values(dataset, &x_column, &y_column, &mut plotted_values);
@@ -523,6 +524,77 @@ impl FigureDocument {
         Ok(())
     }
 
+    pub fn artist_record(&self, artist_id: &str) -> Option<ArtistRecord> {
+        self.project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == artist_id)
+            .cloned()
+    }
+
+    pub fn set_artist_record(&mut self, record: ArtistRecord) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        let artist = candidate
+            .figure
+            .artists
+            .iter_mut()
+            .find(|artist| artist.id == record.id)
+            .ok_or_else(|| format!("artist {} is missing", record.id))?;
+        if artist.kind != record.kind {
+            return Err("artist kind cannot be replaced".to_owned());
+        }
+        *artist = record.clone();
+        let value = serde_json::to_value(&record.properties)
+            .map_err(|error| format!("artist style cannot be recorded: {error}"))?;
+        if let Some(existing) = candidate
+            .overrides
+            .iter_mut()
+            .find(|item| item.target_id == record.id && item.property == "artist_style")
+        {
+            existing.value = value;
+        } else {
+            candidate.overrides.push(crate::OverrideRecord {
+                target_id: record.id,
+                property: "artist_style".to_owned(),
+                value,
+            });
+        }
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn semantic_label_nodes(&self, label_id: &str) -> Option<&[LabelNode]> {
+        self.project
+            .semantic_registry
+            .iter()
+            .find(|label| label.id == label_id)
+            .map(|label| label.nodes.as_slice())
+    }
+
+    pub fn set_semantic_label_nodes(
+        &mut self,
+        label_id: &str,
+        nodes: Vec<LabelNode>,
+    ) -> Result<(), String> {
+        if nodes.is_empty() {
+            return Err("semantic label cannot be empty".to_owned());
+        }
+        let label = self
+            .project
+            .semantic_registry
+            .iter_mut()
+            .find(|label| label.id == label_id)
+            .ok_or_else(|| format!("semantic label {label_id} is missing"))?;
+        label.nodes = nodes;
+        Ok(())
+    }
+
+    pub fn palette_colors(&self) -> &[PaletteColor] {
+        &self.project.palette.colors
+    }
+
     pub fn create_series(
         &mut self,
         data_source_id: &str,
@@ -593,6 +665,7 @@ impl FigureDocument {
         let legend_entry = LegendEntry {
             artist_id: created[0].clone(),
             label_id,
+            visible: true,
         };
         if let Some(legend) = self
             .project
@@ -659,6 +732,7 @@ impl FigureDocument {
                 entries.push(LegendEntry {
                     artist_id: new_id.clone(),
                     label_id: entry.label_id,
+                    visible: entry.visible,
                 });
                 break;
             }
@@ -1574,11 +1648,12 @@ fn legend_spec(
         let labels = entries
             .iter()
             .filter(|entry| {
-                project
-                    .figure
-                    .artists
-                    .iter()
-                    .any(|candidate| candidate.id == entry.artist_id && candidate.visible)
+                entry.visible
+                    && project
+                        .figure
+                        .artists
+                        .iter()
+                        .any(|candidate| candidate.id == entry.artist_id && candidate.visible)
             })
             .map(|entry| {
                 Ok((
@@ -1919,6 +1994,105 @@ mod tests {
         y_axis.scale = AxisScale::Log10;
         assert!(document.set_axis_record(AxisDimension::Y, y_axis).is_err());
         assert_eq!(document.project(), &before);
+    }
+
+    #[test]
+    fn p5_all_artist_properties_and_legend_entries_round_trip() {
+        let mut document = FigureDocument::fixed();
+
+        let mut line = document.artist_record("node-11").unwrap();
+        line.role = ArtistRole::Theory;
+        let ArtistProperties::Line { stroke, .. } = &mut line.properties else {
+            panic!("node-11 must be a line")
+        };
+        stroke.color_id = "gray".to_owned();
+        stroke.width_pt = 1.4;
+        stroke.dash_pt = vec![4.0, 2.4];
+        document.set_artist_record(line).unwrap();
+
+        let mut scatter = document.artist_record("node-13").unwrap();
+        let ArtistProperties::Scatter { marker, .. } = &mut scatter.properties else {
+            panic!("node-13 must be a scatter")
+        };
+        marker.shape = MarkerShape::Diamond;
+        marker.size_pt = 5.5;
+        document.set_artist_record(scatter).unwrap();
+
+        let mut errors = document.artist_record("node-12").unwrap();
+        let ArtistProperties::ErrorBar {
+            cap_width_pt,
+            stroke,
+            ..
+        } = &mut errors.properties
+        else {
+            panic!("node-12 must be an error bar")
+        };
+        *cap_width_pt = 3.0;
+        stroke.width_pt = 0.8;
+        document.set_artist_record(errors).unwrap();
+
+        let mut reference = document.artist_record("node-10").unwrap();
+        let ArtistProperties::ReferenceLine {
+            orientation, value, ..
+        } = &mut reference.properties
+        else {
+            panic!("node-10 must be a reference line")
+        };
+        *orientation = ReferenceOrientation::Vertical;
+        *value = 1.0;
+        document.set_artist_record(reference).unwrap();
+
+        let mut annotation = document.artist_record("node-14").unwrap();
+        let ArtistProperties::Annotation { x_pt, y_pt, .. } = &mut annotation.properties else {
+            panic!("node-14 must be an annotation")
+        };
+        *x_pt = 55.0;
+        *y_pt = 22.0;
+        document.set_artist_record(annotation).unwrap();
+        document
+            .set_semantic_label_nodes(
+                "label-temperature",
+                vec![
+                    LabelNode::Variable("T".to_owned()),
+                    LabelNode::Operator("=".to_owned()),
+                    LabelNode::Number("250".to_owned()),
+                    LabelNode::Unit("K".to_owned()),
+                ],
+            )
+            .unwrap();
+
+        let mut legend = document.artist_record("node-15").unwrap();
+        let ArtistProperties::Legend {
+            entries,
+            x_pt,
+            y_pt,
+        } = &mut legend.properties
+        else {
+            panic!("node-15 must be a legend")
+        };
+        entries.reverse();
+        entries[0].visible = false;
+        *x_pt = 150.0;
+        *y_pt = 25.0;
+        document.set_artist_record(legend).unwrap();
+
+        let resolved = document.layout_figure().unwrap();
+        assert!(resolved.result.display_list.validation_errors().is_empty());
+        assert_eq!(
+            document
+                .project()
+                .overrides
+                .iter()
+                .filter(|record| record.property == "artist_style")
+                .count(),
+            6
+        );
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let reopened =
+            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
+                .unwrap();
+        assert_eq!(document.project(), reopened.project());
+        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
     }
 
     #[test]

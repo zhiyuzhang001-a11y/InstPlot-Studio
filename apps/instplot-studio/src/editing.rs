@@ -1,5 +1,5 @@
 use crate::{
-    AxisDimension, AxisRanges, AxisRecord, FigureDocument, LabelNode, MoveDirection,
+    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, FigureDocument, LabelNode, MoveDirection,
     ProjectDocument, SeriesCreationStyle,
 };
 
@@ -60,6 +60,11 @@ pub enum EditCommand {
         width_mm: f64,
         height_mm: f64,
     },
+    SetArtistRecord(ArtistRecord),
+    SetSemanticLabel {
+        label_id: String,
+        nodes: Vec<LabelNode>,
+    },
 }
 
 impl EditCommand {
@@ -77,6 +82,8 @@ impl EditCommand {
             Self::SetAxisRecord { .. } => "Change axis settings",
             Self::SetAxisLabel { .. } => "Change axis label",
             Self::SetFigureSize { .. } => "Change figure size",
+            Self::SetArtistRecord(_) => "Change artist properties",
+            Self::SetSemanticLabel { .. } => "Change semantic label",
         }
     }
 
@@ -129,6 +136,10 @@ impl EditCommand {
                 width_mm,
                 height_mm,
             } => document.set_figure_size_mm(width_mm, height_mm),
+            Self::SetArtistRecord(record) => document.set_artist_record(record),
+            Self::SetSemanticLabel { label_id, nodes } => {
+                document.set_semantic_label_nodes(&label_id, nodes)
+            }
         }
     }
 }

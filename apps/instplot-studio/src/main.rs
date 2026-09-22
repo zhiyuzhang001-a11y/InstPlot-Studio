@@ -9,13 +9,13 @@ mod workspace;
 use eframe::egui;
 use instplot_core::{DataSet, DataSetKind};
 use instplot_studio::{
-    AxisDimension, AxisRanges, AxisRecord, AxisScale, CheckSeverity, EditCommand, EditGroup,
-    EditHistory, EguiPreviewAdapter, FigureDocument, FormatterSpec, HandoffCleanup, HandoffImport,
-    LabelNode, LocatorSpec, MoveDirection, OpenProjectSource, PRODUCT_NAME, PreviewAdapter,
-    PublicationReport, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind,
-    StudioSession, TickDirection, check_publication, import_handoff, product_info,
-    resolve_document, save_figure_pdf, save_figure_png, save_fixed_figure_pdf,
-    save_fixed_figure_png, write_handoff,
+    ArtistProperties, ArtistRole, AxisDimension, AxisRanges, AxisRecord, AxisScale, CheckSeverity,
+    EditCommand, EditGroup, EditHistory, EguiPreviewAdapter, FigureDocument, FormatterSpec,
+    HandoffCleanup, HandoffImport, LabelNode, LocatorSpec, MarkerShape, MoveDirection,
+    OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport, ReferenceOrientation,
+    ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind, StrokeStyle, StudioSession,
+    TickDirection, check_publication, import_handoff, product_info, resolve_document,
+    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
 };
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;
@@ -1584,6 +1584,10 @@ impl StudioApp {
         });
         describe_selection(ui, series.as_ref(), self.language);
 
+        if let Some(series) = &series {
+            self.artist_editor(ui, &series.id);
+        }
+
         if let Some(series) = &series
             && let Some(binding) = &series.binding
         {
@@ -1747,6 +1751,344 @@ impl StudioApp {
                 }
             }
         }
+    }
+
+    fn artist_editor(&mut self, ui: &mut egui::Ui, artist_id: &str) {
+        let Some(mut record) = self.document.artist_record(artist_id) else {
+            return;
+        };
+        let palette = self.document.palette_colors().to_vec();
+        let mut changed = false;
+        let mut semantic_labels = Vec::new();
+        ui.separator();
+        ui.collapsing(self.language.text(Text::ArtistProperties), |ui| {
+            if !matches!(record.role, ArtistRole::Annotation | ArtistRole::Legend) {
+                changed |= role_editor(ui, self.language, &mut record.role);
+            }
+            match &mut record.properties {
+                ArtistProperties::Line { stroke, .. } => {
+                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                }
+                ArtistProperties::Scatter { marker, .. } => {
+                    changed |= color_editor(ui, self.language, &mut marker.color_id, &palette);
+                    ui.label(self.language.text(Text::MarkerShape));
+                    egui::ComboBox::from_id_salt(("marker-shape", artist_id))
+                        .selected_text(marker_shape_name(self.language, marker.shape))
+                        .show_ui(ui, |ui| {
+                            for shape in [
+                                MarkerShape::Circle,
+                                MarkerShape::Square,
+                                MarkerShape::Triangle,
+                                MarkerShape::Diamond,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut marker.shape,
+                                        shape,
+                                        marker_shape_name(self.language, shape),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut marker.size_pt)
+                                .range(0.1..=72.0)
+                                .prefix(format!("{}: ", self.language.text(Text::MarkerSize))),
+                        )
+                        .changed();
+                }
+                ArtistProperties::ErrorBar {
+                    cap_width_pt,
+                    stroke,
+                    ..
+                } => {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(cap_width_pt)
+                                .range(0.1..=72.0)
+                                .prefix(format!("{}: ", self.language.text(Text::CapWidth))),
+                        )
+                        .changed();
+                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                }
+                ArtistProperties::ReferenceLine {
+                    orientation,
+                    value,
+                    stroke,
+                } => {
+                    ui.label(self.language.text(Text::Orientation));
+                    egui::ComboBox::from_id_salt(("reference-orientation", artist_id))
+                        .selected_text(reference_orientation_name(self.language, *orientation))
+                        .show_ui(ui, |ui| {
+                            for candidate in [
+                                ReferenceOrientation::Horizontal,
+                                ReferenceOrientation::Vertical,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(
+                                        orientation,
+                                        candidate,
+                                        reference_orientation_name(self.language, candidate),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(value)
+                                .prefix(format!("{}: ", self.language.text(Text::Value))),
+                        )
+                        .changed();
+                    changed |= stroke_editor(ui, self.language, stroke, &palette);
+                }
+                ArtistProperties::Annotation {
+                    label_id,
+                    x_pt,
+                    y_pt,
+                } => {
+                    changed |= position_editor(ui, self.language, x_pt, y_pt);
+                    semantic_labels.push(label_id.clone());
+                }
+                ArtistProperties::Legend {
+                    entries,
+                    x_pt,
+                    y_pt,
+                } => {
+                    changed |= position_editor(ui, self.language, x_pt, y_pt);
+                    ui.label(self.language.text(Text::LegendEntries));
+                    let mut move_entry = None;
+                    let entry_count = entries.len();
+                    for (index, entry) in entries.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            changed |= ui.checkbox(&mut entry.visible, "").changed();
+                            ui.label(&entry.artist_id);
+                            if ui.small_button("↑").clicked() && index > 0 {
+                                move_entry = Some((index, index - 1));
+                            }
+                            if ui.small_button("↓").clicked() && index + 1 < entry_count {
+                                move_entry = Some((index, index + 1));
+                            }
+                        });
+                        semantic_labels.push(entry.label_id.clone());
+                    }
+                    if let Some((from, to)) = move_entry {
+                        entries.swap(from, to);
+                        changed = true;
+                    }
+                }
+            }
+        });
+        if changed {
+            self.execute_document_edit(
+                EditCommand::SetArtistRecord(record),
+                self.language.text(Text::ArtistProperties),
+            );
+        }
+        for label_id in semantic_labels {
+            self.semantic_label_editor(ui, &label_id);
+        }
+    }
+
+    fn semantic_label_editor(&mut self, ui: &mut egui::Ui, label_id: &str) {
+        let Some(nodes) = self.document.semantic_label_nodes(label_id) else {
+            return;
+        };
+        let mut draft = LabelDraft::from_nodes(nodes);
+        let mut changed = false;
+        let mut remove = None;
+        ui.collapsing(
+            format!("{} · {label_id}", self.language.text(Text::SemanticLabel)),
+            |ui| {
+                for (index, part) in draft.parts.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt(("semantic-kind", label_id, index))
+                            .selected_text(label_part_kind_name(self.language, part.kind))
+                            .show_ui(ui, |ui| {
+                                for kind in label_part_kinds() {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut part.kind,
+                                            kind,
+                                            label_part_kind_name(self.language, kind),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        if part.kind != LabelPartKind::UnitSeparator {
+                            changed |= ui.text_edit_singleline(&mut part.value).changed();
+                        }
+                        if ui.small_button("−").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if ui.button(self.language.text(Text::AddPart)).clicked() {
+                    draft.parts.push(LabelPartDraft {
+                        kind: LabelPartKind::Text,
+                        value: String::new(),
+                    });
+                    changed = true;
+                }
+            },
+        );
+        if let Some(index) = remove {
+            draft.parts.remove(index);
+            changed = true;
+        }
+        if changed {
+            match draft.to_nodes() {
+                Ok(nodes) => {
+                    self.execute_document_edit(
+                        EditCommand::SetSemanticLabel {
+                            label_id: label_id.to_owned(),
+                            nodes,
+                        },
+                        self.language.text(Text::ApplyLabel),
+                    );
+                }
+                Err(error) => self.push_error("semantic-label", error),
+            }
+        }
+    }
+}
+
+fn role_editor(ui: &mut egui::Ui, language: UiLanguage, role: &mut ArtistRole) -> bool {
+    let mut changed = false;
+    ui.label(language.text(Text::Role));
+    egui::ComboBox::from_id_salt("artist-role")
+        .selected_text(artist_role_name(language, *role))
+        .show_ui(ui, |ui| {
+            for candidate in [
+                ArtistRole::Data,
+                ArtistRole::Fit,
+                ArtistRole::Theory,
+                ArtistRole::Reference,
+                ArtistRole::Baseline,
+            ] {
+                changed |= ui
+                    .selectable_value(role, candidate, artist_role_name(language, candidate))
+                    .changed();
+            }
+        });
+    changed
+}
+
+fn color_editor(
+    ui: &mut egui::Ui,
+    language: UiLanguage,
+    color_id: &mut String,
+    palette: &[instplot_studio::PaletteColor],
+) -> bool {
+    let mut changed = false;
+    ui.label(language.text(Text::Color));
+    egui::ComboBox::from_id_salt("artist-color")
+        .selected_text(color_id.as_str())
+        .show_ui(ui, |ui| {
+            for color in palette {
+                ui.horizontal(|ui| {
+                    let [r, g, b, a] = color.rgba;
+                    let swatch = egui::Color32::from_rgba_unmultiplied(r, g, b, a);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, swatch);
+                    changed |= ui
+                        .selectable_value(color_id, color.id.clone(), &color.id)
+                        .changed();
+                });
+            }
+        });
+    changed
+}
+
+fn stroke_editor(
+    ui: &mut egui::Ui,
+    language: UiLanguage,
+    stroke: &mut StrokeStyle,
+    palette: &[instplot_studio::PaletteColor],
+) -> bool {
+    let mut changed = color_editor(ui, language, &mut stroke.color_id, palette);
+    changed |= ui
+        .add(
+            egui::DragValue::new(&mut stroke.width_pt)
+                .range(0.1..=72.0)
+                .prefix(format!("{}: ", language.text(Text::LineWidth))),
+        )
+        .changed();
+    let selected = dash_name(language, &stroke.dash_pt);
+    ui.label(language.text(Text::Dash));
+    egui::ComboBox::from_id_salt("artist-dash")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for (name, pattern) in [
+                (Text::Solid, Vec::new()),
+                (Text::Dashed, vec![4.0, 2.4]),
+                (Text::Dotted, vec![0.8, 1.8]),
+                (Text::DashDot, vec![4.0, 2.0, 0.8, 2.0]),
+            ] {
+                changed |= ui
+                    .selectable_value(&mut stroke.dash_pt, pattern, language.text(name))
+                    .changed();
+            }
+        });
+    changed
+}
+
+fn position_editor(
+    ui: &mut egui::Ui,
+    language: UiLanguage,
+    x_pt: &mut f64,
+    y_pt: &mut f64,
+) -> bool {
+    let mut changed = ui
+        .add(egui::DragValue::new(x_pt).prefix(format!("{}: ", language.text(Text::XPosition))))
+        .changed();
+    changed |= ui
+        .add(egui::DragValue::new(y_pt).prefix(format!("{}: ", language.text(Text::YPosition))))
+        .changed();
+    changed
+}
+
+fn artist_role_name(language: UiLanguage, role: ArtistRole) -> &'static str {
+    language.text(match role {
+        ArtistRole::Data => Text::DataRole,
+        ArtistRole::Fit => Text::FitRole,
+        ArtistRole::Theory => Text::TheoryRole,
+        ArtistRole::Reference => Text::ReferenceRole,
+        ArtistRole::Baseline => Text::BaselineRole,
+        ArtistRole::Annotation => Text::Annotation,
+        ArtistRole::Legend => Text::Legend,
+    })
+}
+
+fn marker_shape_name(language: UiLanguage, shape: MarkerShape) -> &'static str {
+    language.text(match shape {
+        MarkerShape::Circle => Text::Circle,
+        MarkerShape::Square => Text::Square,
+        MarkerShape::Triangle => Text::Triangle,
+        MarkerShape::Diamond => Text::Diamond,
+    })
+}
+
+fn reference_orientation_name(
+    language: UiLanguage,
+    orientation: ReferenceOrientation,
+) -> &'static str {
+    language.text(match orientation {
+        ReferenceOrientation::Horizontal => Text::Horizontal,
+        ReferenceOrientation::Vertical => Text::Vertical,
+    })
+}
+
+fn dash_name(language: UiLanguage, pattern: &[f64]) -> &'static str {
+    if pattern.is_empty() {
+        language.text(Text::Solid)
+    } else if pattern == [4.0, 2.4] {
+        language.text(Text::Dashed)
+    } else if pattern == [0.8, 1.8] {
+        language.text(Text::Dotted)
+    } else {
+        language.text(Text::DashDot)
     }
 }
 
