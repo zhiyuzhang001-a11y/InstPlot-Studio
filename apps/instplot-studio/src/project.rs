@@ -1615,6 +1615,19 @@ mod tests {
     }
 
     #[test]
+    fn project_round_trip_supports_unicode_and_spaces_in_the_path() {
+        let directory = TempDirectory::new();
+        let nested = directory.0.join("实验 数据");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("磁化 曲线.instplot");
+        let expected = ProjectDocument::fixed_fixture();
+        save_project(&path, &expected).unwrap();
+        let opened = open_project(&path).unwrap();
+        assert_eq!(opened.source, OpenProjectSource::Primary);
+        assert_eq!(opened.document, expected);
+    }
+
+    #[test]
     fn invalid_existing_project_is_never_overwritten() {
         let directory = TempDirectory::new();
         let path = directory.0.join("invalid.instplot");

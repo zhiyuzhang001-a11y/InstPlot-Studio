@@ -167,7 +167,46 @@ pub fn install_publication_fonts(context: &egui::Context) {
             vec![name],
         );
     }
+    // UI localization uses an installed system font as a runtime fallback. It is deliberately
+    // not bundled or used by the named publication families, so exported figure typography and
+    // application size remain unchanged.
+    if let Some((name, bytes)) = system_cjk_ui_font() {
+        definitions
+            .font_data
+            .insert(name.clone(), Arc::new(egui::FontData::from_owned(bytes)));
+        definitions
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push(name);
+    }
     context.set_fonts(definitions);
+}
+
+#[cfg(feature = "publication-stack")]
+fn system_cjk_ui_font() -> Option<(String, Vec<u8>)> {
+    #[cfg(target_os = "macos")]
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    ];
+    #[cfg(target_os = "windows")]
+    const CANDIDATES: &[&str] = &[
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simsun.ttc",
+    ];
+    #[cfg(target_os = "linux")]
+    const CANDIDATES: &[&str] = &[
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    ];
+    CANDIDATES.iter().find_map(|path| {
+        std::fs::read(path)
+            .ok()
+            .map(|bytes| ("instplot-ui-cjk".to_owned(), bytes))
+    })
 }
 
 #[cfg(feature = "publication-stack")]

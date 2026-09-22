@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE（P0–P1 DONE；P2 next）
+> 状态：ACTIVE（P0–P2 DONE；P3 next）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  

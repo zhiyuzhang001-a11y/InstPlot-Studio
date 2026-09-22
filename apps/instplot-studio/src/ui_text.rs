@@ -1,0 +1,309 @@
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UiLanguage {
+    #[default]
+    Chinese,
+    English,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Text {
+    File,
+    Edit,
+    View,
+    Export,
+    NewProject,
+    OpenData,
+    OpenLite,
+    OpenProject,
+    Save,
+    SaveAs,
+    Exit,
+    Undo,
+    Redo,
+    Language,
+    Chinese,
+    English,
+    ExportPdf,
+    ExportPng,
+    Series,
+    FixedFigure,
+    Data,
+    NoData,
+    Inspector,
+    AxesRanges,
+    XMin,
+    XMax,
+    YMin,
+    YMax,
+    ViewOnly,
+    CanvasZoom,
+    ZoomNotSaved,
+    PublicationCheck,
+    Rules,
+    Raster,
+    WarningsAndErrors,
+    NoWarnings,
+    UnsavedChanges,
+    UnsavedExplanation,
+    Discard,
+    Cancel,
+    SelectSeries,
+    Kind,
+    StableNode,
+    Untitled,
+    Ready,
+    OpenDataDialog,
+    SupportedData,
+    OpenLiteDialog,
+    HandoffFile,
+    OpenProjectDialog,
+    ProjectFile,
+    SaveProjectDialog,
+    ExportFigureDialog,
+    Error,
+    Warning,
+    PreviewFramebuffer,
+    ImportDataOperation,
+    DataSourceUpdateOperation,
+    ProjectLayoutOperation,
+    HandoffLayoutOperation,
+    OpenHandoffOperation,
+    OpenProjectOperation,
+    SaveProjectOperation,
+    ExportOperation,
+    AxesOperation,
+    LayoutOperation,
+}
+
+impl UiLanguage {
+    pub fn text(self, key: Text) -> &'static str {
+        use Text::*;
+        match (self, key) {
+            (Self::Chinese, File) => "文件",
+            (Self::Chinese, Edit) => "编辑",
+            (Self::Chinese, View) => "视图",
+            (Self::Chinese, Export) => "导出",
+            (Self::Chinese, NewProject) => "新建项目",
+            (Self::Chinese, OpenData) => "导入数据…",
+            (Self::Chinese, OpenLite) => "从 InstPlot Lite 打开…",
+            (Self::Chinese, OpenProject) => "打开项目…",
+            (Self::Chinese, Save) => "保存",
+            (Self::Chinese, SaveAs) => "另存为…",
+            (Self::Chinese, Exit) => "退出",
+            (Self::Chinese, Undo) => "撤销",
+            (Self::Chinese, Redo) => "重做",
+            (Self::Chinese, Language) => "界面语言",
+            (Self::Chinese, Chinese) => "中文",
+            (Self::Chinese, English) => "English",
+            (Self::Chinese, ExportPdf) => "导出 PDF…",
+            (Self::Chinese, ExportPng) => "导出 PNG…",
+            (Self::Chinese, Series) => "系列",
+            (Self::Chinese, FixedFigure) => "出版图形",
+            (Self::Chinese, Data) => "数据",
+            (Self::Chinese, NoData) => "尚未导入数据",
+            (Self::Chinese, Inspector) => "检查器",
+            (Self::Chinese, AxesRanges) => "坐标轴范围",
+            (Self::Chinese, XMin) => "X 最小值",
+            (Self::Chinese, XMax) => "X 最大值",
+            (Self::Chinese, YMin) => "Y 最小值",
+            (Self::Chinese, YMax) => "Y 最大值",
+            (Self::Chinese, ViewOnly) => "仅影响视图",
+            (Self::Chinese, CanvasZoom) => "画布缩放",
+            (Self::Chinese, ZoomNotSaved) => "画布缩放不会写入 Figure Document。",
+            (Self::Chinese, PublicationCheck) => "出版规范检查",
+            (Self::Chinese, Rules) => "规则",
+            (Self::Chinese, Raster) => "栅格图",
+            (Self::Chinese, WarningsAndErrors) => "警告与错误",
+            (Self::Chinese, NoWarnings) => "没有警告或错误",
+            (Self::Chinese, UnsavedChanges) => "尚未保存的更改",
+            (Self::Chinese, UnsavedExplanation) => "当前项目包含尚未保存的更改。",
+            (Self::Chinese, Discard) => "放弃更改",
+            (Self::Chinese, Cancel) => "取消",
+            (Self::Chinese, SelectSeries) => "请选择一个系列以查看属性。",
+            (Self::Chinese, Kind) => "类型",
+            (Self::Chinese, StableNode) => "稳定节点",
+            (Self::Chinese, Untitled) => "未命名",
+            (Self::Chinese, Ready) => "就绪",
+            (Self::Chinese, OpenDataDialog) => "在 InstPlot Studio 中导入数据",
+            (Self::Chinese, SupportedData) => "支持的数据文件",
+            (Self::Chinese, OpenLiteDialog) => "打开 InstPlot Lite 临时交换包",
+            (Self::Chinese, HandoffFile) => "InstPlot 交换包",
+            (Self::Chinese, OpenProjectDialog) => "打开 InstPlot Studio 项目",
+            (Self::Chinese, ProjectFile) => "InstPlot Studio 项目",
+            (Self::Chinese, SaveProjectDialog) => "保存 InstPlot Studio 项目",
+            (Self::Chinese, ExportFigureDialog) => "导出出版图形",
+            (Self::Chinese, Error) => "错误",
+            (Self::Chinese, Warning) => "警告",
+            (Self::Chinese, PreviewFramebuffer) => "预览帧缓冲区",
+            (Self::Chinese, ImportDataOperation) => "数据导入",
+            (Self::Chinese, DataSourceUpdateOperation) => "数据源更新",
+            (Self::Chinese, ProjectLayoutOperation) => "项目布局",
+            (Self::Chinese, HandoffLayoutOperation) => "交换包布局",
+            (Self::Chinese, OpenHandoffOperation) => "打开交换包",
+            (Self::Chinese, OpenProjectOperation) => "打开项目",
+            (Self::Chinese, SaveProjectOperation) => "保存项目",
+            (Self::Chinese, ExportOperation) => "导出",
+            (Self::Chinese, AxesOperation) => "坐标轴设置",
+            (Self::Chinese, LayoutOperation) => "布局",
+            (Self::English, File) => "File",
+            (Self::English, Edit) => "Edit",
+            (Self::English, View) => "View",
+            (Self::English, Export) => "Export",
+            (Self::English, NewProject) => "New Project",
+            (Self::English, OpenData) => "Import Data…",
+            (Self::English, OpenLite) => "Open from InstPlot Lite…",
+            (Self::English, OpenProject) => "Open Project…",
+            (Self::English, Save) => "Save",
+            (Self::English, SaveAs) => "Save As…",
+            (Self::English, Exit) => "Exit",
+            (Self::English, Undo) => "Undo",
+            (Self::English, Redo) => "Redo",
+            (Self::English, Language) => "Language",
+            (Self::English, Chinese) => "中文",
+            (Self::English, English) => "English",
+            (Self::English, ExportPdf) => "Export PDF…",
+            (Self::English, ExportPng) => "Export PNG…",
+            (Self::English, Series) => "Series",
+            (Self::English, FixedFigure) => "Publication Figure",
+            (Self::English, Data) => "Data",
+            (Self::English, NoData) => "No imported data",
+            (Self::English, Inspector) => "Inspector",
+            (Self::English, AxesRanges) => "Axes ranges",
+            (Self::English, XMin) => "X min",
+            (Self::English, XMax) => "X max",
+            (Self::English, YMin) => "Y min",
+            (Self::English, YMax) => "Y max",
+            (Self::English, ViewOnly) => "View only",
+            (Self::English, CanvasZoom) => "Canvas zoom",
+            (Self::English, ZoomNotSaved) => "Canvas zoom is not stored in the Figure Document.",
+            (Self::English, PublicationCheck) => "Publication Check",
+            (Self::English, Rules) => "Rules",
+            (Self::English, Raster) => "Raster",
+            (Self::English, WarningsAndErrors) => "Warnings and Errors",
+            (Self::English, NoWarnings) => "No warnings or errors",
+            (Self::English, UnsavedChanges) => "Unsaved changes",
+            (Self::English, UnsavedExplanation) => "The current project has unsaved changes.",
+            (Self::English, Discard) => "Discard",
+            (Self::English, Cancel) => "Cancel",
+            (Self::English, SelectSeries) => "Select a series to inspect it.",
+            (Self::English, Kind) => "Kind",
+            (Self::English, StableNode) => "Stable node",
+            (Self::English, Untitled) => "Untitled",
+            (Self::English, Ready) => "Ready",
+            (Self::English, OpenDataDialog) => "Import data into InstPlot Studio",
+            (Self::English, SupportedData) => "Supported data",
+            (Self::English, OpenLiteDialog) => "Open temporary handoff from InstPlot Lite",
+            (Self::English, HandoffFile) => "InstPlot handoff",
+            (Self::English, OpenProjectDialog) => "Open InstPlot Studio project",
+            (Self::English, ProjectFile) => "InstPlot Studio project",
+            (Self::English, SaveProjectDialog) => "Save InstPlot Studio project",
+            (Self::English, ExportFigureDialog) => "Export publication figure",
+            (Self::English, Error) => "Error",
+            (Self::English, Warning) => "Warning",
+            (Self::English, PreviewFramebuffer) => "preview framebuffer",
+            (Self::English, ImportDataOperation) => "Data import",
+            (Self::English, DataSourceUpdateOperation) => "Data-source update",
+            (Self::English, ProjectLayoutOperation) => "Project layout",
+            (Self::English, HandoffLayoutOperation) => "Handoff layout",
+            (Self::English, OpenHandoffOperation) => "Open handoff",
+            (Self::English, OpenProjectOperation) => "Open project",
+            (Self::English, SaveProjectOperation) => "Save project",
+            (Self::English, ExportOperation) => "Export",
+            (Self::English, AxesOperation) => "Axes update",
+            (Self::English, LayoutOperation) => "Layout",
+        }
+    }
+
+    pub fn imported(self, read: usize, added: usize, replaced: usize) -> String {
+        match self {
+            Self::Chinese => format!("已导入 {read} 个数据集：新增 {added}，替换 {replaced}"),
+            Self::English => {
+                format!("Imported {read} dataset(s): {added} added, {replaced} replaced")
+            }
+        }
+    }
+
+    pub fn opened_lite(self, name: &str, version: &str) -> String {
+        match self {
+            Self::Chinese => format!("已打开 {name} {version} 的交换包；临时文件已删除"),
+            Self::English => {
+                format!("Opened Lite handoff from {name} {version}; temporary package removed")
+            }
+        }
+    }
+
+    pub fn opened_project(self, path: &std::path::Path) -> String {
+        match self {
+            Self::Chinese => format!("已打开项目 {}", path.display()),
+            Self::English => format!("Opened project {}", path.display()),
+        }
+    }
+
+    pub fn recovered_project(self, path: &std::path::Path) -> String {
+        match self {
+            Self::Chinese => format!("已从备份恢复 {}；请使用“另存为”", path.display()),
+            Self::English => format!("Recovered backup for {}; use Save As", path.display()),
+        }
+    }
+
+    pub fn saved_project(self, path: &std::path::Path) -> String {
+        match self {
+            Self::Chinese => format!("已保存项目 {}", path.display()),
+            Self::English => format!("Saved project {}", path.display()),
+        }
+    }
+
+    pub fn exported(self, size: usize, path: &std::path::Path) -> String {
+        match self {
+            Self::Chinese => format!("已导出 {size} 字节到 {}", path.display()),
+            Self::English => format!("Exported {size} bytes to {}", path.display()),
+        }
+    }
+
+    pub fn undo(self, description: &str) -> String {
+        match self {
+            Self::Chinese => format!("已撤销：{description}"),
+            Self::English => format!("Undo: {description}"),
+        }
+    }
+
+    pub fn redo(self, description: &str) -> String {
+        match self {
+            Self::Chinese => format!("已重做：{description}"),
+            Self::English => format!("Redo: {description}"),
+        }
+    }
+
+    pub fn rows_columns(self, rows: usize, columns: usize) -> String {
+        match self {
+            Self::Chinese => format!("{rows} 行 · {columns} 列"),
+            Self::English => format!("{rows} rows · {columns} columns"),
+        }
+    }
+
+    pub fn publication_summary(self, errors: usize, warnings: usize, info: usize) -> String {
+        match self {
+            Self::Chinese => format!("{errors} 个错误 · {warnings} 个警告 · {info} 条信息"),
+            Self::English => format!("{errors} error · {warnings} warning · {info} information"),
+        }
+    }
+
+    pub fn operation_failed(self, operation: &str, error: &dyn std::fmt::Display) -> String {
+        match self {
+            Self::Chinese => format!("{operation}失败：{error}"),
+            Self::English => format!("{operation} failed: {error}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chinese_is_the_default_and_english_remains_selectable() {
+        assert_eq!(UiLanguage::default(), UiLanguage::Chinese);
+        assert_eq!(UiLanguage::Chinese.text(Text::OpenData), "导入数据…");
+        assert_eq!(UiLanguage::English.text(Text::OpenData), "Import Data…");
+    }
+}

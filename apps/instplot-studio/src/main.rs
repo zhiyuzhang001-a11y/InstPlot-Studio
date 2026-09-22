@@ -3,6 +3,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+mod ui_text;
+mod workspace;
+
 use eframe::egui;
 use instplot_studio::{
     AxisRanges, CheckSeverity, EditCommand, EditGroup, EditHistory, EguiPreviewAdapter,
@@ -11,6 +14,8 @@ use instplot_studio::{
     import_handoff, product_info, resolve_document, save_figure_pdf, save_figure_png,
     save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
 };
+use ui_text::{Text, UiLanguage};
+use workspace::WorkspaceState;
 
 fn main() {
     if let Err(error) = run(std::env::args_os().skip(1)) {
@@ -187,22 +192,37 @@ struct StudioApp {
     publication_report: PublicationReport,
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
-    project_path: Option<PathBuf>,
+    workspace: WorkspaceState,
     edit_history: EditHistory,
     pending_action: Option<PendingAction>,
     allow_close: bool,
     canvas_zoom: f32,
-    warnings: Vec<String>,
-    status: String,
+    messages: Vec<AppMessage>,
+    status: Option<(String, Instant)>,
+    language: UiLanguage,
     first_frame: bool,
     started: Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingAction {
+    NewProject,
     OpenLiteHandoff,
     OpenProject,
     Exit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MessageLevel {
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug)]
+struct AppMessage {
+    code: String,
+    level: MessageLevel,
+    text: String,
 }
 
 impl StudioApp {
@@ -216,16 +236,24 @@ impl StudioApp {
         });
         ui_shell_spike::install_publication_fonts(&creation.egui_ctx);
         let startup_unsaved = startup.is_some();
-        let (document, datasets, status) = startup.map_or_else(
-            || (FigureDocument::fixed(), Vec::new(), "Ready".to_owned()),
+        let language = UiLanguage::default();
+        let (document, datasets, status, workspace) = startup.map_or_else(
+            || {
+                let document = FigureDocument::fixed();
+                let (session, _) = StudioSession::from_project(document.project());
+                (
+                    document,
+                    session.datasets().to_vec(),
+                    language.text(Text::Ready).to_owned(),
+                    WorkspaceState::new(language.text(Text::Untitled)),
+                )
+            },
             |imported| {
                 (
                     imported.document,
                     imported.datasets,
-                    format!(
-                        "Opened Lite handoff from {} {}; temporary package removed",
-                        imported.producer_name, imported.producer_version
-                    ),
+                    language.opened_lite(&imported.producer_name, &imported.producer_version),
+                    WorkspaceState::from_lite(language.text(Text::Untitled)),
                 )
             },
         );
@@ -242,13 +270,14 @@ impl StudioApp {
             publication_report,
             preview: EguiPreviewAdapter,
             selected_series: None,
-            project_path: None,
+            workspace,
             edit_history,
             pending_action: None,
             allow_close: false,
             canvas_zoom: 1.5,
-            warnings: Vec::new(),
-            status,
+            messages: Vec::new(),
+            status: Some((status, Instant::now())),
+            language,
             first_frame: true,
             started,
         }
@@ -256,9 +285,9 @@ impl StudioApp {
 
     fn open_data(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Open data in InstPlot Studio")
+            .set_title(self.language.text(Text::OpenDataDialog))
             .add_filter(
-                "Supported data",
+                self.language.text(Text::SupportedData),
                 &["txt", "csv", "dat", "tsv", "xlsx", "xls"],
             )
             .pick_file()
@@ -272,13 +301,25 @@ impl StudioApp {
                 if let Err(error) =
                     candidate_document.sync_external_datasets(candidate_session.datasets())
                 {
-                    self.push_warning(format!("Project data-source update failed: {error}"));
+                    self.push_error(
+                        "data-sync",
+                        self.language.operation_failed(
+                            self.language.text(Text::DataSourceUpdateOperation),
+                            &error,
+                        ),
+                    );
                     return;
                 }
                 let resolved = match resolved_preview(&candidate_document) {
                     Ok(resolved) => resolved,
                     Err(error) => {
-                        self.push_warning(format!("Project layout failed: {error}"));
+                        self.push_error(
+                            "layout",
+                            self.language.operation_failed(
+                                self.language.text(Text::ProjectLayoutOperation),
+                                &error,
+                            ),
+                        );
                         return;
                     }
                 };
@@ -287,20 +328,27 @@ impl StudioApp {
                 self.edit_history.rebase_after_external_change();
                 self.publication_report = check_publication(&self.document, &resolved, 300);
                 self.resolved = resolved;
-                self.status = format!(
-                    "Imported {} dataset(s): {} added, {} replaced",
-                    outcome.read, outcome.added, outcome.replaced
-                );
-                self.clear_warning("Import failed:");
+                self.workspace.note_data_import(&path);
+                self.set_success(self.language.imported(
+                    outcome.read,
+                    outcome.added,
+                    outcome.replaced,
+                ));
+                self.clear_message("import");
+                self.clear_message("data-sync");
             }
-            Err(error) => self.push_warning(format!("Import failed: {error}")),
+            Err(error) => self.push_error(
+                "import",
+                self.language
+                    .operation_failed(self.language.text(Text::ImportDataOperation), &error),
+            ),
         }
     }
 
     fn open_lite_handoff(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Open temporary handoff from InstPlot Lite")
-            .add_filter("InstPlot handoff", &["instplot-handoff"])
+            .set_title(self.language.text(Text::OpenLiteDialog))
+            .add_filter(self.language.text(Text::HandoffFile), &["instplot-handoff"])
             .pick_file()
         else {
             return;
@@ -313,24 +361,32 @@ impl StudioApp {
                     self.document = imported.document;
                     self.edit_history.reset(&self.document, false);
                     self.resolved = resolved;
-                    self.project_path = None;
+                    self.workspace = WorkspaceState::from_lite(self.language.text(Text::Untitled));
                     self.selected_series = None;
-                    self.status = format!(
-                        "Opened Lite handoff from {} {}; temporary package removed",
-                        imported.producer_name, imported.producer_version
+                    self.messages.clear();
+                    self.set_success(
+                        self.language
+                            .opened_lite(&imported.producer_name, &imported.producer_version),
                     );
-                    self.clear_warning("Handoff failed:");
                 }
-                Err(error) => self.push_warning(format!("Handoff layout failed: {error}")),
+                Err(error) => self.push_error(
+                    "handoff-layout",
+                    self.language
+                        .operation_failed(self.language.text(Text::HandoffLayoutOperation), &error),
+                ),
             },
-            Err(error) => self.push_warning(format!("Handoff failed: {error}")),
+            Err(error) => self.push_error(
+                "handoff",
+                self.language
+                    .operation_failed(self.language.text(Text::OpenHandoffOperation), &error),
+            ),
         }
     }
 
     fn open_project(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Open InstPlot Studio project")
-            .add_filter("InstPlot Studio project", &["instplot"])
+            .set_title(self.language.text(Text::OpenProjectDialog))
+            .add_filter(self.language.text(Text::ProjectFile), &["instplot"])
             .pick_file()
         else {
             return;
@@ -339,37 +395,70 @@ impl StudioApp {
             Ok((document, report)) => match resolved_preview(&document) {
                 Ok(resolved) => {
                     let opened_primary = report.source == OpenProjectSource::Primary;
+                    let (session, session_warnings) =
+                        StudioSession::from_project(document.project());
                     self.publication_report = check_publication(&document, &resolved, 300);
                     self.document = document;
+                    self.session = session;
                     self.edit_history.reset(&self.document, opened_primary);
                     self.resolved = resolved;
-                    self.project_path = opened_primary.then(|| path.clone());
-                    self.warnings.extend(report.warnings);
-                    self.status = match report.source {
-                        OpenProjectSource::Primary => {
-                            format!("Opened project {}", path.display())
-                        }
-                        OpenProjectSource::Backup => {
-                            format!("Recovered project backup for {}", path.display())
-                        }
+                    self.selected_series = None;
+                    self.workspace = WorkspaceState::from_project(&path, !opened_primary);
+                    self.messages.clear();
+                    for (index, warning) in report
+                        .warnings
+                        .into_iter()
+                        .filter(|warning| !warning.starts_with("External data source"))
+                        .chain(session_warnings)
+                        .enumerate()
+                    {
+                        self.push_warning(format!("project-source-{index}"), warning);
+                    }
+                    let status = match report.source {
+                        OpenProjectSource::Primary => self.language.opened_project(&path),
+                        OpenProjectSource::Backup => self.language.recovered_project(&path),
                     };
+                    self.set_success(status);
                 }
-                Err(error) => self.push_warning(format!("Project layout failed: {error}")),
+                Err(error) => self.push_error(
+                    "layout",
+                    self.language
+                        .operation_failed(self.language.text(Text::ProjectLayoutOperation), &error),
+                ),
             },
-            Err(error) => self.push_warning(format!("Open project failed: {error}")),
+            Err(error) => self.push_error(
+                "open-project",
+                self.language
+                    .operation_failed(self.language.text(Text::OpenProjectOperation), &error),
+            ),
         }
+    }
+
+    fn new_project(&mut self) {
+        let document = FigureDocument::fixed();
+        let resolved = resolved_preview(&document)
+            .expect("the built-in new project must always resolve through formal layout");
+        self.publication_report = check_publication(&document, &resolved, 300);
+        self.document = document;
+        self.resolved = resolved;
+        (self.session, _) = StudioSession::from_project(self.document.project());
+        self.selected_series = None;
+        self.workspace = WorkspaceState::new(self.language.text(Text::Untitled));
+        self.edit_history.reset(&self.document, true);
+        self.messages.clear();
+        self.set_success(self.language.text(Text::Ready).to_owned());
     }
 
     fn save_project(&mut self, save_as: bool) -> bool {
         let path = if !save_as {
-            self.project_path.clone()
+            self.workspace.project_path().map(Path::to_path_buf)
         } else {
             None
         };
         let path = path.or_else(|| {
             rfd::FileDialog::new()
-                .set_title("Save InstPlot Studio project")
-                .add_filter("InstPlot Studio project", &["instplot"])
+                .set_title(self.language.text(Text::SaveProjectDialog))
+                .add_filter(self.language.text(Text::ProjectFile), &["instplot"])
                 .set_file_name("figure.instplot")
                 .save_file()
         });
@@ -378,14 +467,18 @@ impl StudioApp {
         };
         match self.document.save(&path) {
             Ok(()) => {
-                self.project_path = Some(path.clone());
+                self.workspace.note_saved(path.clone());
                 self.edit_history.mark_saved(&self.document);
-                self.status = format!("Saved project {}", path.display());
-                self.clear_warning("Save project failed:");
+                self.set_success(self.language.saved_project(&path));
+                self.clear_message("save-project");
                 true
             }
             Err(error) => {
-                self.push_warning(format!("Save project failed: {error}"));
+                self.push_error(
+                    "save-project",
+                    self.language
+                        .operation_failed(self.language.text(Text::SaveProjectOperation), &error),
+                );
                 false
             }
         }
@@ -393,7 +486,7 @@ impl StudioApp {
 
     fn export_pdf(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export publication figure")
+            .set_title(self.language.text(Text::ExportFigureDialog))
             .add_filter("PDF", &["pdf"])
             .set_file_name("instplot-studio-figure.pdf")
             .save_file()
@@ -406,16 +499,20 @@ impl StudioApp {
     fn export_pdf_to(&mut self, path: &Path) {
         match save_figure_pdf(&self.document, path) {
             Ok(size) => {
-                self.status = format!("Exported {} bytes to {}", size, path.display());
-                self.clear_warning("Export failed:");
+                self.set_success(self.language.exported(size, path));
+                self.clear_message("export");
             }
-            Err(error) => self.push_warning(format!("Export failed: {error}")),
+            Err(error) => self.push_error(
+                "export",
+                self.language
+                    .operation_failed(self.language.text(Text::ExportOperation), &error),
+            ),
         }
     }
 
     fn export_png(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export publication figure")
+            .set_title(self.language.text(Text::ExportFigureDialog))
             .add_filter("PNG", &["png"])
             .set_file_name("instplot-studio-figure.png")
             .save_file()
@@ -424,10 +521,14 @@ impl StudioApp {
         };
         match save_figure_png(&self.document, &path, 300) {
             Ok(size) => {
-                self.status = format!("Exported {} bytes to {}", size, path.display());
-                self.clear_warning("Export failed:");
+                self.set_success(self.language.exported(size, &path));
+                self.clear_message("export");
             }
-            Err(error) => self.push_warning(format!("Export failed: {error}")),
+            Err(error) => self.push_error(
+                "export",
+                self.language
+                    .operation_failed(self.language.text(Text::ExportOperation), &error),
+            ),
         }
     }
 
@@ -437,25 +538,33 @@ impl StudioApp {
             EditCommand::SetAxisRanges(ranges),
             Some(group),
         ) {
-            Ok(outcome) if outcome.changed && self.refresh_document("Layout failed:") => {
-                self.status = outcome.description;
-                self.clear_warning("Invalid axes:");
+            Ok(outcome) if outcome.changed && self.refresh_document("layout") => {
+                self.set_success(outcome.description);
+                self.clear_message("invalid-axes");
             }
             Ok(_) => {}
-            Err(error) => self.push_warning(format!("Invalid axes: {error}")),
+            Err(error) => self.push_error(
+                "invalid-axes",
+                self.language
+                    .operation_failed(self.language.text(Text::AxesOperation), &error),
+            ),
         }
     }
 
-    fn refresh_document(&mut self, warning_prefix: &str) -> bool {
+    fn refresh_document(&mut self, message_code: &'static str) -> bool {
         match resolved_preview(&self.document) {
             Ok(resolved) => {
                 self.publication_report = check_publication(&self.document, &resolved, 300);
                 self.resolved = resolved;
-                self.clear_warning(warning_prefix);
+                self.clear_message(message_code);
                 true
             }
             Err(error) => {
-                self.push_warning(format!("{warning_prefix} {error}"));
+                self.push_error(
+                    message_code,
+                    self.language
+                        .operation_failed(self.language.text(Text::LayoutOperation), &error),
+                );
                 false
             }
         }
@@ -463,17 +572,17 @@ impl StudioApp {
 
     fn undo(&mut self) {
         if let Some(description) = self.edit_history.undo(&mut self.document)
-            && self.refresh_document("Undo layout failed:")
+            && self.refresh_document("undo-layout")
         {
-            self.status = format!("Undo: {description}");
+            self.set_success(self.language.undo(&description));
         }
     }
 
     fn redo(&mut self) {
         if let Some(description) = self.edit_history.redo(&mut self.document)
-            && self.refresh_document("Redo layout failed:")
+            && self.refresh_document("redo-layout")
         {
-            self.status = format!("Redo: {description}");
+            self.set_success(self.language.redo(&description));
         }
     }
 
@@ -488,6 +597,7 @@ impl StudioApp {
     fn perform_action(&mut self, action: PendingAction) {
         self.pending_action = None;
         match action {
+            PendingAction::NewProject => self.new_project(),
             PendingAction::OpenLiteHandoff => self.open_lite_handoff(),
             PendingAction::OpenProject => self.open_project(),
             PendingAction::Exit => {
@@ -500,14 +610,16 @@ impl StudioApp {
         let Some(action) = self.pending_action else {
             return;
         };
-        egui::Window::new("Unsaved changes")
+        egui::Window::new(self.language.text(Text::UnsavedChanges))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .show(context, |ui| {
-                ui.label("The current project has unsaved changes.");
+                ui.label(self.language.text(Text::UnsavedExplanation));
                 ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() && self.save_project(false) {
+                    if ui.button(self.language.text(Text::Save)).clicked()
+                        && self.save_project(false)
+                    {
                         if action == PendingAction::Exit {
                             self.allow_close = true;
                             context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -516,7 +628,7 @@ impl StudioApp {
                             self.perform_action(action);
                         }
                     }
-                    if ui.button("Discard").clicked() {
+                    if ui.button(self.language.text(Text::Discard)).clicked() {
                         if action == PendingAction::Exit {
                             self.allow_close = true;
                             context.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -525,27 +637,51 @@ impl StudioApp {
                             self.perform_action(action);
                         }
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(self.language.text(Text::Cancel)).clicked() {
                         self.pending_action = None;
                     }
                 });
             });
     }
 
-    fn push_warning(&mut self, warning: String) {
-        if !self.warnings.contains(&warning) {
-            self.warnings.push(warning.clone());
-        }
-        self.status = warning;
+    fn set_success(&mut self, text: String) {
+        self.status = Some((text, Instant::now()));
     }
 
-    fn clear_warning(&mut self, prefix: &str) {
-        self.warnings.retain(|warning| !warning.starts_with(prefix));
+    fn push_warning(&mut self, code: impl Into<String>, text: String) {
+        self.push_message(code, MessageLevel::Warning, text);
+    }
+
+    fn push_error(&mut self, code: impl Into<String>, text: String) {
+        self.push_message(code, MessageLevel::Error, text);
+    }
+
+    fn push_message(&mut self, code: impl Into<String>, level: MessageLevel, text: String) {
+        let code = code.into();
+        if let Some(existing) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.code == code)
+        {
+            existing.level = level;
+            existing.text = text.clone();
+        } else {
+            self.messages.push(AppMessage {
+                code,
+                level,
+                text: text.clone(),
+            });
+        }
+        self.status = Some((text, Instant::now()));
+    }
+
+    fn clear_message(&mut self, code: &str) {
+        self.messages.retain(|message| message.code != code);
     }
 
     fn series_tree(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Series");
-        ui.collapsing("Fixed publication figure", |ui| {
+        ui.heading(self.language.text(Text::Series));
+        ui.collapsing(self.language.text(Text::FixedFigure), |ui| {
             for series in self.document.series() {
                 let selected = self.selected_series.as_deref() == Some(series.id.as_str());
                 if ui.selectable_label(selected, &series.label).clicked() {
@@ -554,61 +690,60 @@ impl StudioApp {
             }
         });
         ui.separator();
-        ui.heading("Data");
+        ui.heading(self.language.text(Text::Data));
         if self.session.datasets().is_empty() {
-            ui.weak("No imported datasets");
+            ui.weak(self.language.text(Text::NoData));
         } else {
             for dataset in self.session.datasets() {
                 ui.label(dataset.display_name());
-                ui.weak(format!(
-                    "{} rows · {} columns",
-                    dataset.row_count,
-                    dataset.columns.len()
-                ));
+                ui.weak(
+                    self.language
+                        .rows_columns(dataset.row_count, dataset.columns.len()),
+                );
             }
         }
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Inspector");
+        ui.heading(self.language.text(Text::Inspector));
         let series = self.selected_series.as_deref().and_then(|id| {
             self.document
                 .series()
                 .into_iter()
                 .find(|series| series.id == id)
         });
-        describe_selection(ui, series.as_ref());
+        describe_selection(ui, series.as_ref(), self.language);
 
         ui.separator();
-        ui.label("Axes ranges");
+        ui.label(self.language.text(Text::AxesRanges));
         let mut ranges = self.document.axis_ranges();
         let mut changed_group = None;
         let mut finish_coalescing = false;
         egui::Grid::new("axis_ranges")
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("X min");
+                ui.label(self.language.text(Text::XMin));
                 let response = ui.add(egui::DragValue::new(&mut ranges.x_min));
                 if response.changed() {
                     changed_group = Some(EditGroup::AxisXMinimum);
                 }
                 finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
-                ui.label("X max");
+                ui.label(self.language.text(Text::XMax));
                 let response = ui.add(egui::DragValue::new(&mut ranges.x_max));
                 if response.changed() {
                     changed_group = Some(EditGroup::AxisXMaximum);
                 }
                 finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
-                ui.label("Y min");
+                ui.label(self.language.text(Text::YMin));
                 let response = ui.add(egui::DragValue::new(&mut ranges.y_min));
                 if response.changed() {
                     changed_group = Some(EditGroup::AxisYMinimum);
                 }
                 finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 ui.end_row();
-                ui.label("Y max");
+                ui.label(self.language.text(Text::YMax));
                 let response = ui.add(egui::DragValue::new(&mut ranges.y_max));
                 if response.changed() {
                     changed_group = Some(EditGroup::AxisYMaximum);
@@ -624,21 +759,26 @@ impl StudioApp {
         }
 
         ui.separator();
-        ui.label("View only");
-        ui.add(egui::Slider::new(&mut self.canvas_zoom, 0.5..=3.0).text("Canvas zoom"));
-        ui.weak("Canvas zoom is not stored in the Figure Document.");
+        ui.label(self.language.text(Text::ViewOnly));
+        ui.add(
+            egui::Slider::new(&mut self.canvas_zoom, 0.5..=3.0)
+                .text(self.language.text(Text::CanvasZoom)),
+        );
+        ui.weak(self.language.text(Text::ZoomNotSaved));
 
         ui.separator();
-        ui.heading("Publication Check");
-        ui.label(format!(
-            "{} error · {} warning · {} information",
+        ui.heading(self.language.text(Text::PublicationCheck));
+        ui.label(self.language.publication_summary(
             self.publication_report.error_count(),
             self.publication_report.warning_count(),
-            self.publication_report.information_count()
+            self.publication_report.information_count(),
         ));
         ui.weak(format!(
-            "Rules: {} · Raster: {} dpi",
-            self.publication_report.rules_version, self.publication_report.raster_dpi
+            "{}: {} · {}: {} dpi",
+            self.language.text(Text::Rules),
+            self.publication_report.rules_version,
+            self.language.text(Text::Raster),
+            self.publication_report.raster_dpi
         ));
         for finding in &self.publication_report.findings {
             let text = if let Some(node) = &finding.node_id {
@@ -665,18 +805,25 @@ impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
         let dirty = self.edit_history.is_dirty(&self.document);
-        context.send_viewport_cmd(egui::ViewportCommand::Title(if dirty {
-            format!("{PRODUCT_NAME} — Unsaved")
-        } else {
-            PRODUCT_NAME.to_owned()
-        }));
+        let dirty_mark = if dirty { " *" } else { "" };
+        context.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{PRODUCT_NAME} — {}{dirty_mark}",
+            self.workspace.display_name()
+        )));
+        if self
+            .status
+            .as_ref()
+            .is_some_and(|(_, created)| created.elapsed().as_secs() >= 8)
+        {
+            self.status = None;
+        }
         if context.input(|input| input.viewport().close_requested()) && dirty && !self.allow_close {
             context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_action = Some(PendingAction::Exit);
         }
         if context.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                 egui::Key::O,
             ))
         }) {
@@ -685,17 +832,46 @@ impl eframe::App for StudioApp {
         if context.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
                 egui::Modifiers::COMMAND,
+                egui::Key::O,
+            ))
+        }) {
+            self.request_replacement(PendingAction::OpenProject);
+        }
+        if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
+                egui::Key::N,
+            ))
+        }) {
+            self.request_replacement(PendingAction::NewProject);
+        }
+        if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                egui::Key::S,
+            ))
+        }) {
+            self.save_project(true);
+        } else if context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
                 egui::Key::S,
             ))
         }) {
             self.save_project(false);
         }
-        if context.input_mut(|input| {
+        let redo_requested = context.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
                 egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
                 egui::Key::Z,
             ))
-        }) {
+        }) || context.input_mut(|input| {
+            input.consume_shortcut(&egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND,
+                egui::Key::Y,
+            ))
+        });
+        if redo_requested {
             self.redo();
         } else if context.input_mut(|input| {
             input.consume_shortcut(&egui::KeyboardShortcut::new(
@@ -708,61 +884,114 @@ impl eframe::App for StudioApp {
 
         egui::Panel::top("product_header").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                ui.heading(if dirty {
-                    format!("{PRODUCT_NAME} *")
-                } else {
-                    PRODUCT_NAME.to_owned()
+                ui.menu_button(self.language.text(Text::File), |ui| {
+                    if ui.button(self.language.text(Text::NewProject)).clicked() {
+                        ui.close();
+                        self.request_replacement(PendingAction::NewProject);
+                    }
+                    ui.separator();
+                    if ui.button(self.language.text(Text::OpenData)).clicked() {
+                        ui.close();
+                        self.open_data();
+                    }
+                    if ui.button(self.language.text(Text::OpenLite)).clicked() {
+                        ui.close();
+                        self.request_replacement(PendingAction::OpenLiteHandoff);
+                    }
+                    if ui.button(self.language.text(Text::OpenProject)).clicked() {
+                        ui.close();
+                        self.request_replacement(PendingAction::OpenProject);
+                    }
+                    ui.separator();
+                    if ui.button(self.language.text(Text::Save)).clicked() {
+                        ui.close();
+                        self.save_project(false);
+                    }
+                    if ui.button(self.language.text(Text::SaveAs)).clicked() {
+                        ui.close();
+                        self.save_project(true);
+                    }
+                    ui.separator();
+                    if ui.button(self.language.text(Text::Exit)).clicked() {
+                        ui.close();
+                        if dirty {
+                            self.pending_action = Some(PendingAction::Exit);
+                        } else {
+                            self.allow_close = true;
+                            context.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                });
+                ui.menu_button(self.language.text(Text::Edit), |ui| {
+                    let undo_text = self.edit_history.undo_description().map_or_else(
+                        || self.language.text(Text::Undo).to_owned(),
+                        |value| format!("{} {value}", self.language.text(Text::Undo)),
+                    );
+                    if ui
+                        .add_enabled(
+                            self.edit_history.undo_description().is_some(),
+                            egui::Button::new(undo_text),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.undo();
+                    }
+                    let redo_text = self.edit_history.redo_description().map_or_else(
+                        || self.language.text(Text::Redo).to_owned(),
+                        |value| format!("{} {value}", self.language.text(Text::Redo)),
+                    );
+                    if ui
+                        .add_enabled(
+                            self.edit_history.redo_description().is_some(),
+                            egui::Button::new(redo_text),
+                        )
+                        .clicked()
+                    {
+                        ui.close();
+                        self.redo();
+                    }
+                });
+                ui.menu_button(self.language.text(Text::View), |ui| {
+                    ui.menu_button(self.language.text(Text::Language), |ui| {
+                        if ui
+                            .selectable_label(
+                                self.language == UiLanguage::Chinese,
+                                self.language.text(Text::Chinese),
+                            )
+                            .clicked()
+                        {
+                            self.language = UiLanguage::Chinese;
+                            ui.close();
+                        }
+                        if ui
+                            .selectable_label(
+                                self.language == UiLanguage::English,
+                                self.language.text(Text::English),
+                            )
+                            .clicked()
+                        {
+                            self.language = UiLanguage::English;
+                            ui.close();
+                        }
+                    });
+                });
+                ui.menu_button(self.language.text(Text::Export), |ui| {
+                    if ui.button(self.language.text(Text::ExportPdf)).clicked() {
+                        ui.close();
+                        self.export_pdf();
+                    }
+                    if ui.button(self.language.text(Text::ExportPng)).clicked() {
+                        ui.close();
+                        self.export_png();
+                    }
                 });
                 ui.separator();
-                if ui.button("Open data…").clicked() {
-                    self.open_data();
+                ui.strong(format!("{}{dirty_mark}", self.workspace.display_name()));
+                if let Some((status, _)) = &self.status {
+                    ui.separator();
+                    ui.label(status);
                 }
-                if ui.button("Open from Lite…").clicked() {
-                    self.request_replacement(PendingAction::OpenLiteHandoff);
-                }
-                if ui.button("Open project…").clicked() {
-                    self.request_replacement(PendingAction::OpenProject);
-                }
-                if ui.button("Save project").clicked() {
-                    self.save_project(false);
-                }
-                if ui.button("Save project as…").clicked() {
-                    self.save_project(true);
-                }
-                let undo_text = self
-                    .edit_history
-                    .undo_description()
-                    .map_or_else(|| "Undo".to_owned(), |value| format!("Undo {value}"));
-                if ui
-                    .add_enabled(
-                        self.edit_history.undo_description().is_some(),
-                        egui::Button::new(undo_text),
-                    )
-                    .clicked()
-                {
-                    self.undo();
-                }
-                let redo_text = self
-                    .edit_history
-                    .redo_description()
-                    .map_or_else(|| "Redo".to_owned(), |value| format!("Redo {value}"));
-                if ui
-                    .add_enabled(
-                        self.edit_history.redo_description().is_some(),
-                        egui::Button::new(redo_text),
-                    )
-                    .clicked()
-                {
-                    self.redo();
-                }
-                if ui.button("Export PDF…").clicked() {
-                    self.export_pdf();
-                }
-                if ui.button("Export PNG…").clicked() {
-                    self.export_png();
-                }
-                ui.separator();
-                ui.label(&self.status);
             });
         });
 
@@ -779,12 +1008,20 @@ impl eframe::App for StudioApp {
         egui::Panel::bottom("warning_panel")
             .default_size(90.0)
             .show(ui, |ui| {
-                ui.heading("Warnings");
-                if self.warnings.is_empty() {
-                    ui.weak("No warnings");
+                ui.heading(self.language.text(Text::WarningsAndErrors));
+                if self.messages.is_empty() {
+                    ui.weak(self.language.text(Text::NoWarnings));
                 } else {
-                    for warning in &self.warnings {
-                        ui.colored_label(egui::Color32::LIGHT_RED, warning);
+                    for message in &self.messages {
+                        let (label, color) = match message.level {
+                            MessageLevel::Warning => {
+                                (self.language.text(Text::Warning), egui::Color32::YELLOW)
+                            }
+                            MessageLevel::Error => {
+                                (self.language.text(Text::Error), egui::Color32::LIGHT_RED)
+                            }
+                        };
+                        ui.colored_label(color, format!("{label}: {}", message.text));
                     }
                 }
             });
@@ -818,8 +1055,10 @@ impl eframe::App for StudioApp {
                 figure_rect.left_bottom() + egui::vec2(0.0, 18.0),
                 egui::Align2::LEFT_TOP,
                 format!(
-                    "preview framebuffer: {} × {} px",
-                    metrics.framebuffer_width, metrics.framebuffer_height
+                    "{}: {} × {} px",
+                    self.language.text(Text::PreviewFramebuffer),
+                    metrics.framebuffer_width,
+                    metrics.framebuffer_height
                 ),
                 egui::FontId::monospace(12.0),
                 ui.visuals().text_color(),
@@ -844,13 +1083,17 @@ fn resolved_preview(
     resolve_document(document)
 }
 
-fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
+fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>, language: UiLanguage) {
     if let Some(series) = series {
         ui.label(&series.label);
-        ui.weak(format!("Kind: {}", series.kind));
-        ui.weak(format!("Stable node: {}", series.id));
+        ui.weak(format!("{}: {}", language.text(Text::Kind), series.kind));
+        ui.weak(format!(
+            "{}: {}",
+            language.text(Text::StableNode),
+            series.id
+        ));
     } else {
-        ui.weak("Select a series to inspect it.");
+        ui.weak(language.text(Text::SelectSeries));
     }
 }
 

@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use instplot_core::DataSet;
+use instplot_core::{DataSet, DataSetKind, FitLink, NumericColumn};
 use instplot_io::{ImportError, read_data_file};
+
+use crate::{DataSourceKind, DataSourcePayload, ProjectDocument};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ImportOutcome {
@@ -28,6 +30,24 @@ impl StudioSession {
         self.datasets = datasets;
     }
 
+    /// Rebuild the non-authoritative UI session from a saved project.
+    ///
+    /// Embedded sources are restored exactly. External sources are restored only when their
+    /// recorded fingerprint still matches; missing or changed files remain represented by the
+    /// Figure Document and are reported as warnings instead of leaking data from the prior
+    /// workspace into the newly opened one.
+    pub fn from_project(project: &ProjectDocument) -> (Self, Vec<String>) {
+        let mut datasets = Vec::new();
+        let mut warnings = Vec::new();
+        for source in &project.data_sources {
+            match dataset_from_record(source) {
+                Ok(dataset) => datasets.push(dataset),
+                Err(warning) => warnings.push(warning),
+            }
+        }
+        (Self { datasets }, warnings)
+    }
+
     pub fn import_data_file(&mut self, path: &Path) -> Result<ImportOutcome, ImportError> {
         let imported = read_data_file(path)?;
         let mut outcome = ImportOutcome {
@@ -48,6 +68,70 @@ impl StudioSession {
             }
         }
         Ok(outcome)
+    }
+}
+
+fn dataset_from_record(source: &crate::DataSourceRecord) -> Result<DataSet, String> {
+    let kind = match source.kind {
+        DataSourceKind::Source => DataSetKind::Source,
+        DataSourceKind::Fit => DataSetKind::Fit,
+    };
+    let fit_link = source.fit.as_ref().map(|fit| FitLink {
+        parent_dataset_id: Some(fit.parent_data_source_id.clone()),
+        source_x_column: fit.source_x_column.clone(),
+        source_y_column: fit.source_y_column.clone(),
+        equation: fit.equation.clone(),
+        display_equation: fit.display_equation.clone(),
+    });
+    match &source.payload {
+        DataSourcePayload::Embedded {
+            columns,
+            row_count,
+            alive,
+            ..
+        } => Ok(DataSet {
+            source: PathBuf::from(format!("embedded://{}", source.id)),
+            label: Some(source.label.clone()),
+            kind,
+            plot_id: source.id.clone(),
+            fit_link,
+            encoding: "embedded".to_owned(),
+            separator: String::new(),
+            columns: columns
+                .iter()
+                .map(|column| NumericColumn {
+                    name: column.name.clone(),
+                    values: column.values.clone(),
+                })
+                .collect(),
+            row_count: *row_count,
+            alive: if alive.is_empty() {
+                vec![true; *row_count]
+            } else {
+                alive.clone()
+            },
+        }),
+        DataSourcePayload::External { path, fingerprint } => {
+            let path = Path::new(path);
+            let actual = crate::project::fingerprint(path)
+                .map_err(|error| format!("无法恢复外部数据源 {}：{error}", source.label))?;
+            if &actual != fingerprint {
+                return Err(format!(
+                    "外部数据源 {} 已变化，未载入到当前工作区",
+                    source.label
+                ));
+            }
+            let imported = read_data_file(path)
+                .map_err(|error| format!("无法恢复外部数据源 {}：{error}", source.label))?;
+            let mut dataset = imported
+                .into_iter()
+                .find(|dataset| dataset.plot_id == source.id)
+                .ok_or_else(|| format!("外部数据源 {} 中找不到保存的稳定标识", source.label))?;
+            dataset.label = Some(source.label.clone());
+            dataset.kind = kind;
+            dataset.fit_link = fit_link;
+            Ok(dataset)
+        }
     }
 }
 
@@ -167,5 +251,24 @@ mod tests {
         assert_eq!(link.source_y_column, "response");
         assert_eq!(link.display_equation.as_deref(), Some("y = 1 + x"));
         std::fs::remove_file(workbook).unwrap();
+    }
+
+    #[test]
+    fn opening_a_project_replaces_session_data_with_embedded_sources() {
+        let document = crate::FigureDocument::fixed();
+        let (session, warnings) = StudioSession::from_project(document.project());
+        assert!(warnings.is_empty());
+        assert_eq!(
+            session.dataset_count(),
+            document.project().data_sources.len()
+        );
+        assert_eq!(
+            session.datasets()[0].plot_id,
+            document.project().data_sources[0].id
+        );
+        assert_eq!(
+            session.datasets()[0].label.as_deref(),
+            Some(document.project().data_sources[0].label.as_str())
+        );
     }
 }
