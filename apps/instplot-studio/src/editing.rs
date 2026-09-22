@@ -1,6 +1,6 @@
 use crate::{
-    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, FigureDocument, LabelNode, MoveDirection,
-    ProjectDocument, SeriesCreationStyle,
+    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, ExportPreferences, FigureDocument,
+    LabelNode, MoveDirection, ProjectDocument, SeriesCreationStyle,
 };
 
 const MAX_HISTORY: usize = 100;
@@ -65,6 +65,7 @@ pub enum EditCommand {
         label_id: String,
         nodes: Vec<LabelNode>,
     },
+    SetExportPreferences(ExportPreferences),
 }
 
 impl EditCommand {
@@ -84,6 +85,7 @@ impl EditCommand {
             Self::SetFigureSize { .. } => "Change figure size",
             Self::SetArtistRecord(_) => "Change artist properties",
             Self::SetSemanticLabel { .. } => "Change semantic label",
+            Self::SetExportPreferences(_) => "Change export settings",
         }
     }
 
@@ -140,6 +142,7 @@ impl EditCommand {
             Self::SetSemanticLabel { label_id, nodes } => {
                 document.set_semantic_label_nodes(&label_id, nodes)
             }
+            Self::SetExportPreferences(preferences) => document.set_export_preferences(preferences),
         }
     }
 }

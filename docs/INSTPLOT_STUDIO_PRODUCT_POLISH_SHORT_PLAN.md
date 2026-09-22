@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE（P0–P6 DONE；P7 next）
+> 状态：ACTIVE（P0–P7 DONE；P8 next）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  
@@ -302,4 +302,6 @@ P5 的 artist、颜色、legend 和 annotation 编辑证据见
 [`../reports/B5P_P5_ARTIST_EDITING.md`](../reports/B5P_P5_ARTIST_EDITING.md)。当前任务是
 P6 的正式 hit map、选择反馈和纯 view-state 缩放证据见
 [`../reports/B5P_P6_CANVAS_INTERACTION.md`](../reports/B5P_P6_CANVAS_INTERACTION.md)。当前任务是
-**P7：Publication Check 与导出体验**。
+P7 的 finding 分组/定位和导出设置闭环证据见
+[`../reports/B5P_P7_PUBLICATION_EXPORT.md`](../reports/B5P_P7_PUBLICATION_EXPORT.md)。当前任务是
+**P8：稳定化、人工验收与阶段关闭**。

@@ -595,6 +595,21 @@ impl FigureDocument {
         &self.project.palette.colors
     }
 
+    pub fn export_preferences(&self) -> &crate::ExportPreferences {
+        &self.project.export_preferences
+    }
+
+    pub fn set_export_preferences(
+        &mut self,
+        preferences: crate::ExportPreferences,
+    ) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        candidate.export_preferences = preferences;
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
     pub fn create_series(
         &mut self,
         data_source_id: &str,
@@ -2093,6 +2108,36 @@ mod tests {
                 .unwrap();
         assert_eq!(document.project(), reopened.project());
         assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
+    }
+
+    #[test]
+    fn p7_export_preferences_round_trip_and_drive_publication_dpi() {
+        let mut document = FigureDocument::fixed();
+        let mut preferences = document.export_preferences().clone();
+        preferences.selected_raster_dpi = 600;
+        preferences.transparent_background = true;
+        document
+            .set_export_preferences(preferences.clone())
+            .unwrap();
+
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let reopened =
+            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
+                .unwrap();
+        assert_eq!(reopened.export_preferences(), &preferences);
+        let resolved = crate::resolve_document(&reopened).unwrap();
+        let report = crate::check_publication(
+            &reopened,
+            &resolved,
+            reopened.export_preferences().selected_raster_dpi,
+        );
+        assert_eq!(report.raster_dpi, 600);
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| { !finding.impact.is_empty() && !finding.remediation.is_empty() })
+        );
     }
 
     #[test]

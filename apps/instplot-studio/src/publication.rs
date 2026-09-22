@@ -27,6 +27,8 @@ pub struct PublicationFinding {
     pub severity: CheckSeverity,
     pub node_id: Option<String>,
     pub message: String,
+    pub impact: String,
+    pub remediation: String,
     pub overridden: bool,
     pub override_reason: Option<String>,
 }
@@ -99,13 +101,69 @@ fn finding(
     node_id: Option<String>,
     message: impl Into<String>,
 ) -> PublicationFinding {
+    let (impact, remediation) = finding_guidance(rule_id);
     PublicationFinding {
         rule_id: rule_id.to_owned(),
         severity,
         node_id,
         message: message.into(),
+        impact: impact.to_owned(),
+        remediation: remediation.to_owned(),
         overridden: false,
         override_reason: None,
+    }
+}
+
+fn finding_guidance(rule_id: &str) -> (&'static str, &'static str) {
+    match rule_id {
+        "physical_size" => (
+            "The final physical dimensions control readability and journal placement.",
+            "Choose an allowed figure width and height in Figure Size.",
+        ),
+        "font_size" => (
+            "Text that is too small may be unreadable after publication scaling.",
+            "Shorten labels or increase the final figure size; do not rely on preview zoom.",
+        ),
+        "stroke_width" => (
+            "Thin strokes can disappear in print or raster conversion.",
+            "Select the reported artist and increase its line or error-bar width.",
+        ),
+        "font_embedding" => (
+            "Missing embedded fonts can change scientific symbols on another computer.",
+            "Keep the bundled TeX Gyre Heros profile and export again as PDF.",
+        ),
+        "clipping" => (
+            "Clipped labels or marks make the exported figure incomplete.",
+            "Inspect the reported object, spacing, axis range, and final figure size.",
+        ),
+        "legend_overlap" => (
+            "A legend covering data can conceal evidence or make curves ambiguous.",
+            "Move the legend or reduce/reorder its visible entries.",
+        ),
+        "color_only_encoding" | "grayscale_distinguishability" | "cvd_risk" => (
+            "Readers may not be able to distinguish objects from colour alone.",
+            "Use distinct marker shapes or dash patterns in addition to colour.",
+        ),
+        "palette_relationship" => (
+            "Untracked colour relationships can break source/fit identity.",
+            "Use the project palette and keep related source and fit colours aligned.",
+        ),
+        "raster_dpi_pixels" => (
+            "Insufficient raster dimensions reduce detail and may fail submission checks.",
+            "Choose 300 dpi or higher and verify the shown pixel dimensions.",
+        ),
+        "transparency" => (
+            "Transparency may be flattened differently by journal production systems.",
+            "Use an opaque white background unless the target journal explicitly allows alpha.",
+        ),
+        "provenance_completeness" => (
+            "Incomplete provenance makes styling and data relationships harder to audit.",
+            "Keep palette, font, data, and explicit style records in the Figure Document.",
+        ),
+        _ => (
+            "This check affects publication reliability.",
+            "Inspect the reported object and adjust its applicable Inspector settings.",
+        ),
     }
 }
 

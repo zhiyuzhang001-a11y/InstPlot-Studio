@@ -15,7 +15,8 @@ use instplot_studio::{
     OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport, ReferenceOrientation,
     ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind, StrokeStyle, StudioSession,
     TickDirection, check_publication, import_handoff, product_info, resolve_document,
-    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
+    save_figure_pdf, save_figure_png_with_background, save_fixed_figure_pdf, save_fixed_figure_png,
+    write_handoff,
 };
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;
@@ -71,7 +72,11 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
         StartupCommand::PublicationCheck(path) => {
             let (document, _) = FigureDocument::open(&path)?;
             let resolved = resolve_document(&document)?;
-            let report = check_publication(&document, &resolved, 300);
+            let report = check_publication(
+                &document,
+                &resolved,
+                document.export_preferences().selected_raster_dpi,
+            );
             println!("{}", serde_json::to_string_pretty(&report)?);
             if report.error_count() > 0 {
                 Err(format!("publication check found {} error(s)", report.error_count()).into())
@@ -209,6 +214,7 @@ struct StudioApp {
     workspace: WorkspaceState,
     edit_history: EditHistory,
     pending_action: Option<PendingAction>,
+    pending_export: Option<ExportKind>,
     allow_close: bool,
     canvas_zoom: f32,
     canvas_scroll: egui::Vec2,
@@ -225,6 +231,12 @@ enum PendingAction {
     OpenLiteHandoff,
     OpenProject,
     Exit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExportKind {
+    Pdf,
+    Png,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -402,7 +414,11 @@ impl StudioApp {
         );
         let resolved = resolved_preview(&document)
             .expect("the validated Figure Document resolves through formal layout");
-        let publication_report = check_publication(&document, &resolved, 300);
+        let publication_report = check_publication(
+            &document,
+            &resolved,
+            document.export_preferences().selected_raster_dpi,
+        );
         let mut session = StudioSession::default();
         session.replace_datasets(datasets);
         let edit_history = EditHistory::new(&document, !startup_unsaved);
@@ -431,6 +447,7 @@ impl StudioApp {
             workspace,
             edit_history,
             pending_action: None,
+            pending_export: None,
             allow_close: false,
             canvas_zoom: 1.5,
             canvas_scroll: egui::Vec2::ZERO,
@@ -483,7 +500,11 @@ impl StudioApp {
                 self.document = candidate_document;
                 self.session = candidate_session;
                 self.edit_history.rebase_after_external_change();
-                self.publication_report = check_publication(&self.document, &resolved, 300);
+                self.publication_report = check_publication(
+                    &self.document,
+                    &resolved,
+                    self.document.export_preferences().selected_raster_dpi,
+                );
                 self.resolved = resolved;
                 self.workspace.note_data_import(&path);
                 if let Some(data_source_id) = self
@@ -523,7 +544,11 @@ impl StudioApp {
         match import_handoff(&path, HandoffCleanup::DeleteAfterImport) {
             Ok(imported) => match resolved_preview(&imported.document) {
                 Ok(resolved) => {
-                    self.publication_report = check_publication(&imported.document, &resolved, 300);
+                    self.publication_report = check_publication(
+                        &imported.document,
+                        &resolved,
+                        imported.document.export_preferences().selected_raster_dpi,
+                    );
                     self.session.replace_datasets(imported.datasets);
                     self.document = imported.document;
                     self.edit_history.reset(&self.document, false);
@@ -567,7 +592,11 @@ impl StudioApp {
                     let opened_primary = report.source == OpenProjectSource::Primary;
                     let (session, session_warnings) =
                         StudioSession::from_project(document.project());
-                    self.publication_report = check_publication(&document, &resolved, 300);
+                    self.publication_report = check_publication(
+                        &document,
+                        &resolved,
+                        document.export_preferences().selected_raster_dpi,
+                    );
                     self.document = document;
                     self.session = session;
                     self.edit_history.reset(&self.document, opened_primary);
@@ -611,7 +640,11 @@ impl StudioApp {
         let document = FigureDocument::fixed();
         let resolved = resolved_preview(&document)
             .expect("the built-in new project must always resolve through formal layout");
-        self.publication_report = check_publication(&document, &resolved, 300);
+        self.publication_report = check_publication(
+            &document,
+            &resolved,
+            document.export_preferences().selected_raster_dpi,
+        );
         self.document = document;
         self.resolved = resolved;
         (self.session, _) = StudioSession::from_project(self.document.project());
@@ -695,7 +728,13 @@ impl StudioApp {
         else {
             return;
         };
-        match save_figure_png(&self.document, &path, 300) {
+        let preferences = self.document.export_preferences();
+        match save_figure_png_with_background(
+            &self.document,
+            &path,
+            preferences.selected_raster_dpi,
+            preferences.transparent_background,
+        ) {
             Ok(size) => {
                 self.set_success(self.language.exported(size, &path));
                 self.clear_message("export");
@@ -705,6 +744,104 @@ impl StudioApp {
                 self.language
                     .operation_failed(self.language.text(Text::ExportOperation), &error),
             ),
+        }
+    }
+
+    fn export_dialog(&mut self, context: &egui::Context) {
+        let Some(kind) = self.pending_export else {
+            return;
+        };
+        let mut open = true;
+        let mut confirm = false;
+        let mut preferences = self.document.export_preferences().clone();
+        let before = preferences.clone();
+        let (width_mm, height_mm) = self.document.figure_size_mm();
+        egui::Window::new(self.language.text(Text::ExportSettings))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(context, |ui| {
+                ui.label(format!(
+                    "{}: {}",
+                    self.language.text(Text::Format),
+                    match kind {
+                        ExportKind::Pdf => "PDF",
+                        ExportKind::Png => "PNG",
+                    }
+                ));
+                ui.label(format!(
+                    "{}: {width_mm:.2} × {height_mm:.2} mm",
+                    self.language.text(Text::PhysicalSize)
+                ));
+                if kind == ExportKind::Png {
+                    egui::ComboBox::from_label(self.language.text(Text::RasterDpi))
+                        .selected_text(preferences.selected_raster_dpi.to_string())
+                        .show_ui(ui, |ui| {
+                            for dpi in preferences.raster_dpi.clone() {
+                                ui.selectable_value(
+                                    &mut preferences.selected_raster_dpi,
+                                    dpi,
+                                    dpi.to_string(),
+                                );
+                            }
+                        });
+                    let pixel_width = (width_mm / 25.4 * f64::from(preferences.selected_raster_dpi))
+                        .round() as u32;
+                    let pixel_height = (height_mm / 25.4
+                        * f64::from(preferences.selected_raster_dpi))
+                    .round() as u32;
+                    ui.label(format!(
+                        "{}: {pixel_width} × {pixel_height} px",
+                        self.language.text(Text::PixelDimensions)
+                    ));
+                    ui.checkbox(
+                        &mut preferences.transparent_background,
+                        self.language.text(Text::TransparentBackground),
+                    );
+                } else {
+                    ui.label(self.language.text(Text::PdfFontNote));
+                }
+                ui.separator();
+                ui.label(self.language.publication_summary(
+                    self.publication_report.error_count(),
+                    self.publication_report.warning_count(),
+                    self.publication_report.information_count(),
+                ));
+                if self.publication_report.error_count() > 0 {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        self.language.text(Text::FixErrorsBeforeExport),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.publication_report.error_count() == 0,
+                            egui::Button::new(self.language.text(Text::ExportNow)),
+                        )
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                    if ui.button(self.language.text(Text::Cancel)).clicked() {
+                        self.pending_export = None;
+                    }
+                });
+            });
+        if preferences != before {
+            self.execute_document_edit(
+                EditCommand::SetExportPreferences(preferences),
+                self.language.text(Text::ExportSettings),
+            );
+        }
+        if confirm {
+            self.pending_export = None;
+            match kind {
+                ExportKind::Pdf => self.export_pdf(),
+                ExportKind::Png => self.export_png(),
+            }
+        } else if !open {
+            self.pending_export = None;
         }
     }
 
@@ -730,7 +867,11 @@ impl StudioApp {
     fn refresh_document(&mut self, message_code: &'static str) -> bool {
         match resolved_preview(&self.document) {
             Ok(resolved) => {
-                self.publication_report = check_publication(&self.document, &resolved, 300);
+                self.publication_report = check_publication(
+                    &self.document,
+                    &resolved,
+                    self.document.export_preferences().selected_raster_dpi,
+                );
                 self.resolved = resolved;
                 self.clear_message(message_code);
                 true
@@ -1762,23 +1903,65 @@ impl StudioApp {
             self.language.text(Text::Raster),
             self.publication_report.raster_dpi
         ));
-        for finding in &self.publication_report.findings {
-            let text = if let Some(node) = &finding.node_id {
-                format!("{} · {} — {}", finding.rule_id, node, finding.message)
-            } else {
-                format!("{} — {}", finding.rule_id, finding.message)
-            };
-            match finding.severity {
-                CheckSeverity::Error => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, text);
+        let findings = self.publication_report.findings.clone();
+        for (severity, label, color) in [
+            (
+                CheckSeverity::Error,
+                self.language.text(Text::Error),
+                egui::Color32::LIGHT_RED,
+            ),
+            (
+                CheckSeverity::Warning,
+                self.language.text(Text::Warning),
+                egui::Color32::YELLOW,
+            ),
+            (
+                CheckSeverity::Information,
+                self.language.text(Text::Information),
+                ui.visuals().text_color(),
+            ),
+        ] {
+            let matching = findings
+                .iter()
+                .filter(|finding| finding.severity == severity)
+                .collect::<Vec<_>>();
+            ui.collapsing(format!("{label} ({})", matching.len()), |ui| {
+                for finding in matching {
+                    ui.group(|ui| {
+                        let title = finding.node_id.as_ref().map_or_else(
+                            || finding.rule_id.clone(),
+                            |node| format!("{} · {node}", finding.rule_id),
+                        );
+                        if let Some(node) = &finding.node_id {
+                            if ui.button(title).clicked() {
+                                self.selected_canvas_node = Some(node.clone());
+                                self.selected_series = self
+                                    .document
+                                    .series()
+                                    .into_iter()
+                                    .find(|series| series.id == *node)
+                                    .map(|series| series.id);
+                            }
+                        } else {
+                            ui.colored_label(color, title);
+                        }
+                        ui.colored_label(
+                            color,
+                            format!("{}: {}", self.language.text(Text::Why), finding.message),
+                        );
+                        ui.weak(format!(
+                            "{}: {}",
+                            self.language.text(Text::Impact),
+                            finding.impact
+                        ));
+                        ui.weak(format!(
+                            "{}: {}",
+                            self.language.text(Text::HowToFix),
+                            finding.remediation
+                        ));
+                    });
                 }
-                CheckSeverity::Warning => {
-                    ui.colored_label(egui::Color32::YELLOW, text);
-                }
-                CheckSeverity::Information => {
-                    ui.weak(text);
-                }
-            }
+            });
         }
     }
 
@@ -2299,11 +2482,11 @@ impl eframe::App for StudioApp {
                 ui.menu_button(self.language.text(Text::Export), |ui| {
                     if ui.button(self.language.text(Text::ExportPdf)).clicked() {
                         ui.close();
-                        self.export_pdf();
+                        self.pending_export = Some(ExportKind::Pdf);
                     }
                     if ui.button(self.language.text(Text::ExportPng)).clicked() {
                         ui.close();
-                        self.export_png();
+                        self.pending_export = Some(ExportKind::Png);
                     }
                 });
                 ui.separator();
@@ -2499,6 +2682,7 @@ impl eframe::App for StudioApp {
         }
         self.unsaved_dialog(&context);
         self.delete_data_source_dialog(&context);
+        self.export_dialog(&context);
     }
 }
 

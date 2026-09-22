@@ -1,5 +1,8 @@
 use core::fmt;
+use std::io::Write;
 use std::path::Path;
+
+use atomicwrites::{AllowOverwrite, AtomicFile};
 
 use crate::{DocumentLayoutError, FigureDocument, resolve_document};
 
@@ -8,7 +11,7 @@ pub enum FixedPdfExportError {
     Layout(DocumentLayoutError),
     Render(export_backend_spike::ExportError),
     EncodePng(String),
-    Write(std::io::Error),
+    AtomicWrite(String),
 }
 
 impl fmt::Display for FixedPdfExportError {
@@ -17,7 +20,7 @@ impl fmt::Display for FixedPdfExportError {
             Self::Layout(error) => write!(formatter, "layout figure: {error}"),
             Self::Render(error) => write!(formatter, "render fixed figure PDF: {error}"),
             Self::EncodePng(error) => write!(formatter, "encode figure PNG: {error}"),
-            Self::Write(error) => write!(formatter, "write fixed figure: {error}"),
+            Self::AtomicWrite(error) => write!(formatter, "atomically write figure: {error}"),
         }
     }
 }
@@ -38,12 +41,21 @@ pub fn fixed_figure_png(dpi: u32) -> Result<Vec<u8>, FixedPdfExportError> {
 }
 
 pub fn figure_png(document: &FigureDocument, dpi: u32) -> Result<Vec<u8>, FixedPdfExportError> {
+    figure_png_with_background(document, dpi, false)
+}
+
+pub fn figure_png_with_background(
+    document: &FigureDocument,
+    dpi: u32,
+    transparent_background: bool,
+) -> Result<Vec<u8>, FixedPdfExportError> {
     let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
-    let image = export_backend_spike::rasterize_direct(
-        &resolved.display,
-        dpi,
-        export_backend_spike::Background::White,
-    );
+    let background = if transparent_background {
+        export_backend_spike::Background::Transparent
+    } else {
+        export_backend_spike::Background::White
+    };
+    let image = export_backend_spike::rasterize_direct(&resolved.display, dpi, background);
     export_backend_spike::encode_png(&image)
         .map_err(|error| FixedPdfExportError::EncodePng(error.to_string()))
 }
@@ -57,7 +69,7 @@ pub fn save_figure_pdf(
     path: &Path,
 ) -> Result<usize, FixedPdfExportError> {
     let bytes = figure_pdf(document)?;
-    std::fs::write(path, &bytes).map_err(FixedPdfExportError::Write)?;
+    atomic_write(path, &bytes)?;
     Ok(bytes.len())
 }
 
@@ -71,8 +83,25 @@ pub fn save_figure_png(
     dpi: u32,
 ) -> Result<usize, FixedPdfExportError> {
     let bytes = figure_png(document, dpi)?;
-    std::fs::write(path, &bytes).map_err(FixedPdfExportError::Write)?;
+    atomic_write(path, &bytes)?;
     Ok(bytes.len())
+}
+
+pub fn save_figure_png_with_background(
+    document: &FigureDocument,
+    path: &Path,
+    dpi: u32,
+    transparent_background: bool,
+) -> Result<usize, FixedPdfExportError> {
+    let bytes = figure_png_with_background(document, dpi, transparent_background)?;
+    atomic_write(path, &bytes)?;
+    Ok(bytes.len())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FixedPdfExportError> {
+    AtomicFile::new(path, AllowOverwrite)
+        .write(|file| file.write_all(bytes))
+        .map_err(|error| FixedPdfExportError::AtomicWrite(error.to_string()))
 }
 
 #[cfg(test)]
@@ -93,5 +122,15 @@ mod tests {
         assert!(png.len() > 1_000);
         assert!(u32::from_be_bytes(png[16..20].try_into().unwrap()) > 1_000);
         assert!(u32::from_be_bytes(png[20..24].try_into().unwrap()) > 700);
+    }
+
+    #[test]
+    fn transparent_and_white_png_exports_are_distinct_valid_outputs() {
+        let document = FigureDocument::fixed();
+        let white = figure_png_with_background(&document, 300, false).unwrap();
+        let transparent = figure_png_with_background(&document, 300, true).unwrap();
+        assert_eq!(&white[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&transparent[..8], b"\x89PNG\r\n\x1a\n");
+        assert_ne!(white, transparent);
     }
 }

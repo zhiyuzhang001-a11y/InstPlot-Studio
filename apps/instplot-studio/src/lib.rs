@@ -18,8 +18,9 @@ pub use document::{
 };
 pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
 pub use export::{
-    FixedPdfExportError, figure_pdf, figure_png, fixed_figure_pdf, fixed_figure_png,
-    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
+    FixedPdfExportError, figure_pdf, figure_png, figure_png_with_background, fixed_figure_pdf,
+    fixed_figure_png, save_figure_pdf, save_figure_png, save_figure_png_with_background,
+    save_fixed_figure_pdf, save_fixed_figure_png,
 };
 pub use handoff::{
     HANDOFF_EXTENSION, HANDOFF_SCHEMA_VERSION, HandoffCleanup, HandoffError, HandoffImport,

@@ -395,7 +395,13 @@ pub struct OverrideRecord {
 pub struct ExportPreferences {
     pub vector_format: String,
     pub raster_dpi: Vec<u32>,
+    #[serde(default = "default_selected_raster_dpi")]
+    pub selected_raster_dpi: u32,
     pub transparent_background: bool,
+}
+
+fn default_selected_raster_dpi() -> u32 {
+    300
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -726,6 +732,7 @@ impl ProjectDocument {
             export_preferences: ExportPreferences {
                 vector_format: "pdf".to_owned(),
                 raster_dpi: vec![300, 600, 1200],
+                selected_raster_dpi: 300,
                 transparent_background: false,
             },
             provenance: vec![ProvenanceRecord {
@@ -927,6 +934,10 @@ impl ProjectDocument {
         if self.palette.id.trim().is_empty()
             || self.export_preferences.raster_dpi.is_empty()
             || self.export_preferences.raster_dpi.contains(&0)
+            || !self
+                .export_preferences
+                .raster_dpi
+                .contains(&self.export_preferences.selected_raster_dpi)
         {
             return Err(ProjectError::Validation(
                 "palette identity and raster export DPI must be defined".to_owned(),
