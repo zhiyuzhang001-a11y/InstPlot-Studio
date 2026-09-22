@@ -177,7 +177,7 @@ def main() -> int:
                 and checksum_ok
                 and pdf_bytes.startswith(b"%PDF-1.7")
                 and fonts_ok
-                and dimensions == (1051, 768),
+                and dimensions == (1004, 768),
                 f"embedded={embedded} checksum={checksum_ok} png={dimensions} fonts={fonts_ok}",
             )
         )

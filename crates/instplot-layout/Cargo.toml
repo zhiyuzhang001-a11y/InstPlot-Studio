@@ -10,6 +10,7 @@ publish = false
 parley = "=0.11.1"
 studio-render-spike.workspace = true
 text-shaping-spike = { path = "../../prototypes/text-shaping-spike" }
+ttf-parser = "=0.25.1"
 
 [dev-dependencies]
 export-backend-spike.workspace = true

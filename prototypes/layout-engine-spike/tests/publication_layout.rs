@@ -4,6 +4,7 @@ use layout_engine_spike::{
     layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
 use studio_render_spike::{DisplayItem, NodeId, PathVerb};
+use text_shaping_spike::Label;
 
 #[test]
 fn publication_fixture_is_deterministic_and_unclipped() {
@@ -116,6 +117,24 @@ fn publication_fixture_is_deterministic_and_unclipped() {
     for tick in first.x_axis.major.iter().chain(first.y_axis.major.iter()) {
         assert!(page.contains(tick.label_bounds));
     }
+    assert!(page.contains(first.x_label_bounds));
+    assert!(page.contains(first.y_label_bounds));
+    let x_tick_bottom = first
+        .x_axis
+        .major
+        .iter()
+        .map(|tick| tick.label_bounds.bottom())
+        .fold(first.axes.bottom(), f64::max);
+    let y_tick_left = first
+        .y_axis
+        .major
+        .iter()
+        .map(|tick| tick.label_bounds.x)
+        .fold(first.axes.x, f64::min);
+    assert!((first.x_label_bounds.y - x_tick_bottom - 4.0).abs() < 1e-9);
+    assert!((y_tick_left - first.y_label_bounds.right() - 4.0).abs() < 1e-9);
+    assert!((chart.height_pt - first.x_label_bounds.bottom() - 6.0).abs() < 1e-9);
+    assert!((first.y_label_bounds.x - 6.0).abs() < 1e-9);
 
     for pair in first.x_axis.major.windows(2) {
         assert_eq!(
@@ -169,6 +188,52 @@ fn publication_fixture_is_deterministic_and_unclipped() {
         first.hit_map.hit_test(point.0, point.1, 2.0).unwrap().node,
         series.node
     );
+}
+
+#[test]
+fn large_greek_and_scripted_labels_keep_balanced_clearance() {
+    let mut chart = publication_fixture();
+    chart.width_pt = 85.0 / 25.4 * 72.0;
+    chart.x.label = Label::Group(vec![
+        Label::GreekVariable('Δ'),
+        Label::VariableSubscript(Box::new(Label::Text("maximum".into()))),
+        Label::Text(" (".into()),
+        Label::Unit("rad".into()),
+        Label::Text(")".into()),
+    ]);
+    chart.y.label = Label::Group(vec![
+        Label::GreekVariable('Ω'),
+        Label::Superscript(Box::new(Label::Number("2".into()))),
+        Label::VariableSubscript(Box::new(Label::GreekVariable('μ'))),
+        Label::Text(" (".into()),
+        Label::Unit("A".into()),
+        Label::UnitSeparator,
+        Label::Unit("m".into()),
+        Label::Superscript(Box::new(Label::Number("−2".into()))),
+        Label::Text(")".into()),
+    ]);
+
+    let result = layout(&chart).unwrap();
+    let x_tick_bottom = result
+        .x_axis
+        .major
+        .iter()
+        .map(|tick| tick.label_bounds.bottom())
+        .fold(result.axes.bottom(), f64::max);
+    let y_tick_left = result
+        .y_axis
+        .major
+        .iter()
+        .map(|tick| tick.label_bounds.x)
+        .fold(result.axes.x, f64::min);
+    assert!((result.x_label_bounds.y - x_tick_bottom - 4.0).abs() < 1e-9);
+    assert!((y_tick_left - result.y_label_bounds.right() - 4.0).abs() < 1e-9);
+    assert!((chart.height_pt - result.x_label_bounds.bottom() - 6.0).abs() < 1e-9);
+    assert!((result.y_label_bounds.x - 6.0).abs() < 1e-9);
+    assert!(!result.warnings.iter().any(|warning| matches!(
+        warning,
+        LayoutWarning::TextOutsideFigure { .. }
+    )));
 }
 
 fn axis_segments(items: &[DisplayItem], source: NodeId) -> Vec<((f64, f64), (f64, f64))> {
@@ -268,6 +333,8 @@ fn layout_reports_non_convergence_from_unstable_metrics() {
             TextSize {
                 width: text.chars().count() as f64 * size_pt * if self.wide { 1.2 } else { 0.3 },
                 height: size_pt * if self.wide { 1.3 } else { 0.8 },
+                ascent: size_pt * if self.wide { 1.0 } else { 0.6 },
+                descent: size_pt * if self.wide { 0.3 } else { 0.2 },
             }
         }
     }

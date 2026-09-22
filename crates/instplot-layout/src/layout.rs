@@ -16,6 +16,9 @@ use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
 const TICK_FONT: f64 = 8.0;
 const LABEL_FONT: f64 = 9.0;
 const LEGEND_FONT: f64 = 8.0;
+const TICK_LABEL_PAD: f64 = 4.0;
+const AXIS_LABEL_PAD: f64 = 4.0;
+const FIGURE_EDGE_PAD: f64 = 6.0;
 const MAX_ITERATIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,6 +134,8 @@ pub struct LayoutResult {
     pub axes: Bounds,
     pub x_axis: AxisLayout,
     pub y_axis: AxisLayout,
+    pub x_label_bounds: Bounds,
+    pub y_label_bounds: Bounds,
     pub legend: Option<Bounds>,
     pub hit_map: HitMap,
     pub warnings: Vec<LayoutWarning>,
@@ -250,18 +255,20 @@ pub fn layout_with_measurer(
             .major
             .iter()
             .map(|tick| tick.label_bounds.height)
-            .fold(TICK_FONT, f64::max);
+            .fold(0.0, f64::max);
         let mut next = Margins {
-            left: 8.0 + max_y_tick + 5.0 + y_label.height + 8.0,
+            left: FIGURE_EDGE_PAD + y_label.height + AXIS_LABEL_PAD + max_y_tick + TICK_LABEL_PAD,
             right: 12.0,
             top: 12.0,
-            bottom: 6.0 + tick_height + 6.0 + x_label.height + 8.0,
+            bottom: TICK_LABEL_PAD
+                + tick_height
+                + AXIS_LABEL_PAD
+                + x_label.height
+                + FIGURE_EDGE_PAD,
         };
         if legend.outside {
             next.right += legend.bounds.width + 10.0;
         }
-        next.left = next.left.max(34.0);
-        next.bottom = next.bottom.max(32.0);
         if margins_close(margins, next) {
             margins = next;
             converged = true;
@@ -301,7 +308,7 @@ pub fn layout_with_measurer(
         path_proximity: Vec::new(),
     });
 
-    draw_axes(
+    let (x_label_bounds, y_label_bounds) = draw_axes(
         chart,
         axes,
         &x_axis,
@@ -322,6 +329,8 @@ pub fn layout_with_measurer(
         axes,
         x_axis,
         y_axis,
+        x_label_bounds,
+        y_label_bounds,
         legend: legend_choice.visible.then_some(legend_choice.bounds),
         hit_map,
         warnings,
@@ -461,13 +470,13 @@ fn axis_layout(
             label_bounds: if horizontal {
                 Bounds {
                     x: position - size.width / 2.0,
-                    y: axes.bottom() + 7.0,
+                    y: axes.bottom() + TICK_LABEL_PAD,
                     width: size.width,
                     height: size.height,
                 }
             } else {
                 Bounds {
-                    x: axes.x - 7.0 - size.width,
+                    x: axes.x - TICK_LABEL_PAD - size.width,
                     y: position - size.height / 2.0,
                     width: size.width,
                     height: size.height,
@@ -596,7 +605,7 @@ fn choose_legend(chart: &Chart, axes: Bounds, measurer: &mut dyn TextMeasurer) -
     } else {
         LegendChoice {
             bounds: Bounds {
-                x: axes.right() + 8.0,
+                x: axes.right() + 10.0,
                 y: axes.y,
                 width,
                 height,
@@ -703,7 +712,7 @@ fn draw_axes(
     list: &mut DisplayList,
     hit_map: &mut HitMap,
     warnings: &mut Vec<LayoutWarning>,
-) {
+) -> (Bounds, Bounds) {
     draw_grid(chart, axes, x_axis, y_axis, list);
     list.items.push(DisplayItem::Path {
         source: chart.id,
@@ -718,7 +727,10 @@ fn draw_axes(
             list,
             chart.x.id,
             &tick.label,
-            (tick.position, tick.label_bounds.bottom()),
+            (
+                tick.position,
+                tick.label_bounds.y + measurer.measure(&tick.label, TICK_FONT).ascent,
+            ),
             TICK_FONT,
             TextAnchor::Middle,
             0.0,
@@ -760,10 +772,10 @@ fn draw_axes(
             list,
             chart.y.id,
             &tick.label,
-            (
-                tick.label_bounds.x,
-                tick.position + tick.label_bounds.height / 3.0,
-            ),
+            (tick.label_bounds.x, {
+                let size = measurer.measure(&tick.label, TICK_FONT);
+                tick.position + (size.ascent - size.descent) / 2.0
+            }),
             TICK_FONT,
             TextAnchor::Start,
             0.0,
@@ -802,7 +814,7 @@ fn draw_axes(
     let x_size = measurer.measure_label(&chart.x.label, LABEL_FONT);
     let x_bounds = Bounds {
         x: axes.x + (axes.width - x_size.width) / 2.0,
-        y: chart.height_pt - x_size.height - 5.0,
+        y: chart.height_pt - FIGURE_EDGE_PAD - x_size.height,
         width: x_size.width,
         height: x_size.height,
     };
@@ -810,14 +822,14 @@ fn draw_axes(
         list,
         chart.x.id,
         &chart.x.label,
-        (axes.x + axes.width / 2.0, x_bounds.bottom()),
+        (axes.x + axes.width / 2.0, x_bounds.y + x_size.ascent),
         LABEL_FONT,
         TextAnchor::Middle,
         0.0,
     );
     let y_size = measurer.measure_label(&chart.y.label, LABEL_FONT);
     let y_bounds = Bounds {
-        x: 5.0,
+        x: FIGURE_EDGE_PAD,
         y: axes.y + (axes.height - y_size.width) / 2.0,
         width: y_size.height,
         height: y_size.width,
@@ -826,7 +838,10 @@ fn draw_axes(
         list,
         chart.y.id,
         &chart.y.label,
-        (y_bounds.x + y_bounds.width, axes.y + axes.height / 2.0),
+        (
+            y_bounds.right() - y_size.descent,
+            axes.y + axes.height / 2.0,
+        ),
         LABEL_FONT,
         TextAnchor::Middle,
         -90.0,
@@ -848,6 +863,7 @@ fn draw_axes(
             });
         }
     }
+    (x_bounds, y_bounds)
 }
 
 fn draw_grid(

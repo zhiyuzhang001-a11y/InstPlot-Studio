@@ -1359,6 +1359,7 @@ dependencies = [
  "parley",
  "studio-render-spike",
  "text-shaping-spike",
+ "ttf-parser",
 ]
 
 [[package]]

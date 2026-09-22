@@ -877,21 +877,22 @@ SVG 是 ADR-021 下的可选实验输出，不属于本节的必需集合。
 
 ## 9.3 物理尺寸验收
 
-默认 figure：89 mm × 65 mm。
+当前产品默认 figure：85 mm × 65 mm。Part A 的 89 mm × 65 mm 输出继续作为历史兼容性
+reference fixture，不再代表 Studio 默认值。
 
 PDF page 目标值：
 
 ```text
-width  = 89 / 25.4 × 72 = 252.28346 pt
+width  = 85 / 25.4 × 72 = 240.94488 pt
 height = 65 / 25.4 × 72 = 184.25197 pt
 ```
 
 采用 round-to-nearest 像素策略时：
 
 ```text
-300 dpi  → 1051 × 768 px
-600 dpi  → 2102 × 1535 px
-1200 dpi → 4205 × 3071 px
+300 dpi  → 1004 × 768 px
+600 dpi  → 2008 × 1535 px
+1200 dpi → 4016 × 3071 px
 ```
 
 允许文件格式 metadata 表示造成的极小浮点误差，但不能出现由 UI window 尺寸决定的页面变化。

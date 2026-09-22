@@ -470,7 +470,7 @@ impl ProjectDocument {
             producer_version: env!("CARGO_PKG_VERSION").to_owned(),
             figure: FigureRecord {
                 id: "node-1".to_owned(),
-                width_mm: 89.0,
+                width_mm: 85.0,
                 height_mm: 65.0,
                 axes: vec![AxesRecord {
                     id: "node-2".to_owned(),

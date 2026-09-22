@@ -53,7 +53,7 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 
 ## 4. 固定的 V1 默认行为
 
-- 单 axes；默认最终图尺寸继续以 89 mm × 65 mm 为基准，可在允许范围内编辑。
+- 单 axes；默认最终图尺寸以 85 mm × 65 mm 为基准，可在允许范围内编辑。
 - 四条 spine 默认可见。
 - 四条 spine 默认都绘制 major/minor tick mark，刻度方向朝内。
 - tick mark 从 spine 起画，不在 tick mark 与 spine 之间引入空隙；tick label 与 spine 的
@@ -153,9 +153,9 @@ B5P 的目标不是增加宏大功能，而是把已有底层能力组织成连�
 - 实现 axis label 的语义编辑入口，覆盖 plain text、变量、Greek、上下标和单位；
 - 将四边 spine、major/minor tick、tick direction、tick label side 和 grid 状态纳入文档；
 - 落实“四条 spine 有刻度、刻度朝内”的默认值；
-- X/Y 分别根据自身 tick label 的实际边界放置 axis label：先放 spine 与向内 tick，
-  再以 3.5 pt pad 放 tick label，最后以 4.0 pt pad 放 axis label；一侧的长文字不得
-  改变另一侧的语义间距；
+- 采用从画布外缘向内的约束：X/Y axis label 的实际墨迹外缘分别固定距画布底边/左边
+  6.0 pt，再以 4.0 pt pad 放最近的 tick label，tick label 再以 4.0 pt pad 连接 spine；
+  标签或符号变大时只向内调整 axes rectangle，一侧的长文字不得改变另一侧的语义间距；
 - margin 必须由所有 decoration 的 union bounds 加外缘安全距离计算；空间不足时缩小
   axes rectangle 或给出明确 warning，不能覆盖、裁切或静默减小字体；
 - 支持 figure width/height 与常用期刊尺寸预设，仍以毫米作为项目事实；

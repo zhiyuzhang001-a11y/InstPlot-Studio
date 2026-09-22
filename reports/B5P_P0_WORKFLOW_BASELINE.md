@@ -61,7 +61,7 @@ PNG dimensions, source immutability, workspace tests and Clippy.
    and it always means Open Data rather than distinguishing data from projects.
 6. PNG export is fixed at 300 dpi in the GUI. Figure size, background and raster choices are stored
    in the project model but do not have a complete product workflow.
-7. The axes rectangle is visually too wide relative to its height. The 89 mm × 65 mm figure is
+7. The axes rectangle is visually too wide relative to its height. The former 89 mm × 65 mm figure was
    landscape, but the effect is amplified by a roughly 7 pt spine-to-tick-label offset, an effective
    8 pt tick-label-to-axis-label gap and bottom-edge-anchored X label. P4 must calculate both axis
    labels from measured tick-label bounds instead of fixed page-edge positions.
@@ -79,8 +79,9 @@ PNG dimensions, source immutability, workspace tests and Clippy.
 - All four valid cases create schema-v1 projects with embedded data and reopen successfully.
 - The disabled outlier remains in the stored values with `alive=false`, is not drawn and does not
   influence the automatic Y range.
-- Every PNG is 1051 × 768 px, matching 89 mm × 65 mm at 300 dpi after rounding.
-- Every PDF is one page at approximately 252.3 × 184.3 pt and embeds subsetted
+- Regenerated PNG baselines are 1004 × 768 px, matching the current 85 mm × 65 mm default at
+  300 dpi after rounding.
+- Regenerated PDFs are one page at approximately 240.9 × 184.3 pt and embed subsetted
   TeX Gyre Heros Regular and Italic fonts.
 - The source+fit case preserves Parent-ID, Source-X/Y, precise equation and display equation.
 - Visual rendering confirms the axes and plotted points are sharp and deterministic; it also confirms

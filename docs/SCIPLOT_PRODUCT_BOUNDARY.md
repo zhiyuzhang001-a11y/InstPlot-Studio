@@ -292,7 +292,7 @@ Studio 必须显式支持：
 
 Studio 必须把既有两份规范转化为可执行的 style token 和规则系统，包括：
 
-- 89 mm × 65 mm 默认尺寸；
+- 85 mm × 65 mm 默认尺寸；
 - pt、mm、inch 与像素转换；
 - 全局 Text scale；
 - axis、tick、curve、marker、error bar 的默认尺寸；
