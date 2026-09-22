@@ -1,0 +1,817 @@
+use std::collections::BTreeMap;
+
+use export_backend_spike::ResolvedItem;
+use instplot_layout::SelectableRole;
+use serde::{Deserialize, Serialize};
+use studio_render_spike::DisplayItem;
+
+use crate::palette::{PaletteKind, builtin_palette, registry_matches_metadata};
+use crate::semantic::{color_id, non_color_signature, policy_for};
+use crate::{FigureDocument, ProjectDocument, ResolvedFigure};
+
+pub const PUBLICATION_RULES_VERSION: &str = "instplot-publication-rules-v1";
+pub const CVD_SIMULATION_VERSION: &str = "machado-2009-deuteranopia-severity-1-linear-srgb-v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckSeverity {
+    Error,
+    Warning,
+    Information,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationFinding {
+    pub rule_id: String,
+    pub severity: CheckSeverity,
+    pub node_id: Option<String>,
+    pub message: String,
+    pub overridden: bool,
+    pub override_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationReport {
+    pub rules_version: String,
+    pub raster_dpi: u32,
+    pub findings: Vec<PublicationFinding>,
+}
+
+impl PublicationReport {
+    pub fn error_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.severity == CheckSeverity::Error)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.severity == CheckSeverity::Warning)
+            .count()
+    }
+
+    pub fn information_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.severity == CheckSeverity::Information)
+            .count()
+    }
+}
+
+pub fn check_publication(
+    document: &FigureDocument,
+    resolved: &ResolvedFigure,
+    raster_dpi: u32,
+) -> PublicationReport {
+    let project = document.project();
+    let mut findings = vec![
+        physical_size(project),
+        font_size(resolved),
+        stroke_width(resolved),
+        font_embedding(resolved),
+        clipping(resolved),
+        legend_overlap(resolved),
+        color_only_encoding(project),
+        palette_relationship(project),
+        grayscale_distinguishability(project),
+        cvd_risk(project),
+        raster_dimensions(project, raster_dpi),
+        transparency(project),
+        provenance(project),
+    ];
+    for finding in &mut findings {
+        apply_override(project, finding);
+    }
+    PublicationReport {
+        rules_version: PUBLICATION_RULES_VERSION.to_owned(),
+        raster_dpi,
+        findings,
+    }
+}
+
+fn finding(
+    rule_id: &str,
+    severity: CheckSeverity,
+    node_id: Option<String>,
+    message: impl Into<String>,
+) -> PublicationFinding {
+    PublicationFinding {
+        rule_id: rule_id.to_owned(),
+        severity,
+        node_id,
+        message: message.into(),
+        overridden: false,
+        override_reason: None,
+    }
+}
+
+fn physical_size(project: &ProjectDocument) -> PublicationFinding {
+    let width = project.figure.width_mm;
+    let height = project.figure.height_mm;
+    let severity = if width < 30.0 || height < 30.0 || width > 250.0 || height > 250.0 {
+        CheckSeverity::Warning
+    } else {
+        CheckSeverity::Information
+    };
+    finding(
+        "physical_size",
+        severity,
+        Some(project.figure.id.clone()),
+        format!("figure physical size is {width:.2} × {height:.2} mm"),
+    )
+}
+
+fn font_size(resolved: &ResolvedFigure) -> PublicationFinding {
+    let smallest = resolved
+        .display
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ResolvedItem::Text(text) => Some((text.source, text.size as f64)),
+            ResolvedItem::Graphics(_) => None,
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1));
+    let Some((node, size)) = smallest else {
+        return finding(
+            "font_size",
+            CheckSeverity::Error,
+            None,
+            "resolved figure contains no text",
+        );
+    };
+    let severity = if size < 5.0 {
+        CheckSeverity::Error
+    } else if size < 7.0 {
+        CheckSeverity::Warning
+    } else {
+        CheckSeverity::Information
+    };
+    finding(
+        "font_size",
+        severity,
+        project_id(resolved, node),
+        format!("minimum resolved font size is {size:.2} pt"),
+    )
+}
+
+fn stroke_width(resolved: &ResolvedFigure) -> PublicationFinding {
+    let smallest = resolved
+        .display
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ResolvedItem::Graphics(DisplayItem::Path {
+                source,
+                stroke: Some(stroke),
+                ..
+            }) => Some((*source, stroke.width.get())),
+            _ => None,
+        })
+        .min_by(|left, right| left.1.total_cmp(&right.1));
+    let Some((node, width)) = smallest else {
+        return finding(
+            "stroke_width",
+            CheckSeverity::Error,
+            None,
+            "resolved figure contains no stroked paths",
+        );
+    };
+    let severity = if width < 0.2 {
+        CheckSeverity::Error
+    } else if width < 0.35 {
+        CheckSeverity::Warning
+    } else {
+        CheckSeverity::Information
+    };
+    finding(
+        "stroke_width",
+        severity,
+        project_id(resolved, node),
+        format!("minimum resolved stroke width is {width:.2} pt"),
+    )
+}
+
+fn font_embedding(resolved: &ResolvedFigure) -> PublicationFinding {
+    let diagnostics = resolved.display.font_diagnostics();
+    if let Some(problem) = diagnostics.iter().find(|diagnostic| {
+        diagnostic.missing_glyph
+            || !diagnostic.embedding_allowed
+            || !diagnostic.subsetting_allowed
+            || !matches!(
+                diagnostic.origin,
+                export_backend_spike::FontOrigin::BundledPrimary
+            )
+    }) {
+        return finding(
+            "font_embedding",
+            CheckSeverity::Error,
+            project_id(resolved, problem.source),
+            format!(
+                "font {} is not a complete embeddable bundled run",
+                problem.postscript_name
+            ),
+        );
+    }
+    match export_backend_spike::to_pdf(&resolved.display) {
+        Ok(pdf) if pdf.windows(9).any(|window| window == b"/FontFile") => finding(
+            "font_embedding",
+            CheckSeverity::Information,
+            None,
+            format!(
+                "{} resolved font runs are bundled and the PDF contains embedded font streams",
+                diagnostics.len()
+            ),
+        ),
+        Ok(_) => finding(
+            "font_embedding",
+            CheckSeverity::Error,
+            None,
+            "PDF does not contain an embedded font stream",
+        ),
+        Err(error) => finding(
+            "font_embedding",
+            CheckSeverity::Error,
+            None,
+            format!("PDF font verification failed: {error}"),
+        ),
+    }
+}
+
+fn clipping(resolved: &ResolvedFigure) -> PublicationFinding {
+    let pushes = resolved
+        .display
+        .items
+        .iter()
+        .filter(|item| matches!(item, ResolvedItem::Graphics(DisplayItem::ClipPush { .. })))
+        .count();
+    let pops = resolved
+        .display
+        .items
+        .iter()
+        .filter(|item| matches!(item, ResolvedItem::Graphics(DisplayItem::ClipPop { .. })))
+        .count();
+    let valid = pushes > 0 && pushes == pops;
+    finding(
+        "clipping",
+        if valid {
+            CheckSeverity::Information
+        } else {
+            CheckSeverity::Error
+        },
+        None,
+        format!("data clipping stack contains {pushes} push and {pops} pop operations"),
+    )
+}
+
+fn legend_overlap(resolved: &ResolvedFigure) -> PublicationFinding {
+    let Some(legend) = resolved
+        .layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.role == SelectableRole::Legend)
+    else {
+        return finding(
+            "legend_overlap",
+            CheckSeverity::Information,
+            None,
+            "figure has no legend",
+        );
+    };
+    let overlaps = resolved.layout.result.hit_map.items.iter().any(|item| {
+        if item.node == legend.node {
+            return false;
+        }
+        match item.role {
+            SelectableRole::Series => item
+                .path_proximity
+                .windows(2)
+                .any(|segment| segment_intersects_bounds(segment[0], segment[1], legend.bounds)),
+            SelectableRole::DataPoint | SelectableRole::ErrorBar => {
+                legend.bounds.intersection_area(item.bounds) > 0.5
+            }
+            _ => false,
+        }
+    });
+    finding(
+        "legend_overlap",
+        if overlaps {
+            CheckSeverity::Warning
+        } else {
+            CheckSeverity::Information
+        },
+        project_id(resolved, legend.node),
+        if overlaps {
+            "legend bounds overlap at least one plotted artist"
+        } else {
+            "legend bounds do not overlap plotted artists"
+        },
+    )
+}
+
+fn segment_intersects_bounds(
+    start: (f64, f64),
+    end: (f64, f64),
+    bounds: instplot_layout::Bounds,
+) -> bool {
+    let inside = |(x, y): (f64, f64)| {
+        x >= bounds.x && x <= bounds.right() && y >= bounds.y && y <= bounds.bottom()
+    };
+    if inside(start) || inside(end) {
+        return true;
+    }
+    let corners = [
+        (bounds.x, bounds.y),
+        (bounds.right(), bounds.y),
+        (bounds.right(), bounds.bottom()),
+        (bounds.x, bounds.bottom()),
+    ];
+    corners
+        .iter()
+        .copied()
+        .zip(corners.iter().copied().cycle().skip(1))
+        .take(4)
+        .any(|(left, right)| segments_intersect(start, end, left, right))
+}
+
+fn segments_intersect(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    fn cross(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+    }
+    let ab_c = cross(a, b, c);
+    let ab_d = cross(a, b, d);
+    let cd_a = cross(c, d, a);
+    let cd_b = cross(c, d, b);
+    ab_c * ab_d <= 0.0 && cd_a * cd_b <= 0.0
+}
+
+fn color_only_encoding(project: &ProjectDocument) -> PublicationFinding {
+    let risky = risky_color_pair(project, |left, right| left != right);
+    match risky {
+        Some((left, right)) => finding(
+            "color_only_encoding",
+            CheckSeverity::Warning,
+            Some(left.clone()),
+            format!("artists {left} and {right} differ only by colour"),
+        ),
+        None => finding(
+            "color_only_encoding",
+            CheckSeverity::Information,
+            None,
+            "scientific roles retain marker, dash, or position encoding in addition to colour",
+        ),
+    }
+}
+
+fn palette_relationship(project: &ProjectDocument) -> PublicationFinding {
+    let metadata = builtin_palette(&project.palette.id);
+    let valid = metadata.is_some_and(|entry| {
+        entry.kind == PaletteKind::Qualitative
+            && entry.recommended
+            && registry_matches_metadata(&project.palette)
+    });
+    finding(
+        "palette_data_relationship",
+        if valid {
+            CheckSeverity::Information
+        } else {
+            CheckSeverity::Warning
+        },
+        Some(project.figure.id.clone()),
+        if valid {
+            "active palette is a recommended qualitative palette for object identities"
+        } else {
+            "active palette metadata is missing or does not match categorical object identities"
+        },
+    )
+}
+
+fn grayscale_distinguishability(project: &ProjectDocument) -> PublicationFinding {
+    let risky = risky_color_pair(project, |left, right| {
+        (relative_luminance(left) - relative_luminance(right)).abs() < 0.08
+    });
+    match risky {
+        Some((left, right)) => finding(
+            "grayscale_distinguishability",
+            CheckSeverity::Warning,
+            Some(left.clone()),
+            format!(
+                "artists {left} and {right} become similar in grayscale without redundant style"
+            ),
+        ),
+        None => finding(
+            "grayscale_distinguishability",
+            CheckSeverity::Information,
+            None,
+            "grayscale-similar colours retain distinct non-colour encodings",
+        ),
+    }
+}
+
+fn cvd_risk(project: &ProjectDocument) -> PublicationFinding {
+    let risky = risky_color_pair(project, |left, right| {
+        let left = simulate_deuteranopia(left);
+        let right = simulate_deuteranopia(right);
+        color_distance(left, right) < 36.0
+    });
+    match risky {
+        Some((left, right)) => finding(
+            "cvd_risk",
+            CheckSeverity::Warning,
+            Some(left.clone()),
+            format!(
+                "artists {left} and {right} are difficult to distinguish under deuteranopia simulation"
+            ),
+        ),
+        None => finding(
+            "cvd_risk",
+            CheckSeverity::Information,
+            None,
+            "deuteranopia-similar colours retain distinct non-colour encodings",
+        ),
+    }
+}
+
+fn raster_dimensions(project: &ProjectDocument, dpi: u32) -> PublicationFinding {
+    let width = (project.figure.width_mm / 25.4 * f64::from(dpi)).round() as u32;
+    let height = (project.figure.height_mm / 25.4 * f64::from(dpi)).round() as u32;
+    let listed = project.export_preferences.raster_dpi.contains(&dpi);
+    let severity = if dpi < 150 {
+        CheckSeverity::Error
+    } else if dpi < 300 || !listed {
+        CheckSeverity::Warning
+    } else {
+        CheckSeverity::Information
+    };
+    finding(
+        "raster_dpi_pixels",
+        severity,
+        Some(project.figure.id.clone()),
+        format!("{dpi} dpi export resolves to {width} × {height} pixels"),
+    )
+}
+
+fn transparency(project: &ProjectDocument) -> PublicationFinding {
+    let transparent_color = project
+        .palette
+        .colors
+        .iter()
+        .find(|color| color.rgba[3] != 255);
+    let risky = project.export_preferences.transparent_background || transparent_color.is_some();
+    finding(
+        "transparency",
+        if risky {
+            CheckSeverity::Warning
+        } else {
+            CheckSeverity::Information
+        },
+        transparent_color
+            .map(|color| color.id.clone())
+            .or_else(|| Some(project.figure.id.clone())),
+        if risky {
+            "transparent background or palette alpha requires journal-specific verification"
+        } else {
+            "export background and palette colours are fully opaque"
+        },
+    )
+}
+
+fn provenance(project: &ProjectDocument) -> PublicationFinding {
+    let palette_complete = registry_matches_metadata(&project.palette);
+    let document_complete = !project.provenance.is_empty()
+        && project
+            .provenance
+            .iter()
+            .all(|record| !record.id.is_empty() && !record.operation.is_empty());
+    finding(
+        "provenance_completeness",
+        if palette_complete && document_complete {
+            CheckSeverity::Information
+        } else {
+            CheckSeverity::Error
+        },
+        Some(project.figure.id.clone()),
+        if palette_complete && document_complete {
+            "palette and document provenance are complete and version-pinned"
+        } else {
+            "palette or document provenance is incomplete"
+        },
+    )
+}
+
+fn project_id(resolved: &ResolvedFigure, node: studio_render_spike::NodeId) -> Option<String> {
+    resolved.layout.project_ids.get(&node).cloned()
+}
+
+fn artist_colors(project: &ProjectDocument) -> Vec<(&crate::ArtistRecord, [u8; 4])> {
+    let colors = project
+        .palette
+        .colors
+        .iter()
+        .map(|color| (color.id.as_str(), color.rgba))
+        .collect::<BTreeMap<_, _>>();
+    project
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| {
+            color_id(artist).and_then(|id| colors.get(id).copied().map(|rgba| (artist, rgba)))
+        })
+        .collect()
+}
+
+fn risky_color_pair(
+    project: &ProjectDocument,
+    color_is_risky: impl Fn([u8; 4], [u8; 4]) -> bool,
+) -> Option<(String, String)> {
+    let artists = artist_colors(project);
+    for (index, (left, left_color)) in artists.iter().enumerate() {
+        for (right, right_color) in artists.iter().skip(index + 1) {
+            if left_color != right_color
+                && color_is_risky(*left_color, *right_color)
+                && non_color_signature(left) == non_color_signature(right)
+                && policy_for(left.role).non_color == policy_for(right.role).non_color
+            {
+                return Some((left.id.clone(), right.id.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn relative_luminance(color: [u8; 4]) -> f64 {
+    fn channel(value: u8) -> f64 {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+}
+
+fn simulate_deuteranopia(color: [u8; 4]) -> [f64; 3] {
+    let linear = [
+        srgb_channel_to_linear(color[0]),
+        srgb_channel_to_linear(color[1]),
+        srgb_channel_to_linear(color[2]),
+    ];
+    // Machado, Oliveira and Fernandes (2009), severity 1.0 deuteranopia.
+    let transformed = [
+        0.367_322 * linear[0] + 0.860_646 * linear[1] - 0.227_968 * linear[2],
+        0.280_085 * linear[0] + 0.672_501 * linear[1] + 0.047_413 * linear[2],
+        -0.011_820 * linear[0] + 0.042_940 * linear[1] + 0.968_881 * linear[2],
+    ];
+    transformed.map(linear_channel_to_srgb)
+}
+
+fn srgb_channel_to_linear(value: u8) -> f64 {
+    let value = f64::from(value) / 255.0;
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_channel_to_srgb(value: f64) -> f64 {
+    let value = value.clamp(0.0, 1.0);
+    let encoded = if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
+    };
+    encoded * 255.0
+}
+
+fn color_distance(left: [f64; 3], right: [f64; 3]) -> f64 {
+    ((left[0] - right[0]).powi(2) + (left[1] - right[1]).powi(2) + (left[2] - right[2]).powi(2))
+        .sqrt()
+}
+
+fn apply_override(project: &ProjectDocument, finding: &mut PublicationFinding) {
+    let property = format!("publication_check:{}", finding.rule_id);
+    let Some(record) = project.overrides.iter().find(|record| {
+        record.property == property
+            && finding.node_id.as_deref().is_none_or(|node| {
+                record.target_id == node || record.target_id == project.figure.id
+            })
+    }) else {
+        return;
+    };
+    let Some(reason) = record.value.get("reason").and_then(|value| value.as_str()) else {
+        return;
+    };
+    if reason.trim().is_empty() {
+        return;
+    }
+    finding.severity = CheckSeverity::Information;
+    finding.overridden = true;
+    finding.override_reason = Some(reason.to_owned());
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use studio_render_spike::{DisplayItem, Pt};
+
+    use super::*;
+    use crate::{
+        ArtistKind, ArtistProperties, FigureDocument, OverrideRecord, PaletteColor,
+        resolve_document,
+    };
+
+    fn report(document: &FigureDocument, dpi: u32) -> PublicationReport {
+        let resolved = resolve_document(document).unwrap();
+        check_publication(document, &resolved, dpi)
+    }
+
+    #[test]
+    fn fixed_fixture_runs_every_versioned_rule() {
+        let report = report(&FigureDocument::fixed(), 300);
+        assert_eq!(report.rules_version, PUBLICATION_RULES_VERSION);
+        assert_eq!(
+            CVD_SIMULATION_VERSION,
+            "machado-2009-deuteranopia-severity-1-linear-srgb-v1"
+        );
+        assert_eq!(report.findings.len(), 13);
+        assert_eq!(report.error_count(), 0);
+        assert!(report.warning_count() <= 1);
+        assert!(report.findings.iter().all(|finding| {
+            finding.severity == CheckSeverity::Information || finding.node_id.is_some()
+        }));
+        for rule in [
+            "physical_size",
+            "font_size",
+            "stroke_width",
+            "font_embedding",
+            "clipping",
+            "legend_overlap",
+            "color_only_encoding",
+            "palette_data_relationship",
+            "grayscale_distinguishability",
+            "cvd_risk",
+            "raster_dpi_pixels",
+            "transparency",
+            "provenance_completeness",
+        ] {
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.rule_id == rule)
+            );
+        }
+    }
+
+    #[test]
+    fn export_parameters_and_document_changes_update_findings() {
+        let mut project = ProjectDocument::fixed_fixture();
+        project.figure.width_mm = 20.0;
+        project.export_preferences.transparent_background = true;
+        let document = FigureDocument::from_project(project).unwrap();
+        let report = report(&document, 120);
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "physical_size" && finding.severity == CheckSeverity::Warning
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "raster_dpi_pixels" && finding.severity == CheckSeverity::Error
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "transparency" && finding.severity == CheckSeverity::Warning
+        }));
+    }
+
+    #[test]
+    fn override_requires_and_records_a_reason() {
+        let mut project = ProjectDocument::fixed_fixture();
+        project.figure.width_mm = 20.0;
+        project.overrides.push(OverrideRecord {
+            target_id: project.figure.id.clone(),
+            property: "publication_check:physical_size".to_owned(),
+            value: json!({"reason": "journal requests a narrow inset"}),
+        });
+        let document = FigureDocument::from_project(project).unwrap();
+        let override_report = report(&document, 300);
+        let finding = override_report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "physical_size")
+            .unwrap();
+        assert!(finding.overridden);
+        assert_eq!(finding.severity, CheckSeverity::Information);
+        assert_eq!(
+            finding.override_reason.as_deref(),
+            Some("journal requests a narrow inset")
+        );
+
+        let mut invalid = ProjectDocument::fixed_fixture();
+        invalid.overrides.push(OverrideRecord {
+            target_id: invalid.figure.id.clone(),
+            property: "publication_check:physical_size".to_owned(),
+            value: json!({"reason": ""}),
+        });
+        assert!(FigureDocument::from_project(invalid).is_err());
+    }
+
+    #[test]
+    fn structural_rule_fixtures_detect_font_stroke_and_clip_failures() {
+        let document = FigureDocument::fixed();
+
+        let mut font = resolve_document(&document).unwrap();
+        let text = font
+            .display
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                ResolvedItem::Text(text) => Some(text),
+                ResolvedItem::Graphics(_) => None,
+            })
+            .unwrap();
+        text.size = 4.0;
+        text.runs[0].font.embedding_allowed = false;
+        let report = check_publication(&document, &font, 300);
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "font_size" && finding.severity == CheckSeverity::Error
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "font_embedding" && finding.severity == CheckSeverity::Error
+        }));
+
+        let mut graphics = resolve_document(&document).unwrap();
+        let stroke = graphics
+            .display
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                ResolvedItem::Graphics(DisplayItem::Path {
+                    stroke: Some(stroke),
+                    ..
+                }) => Some(stroke),
+                _ => None,
+            })
+            .unwrap();
+        stroke.width = Pt::new(0.1).unwrap();
+        graphics.display.items.retain(|item| {
+            !matches!(
+                item,
+                ResolvedItem::Graphics(DisplayItem::ClipPush { .. } | DisplayItem::ClipPop { .. })
+            )
+        });
+        let report = check_publication(&document, &graphics, 300);
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "stroke_width" && finding.severity == CheckSeverity::Error
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "clipping" && finding.severity == CheckSeverity::Error
+        }));
+    }
+
+    #[test]
+    fn semantic_and_palette_rule_fixtures_detect_risks() {
+        let mut project = ProjectDocument::fixed_fixture();
+        project.palette.colors.push(PaletteColor {
+            id: "near-blue".to_owned(),
+            rgba: [69, 120, 171, 255],
+        });
+        let mut duplicate = project.figure.artists[1].clone();
+        duplicate.id = "node-16".to_owned();
+        duplicate.kind = ArtistKind::Line;
+        let ArtistProperties::Line { stroke, .. } = &mut duplicate.properties else {
+            panic!("fixed node-11 must remain a line");
+        };
+        stroke.color_id = "near-blue".to_owned();
+        project.figure.axes[0].artist_ids.push(duplicate.id.clone());
+        project.figure.artists.push(duplicate);
+        let document = FigureDocument::from_project(project).unwrap();
+        let risk_report = report(&document, 300);
+        for rule in [
+            "color_only_encoding",
+            "grayscale_distinguishability",
+            "cvd_risk",
+        ] {
+            assert!(risk_report.findings.iter().any(|finding| {
+                finding.rule_id == rule && finding.severity == CheckSeverity::Warning
+            }));
+        }
+
+        let mut project = ProjectDocument::fixed_fixture();
+        project.palette.id = "unregistered-palette".to_owned();
+        project.provenance.clear();
+        let document = FigureDocument::from_project(project).unwrap();
+        let incomplete_report = report(&document, 300);
+        assert!(incomplete_report.findings.iter().any(|finding| {
+            finding.rule_id == "palette_data_relationship"
+                && finding.severity == CheckSeverity::Warning
+        }));
+        assert!(incomplete_report.findings.iter().any(|finding| {
+            finding.rule_id == "provenance_completeness" && finding.severity == CheckSeverity::Error
+        }));
+    }
+}

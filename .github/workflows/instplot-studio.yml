@@ -20,6 +20,7 @@ on:
       - "scripts/validate_b3_4.py"
       - "scripts/validate_b3_5.py"
       - "scripts/validate_b3_6.py"
+      - "scripts/validate_b4.py"
       - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
@@ -42,6 +43,7 @@ on:
       - "scripts/validate_b3_4.py"
       - "scripts/validate_b3_5.py"
       - "scripts/validate_b3_6.py"
+      - "scripts/validate_b4.py"
       - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
@@ -98,6 +100,8 @@ jobs:
           test -s target/b3-fixed.png
           target/release/instplot-studio --create-project target/b2-ci.instplot
           target/release/instplot-studio --check-project target/b2-ci.instplot
+          target/release/instplot-studio --publication-check target/b2-ci.instplot > target/b4-publication-check.json
+          test -s target/b4-publication-check.json
 
       - name: Check Windows product identity and headless export
         if: runner.os == 'Windows'
@@ -114,3 +118,6 @@ jobs:
           if ((Get-Item target/b3-fixed.png).Length -lt 1000) { throw "Headless PNG is unexpectedly small" }
           & target/release/instplot-studio.exe --create-project target/b2-ci.instplot
           & target/release/instplot-studio.exe --check-project target/b2-ci.instplot
+          & target/release/instplot-studio.exe --publication-check target/b2-ci.instplot | Out-File -Encoding utf8 target/b4-publication-check.json
+          if (-not (Test-Path target/b4-publication-check.json)) { throw "Publication Check report was not created" }
+          if ((Get-Item target/b4-publication-check.json).Length -lt 1000) { throw "Publication Check report is unexpectedly small" }

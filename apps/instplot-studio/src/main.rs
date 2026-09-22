@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use eframe::egui;
-use export_backend_spike::ResolvedDisplayList;
 use instplot_studio::{
-    AxisRanges, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
-    PreviewAdapter, SeriesDescriptor, StudioSession, product_info, resolve_document,
-    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
+    AxisRanges, CheckSeverity, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
+    PreviewAdapter, PublicationReport, ResolvedFigure, SeriesDescriptor, StudioSession,
+    check_publication, product_info, resolve_document, save_figure_pdf, save_figure_png,
+    save_fixed_figure_pdf, save_fixed_figure_png,
 };
 
 fn main() {
@@ -59,6 +59,17 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
             }
             Ok(())
         }
+        StartupCommand::PublicationCheck(path) => {
+            let (document, _) = FigureDocument::open(&path)?;
+            let resolved = resolve_document(&document)?;
+            let report = check_publication(&document, &resolved, 300);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.error_count() > 0 {
+                Err(format!("publication check found {} error(s)", report.error_count()).into())
+            } else {
+                Ok(())
+            }
+        }
         StartupCommand::Gui => launch_gui().map_err(Into::into),
     }
 }
@@ -71,6 +82,7 @@ enum StartupCommand {
     ExportFixedPng(PathBuf),
     CreateProject(PathBuf),
     CheckProject(PathBuf),
+    PublicationCheck(PathBuf),
 }
 
 impl StartupCommand {
@@ -91,8 +103,11 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--check-project" => {
                 Ok(Self::CheckProject(path.into()))
             }
+            (Some(flag), Some(path), None) if flag == "--publication-check" => {
+                Ok(Self::PublicationCheck(path.into()))
+            }
             _ => Err(
-                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --export-fixed-png PATH | --create-project PATH | --check-project PATH]",
+                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --export-fixed-png PATH | --create-project PATH | --check-project PATH | --publication-check PATH]",
             ),
         }
     }
@@ -118,7 +133,8 @@ fn launch_gui() -> eframe::Result {
 struct StudioApp {
     session: StudioSession,
     document: FigureDocument,
-    display: ResolvedDisplayList,
+    resolved: ResolvedFigure,
+    publication_report: PublicationReport,
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
     project_path: Option<PathBuf>,
@@ -136,12 +152,14 @@ impl StudioApp {
         });
         ui_shell_spike::install_publication_fonts(&creation.egui_ctx);
         let document = FigureDocument::fixed();
-        let display = resolved_preview(&document)
+        let resolved = resolved_preview(&document)
             .expect("the validated Figure Document resolves through formal layout");
+        let publication_report = check_publication(&document, &resolved, 300);
         Self {
             session: StudioSession::default(),
             document,
-            display,
+            resolved,
+            publication_report,
             preview: EguiPreviewAdapter,
             selected_series: None,
             project_path: None,
@@ -173,6 +191,16 @@ impl StudioApp {
                     self.push_warning(format!("Project data-source update failed: {error}"));
                     return;
                 }
+                match resolved_preview(&self.document) {
+                    Ok(resolved) => {
+                        self.publication_report = check_publication(&self.document, &resolved, 300);
+                        self.resolved = resolved;
+                    }
+                    Err(error) => {
+                        self.push_warning(format!("Project layout failed: {error}"));
+                        return;
+                    }
+                }
                 self.status = format!(
                     "Imported {} dataset(s): {} added, {} replaced",
                     outcome.read, outcome.added, outcome.replaced
@@ -193,10 +221,11 @@ impl StudioApp {
         };
         match FigureDocument::open(&path) {
             Ok((document, report)) => match resolved_preview(&document) {
-                Ok(display) => {
+                Ok(resolved) => {
                     let opened_primary = report.source == OpenProjectSource::Primary;
+                    self.publication_report = check_publication(&document, &resolved, 300);
                     self.document = document;
-                    self.display = display;
+                    self.resolved = resolved;
                     self.project_path = opened_primary.then(|| path.clone());
                     self.warnings.extend(report.warnings);
                     self.status = match report.source {
@@ -283,8 +312,9 @@ impl StudioApp {
     fn apply_ranges(&mut self, ranges: AxisRanges) {
         match self.document.set_axis_ranges(ranges) {
             Ok(()) => match resolved_preview(&self.document) {
-                Ok(display) => {
-                    self.display = display;
+                Ok(resolved) => {
+                    self.publication_report = check_publication(&self.document, &resolved, 300);
+                    self.resolved = resolved;
                     self.status = "Figure Document updated".to_owned();
                     self.clear_warning("Layout failed:");
                     self.clear_warning("Invalid axes:");
@@ -370,6 +400,37 @@ impl StudioApp {
         ui.label("View only");
         ui.add(egui::Slider::new(&mut self.canvas_zoom, 0.5..=3.0).text("Canvas zoom"));
         ui.weak("Canvas zoom is not stored in the Figure Document.");
+
+        ui.separator();
+        ui.heading("Publication Check");
+        ui.label(format!(
+            "{} error · {} warning · {} information",
+            self.publication_report.error_count(),
+            self.publication_report.warning_count(),
+            self.publication_report.information_count()
+        ));
+        ui.weak(format!(
+            "Rules: {} · Raster: {} dpi",
+            self.publication_report.rules_version, self.publication_report.raster_dpi
+        ));
+        for finding in &self.publication_report.findings {
+            let text = if let Some(node) = &finding.node_id {
+                format!("{} · {} — {}", finding.rule_id, node, finding.message)
+            } else {
+                format!("{} — {}", finding.rule_id, finding.message)
+            };
+            match finding.severity {
+                CheckSeverity::Error => {
+                    ui.colored_label(egui::Color32::LIGHT_RED, text);
+                }
+                CheckSeverity::Warning => {
+                    ui.colored_label(egui::Color32::YELLOW, text);
+                }
+                CheckSeverity::Information => {
+                    ui.weak(text);
+                }
+            }
+        }
     }
 }
 
@@ -418,7 +479,9 @@ impl eframe::App for StudioApp {
 
         egui::Panel::right("inspector")
             .default_size(260.0)
-            .show(ui, |ui| self.inspector(ui));
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+            });
 
         egui::Panel::bottom("warning_panel")
             .default_size(90.0)
@@ -435,8 +498,8 @@ impl eframe::App for StudioApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             let available = ui.available_size();
-            let figure_size =
-                egui::vec2(self.display.width, self.display.height) * self.canvas_zoom;
+            let figure_size = egui::vec2(self.resolved.display.width, self.resolved.display.height)
+                * self.canvas_zoom;
             let origin = ui.min_rect().min
                 + egui::vec2(
                     ((available.x - figure_size.x) * 0.5).max(16.0),
@@ -453,7 +516,7 @@ impl eframe::App for StudioApp {
             );
             let metrics = self.preview.paint(
                 ui.painter(),
-                &self.display,
+                &self.resolved.display,
                 origin,
                 self.canvas_zoom,
                 context.pixels_per_point(),
@@ -483,8 +546,8 @@ impl eframe::App for StudioApp {
 
 fn resolved_preview(
     document: &FigureDocument,
-) -> Result<ResolvedDisplayList, instplot_studio::DocumentLayoutError> {
-    resolve_document(document).map(|resolved| resolved.display)
+) -> Result<ResolvedFigure, instplot_studio::DocumentLayoutError> {
+    resolve_document(document)
 }
 
 fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
@@ -542,36 +605,45 @@ mod tests {
             .unwrap(),
             StartupCommand::CheckProject(PathBuf::from("figure.instplot"))
         );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--publication-check"),
+                OsString::from("figure.instplot")
+            ])
+            .unwrap(),
+            StartupCommand::PublicationCheck(PathBuf::from("figure.instplot"))
+        );
         assert!(StartupCommand::parse([OsString::from("--unknown")]).is_err());
     }
 
     #[test]
     fn preview_uses_formal_layout_and_resolved_rotated_text() {
-        let display = resolved_preview(&FigureDocument::fixed()).unwrap();
-        assert!(display.items.iter().any(|item| matches!(
+        let resolved = resolved_preview(&FigureDocument::fixed()).unwrap();
+        assert!(resolved.display.items.iter().any(|item| matches!(
             item,
             ResolvedItem::Graphics(DisplayItem::Path {
                 stroke: Some(stroke),
                 ..
             }) if stroke.color == Color(218, 221, 224, 255)
         )));
-        assert!(display.items.iter().any(|item| matches!(
+        assert!(resolved.display.items.iter().any(|item| matches!(
             item,
             ResolvedItem::Text(text)
                 if text.source == NodeId(4) && text.rotation_degrees == -90.0
         )));
-        assert!(display.items.iter().any(|item| matches!(
+        assert!(resolved.display.items.iter().any(|item| matches!(
             item,
             ResolvedItem::Graphics(DisplayItem::Path { source, .. })
                 if *source == NodeId(11)
         )));
-        assert!(display.items.iter().any(|item| matches!(
+        assert!(resolved.display.items.iter().any(|item| matches!(
             item,
             ResolvedItem::Graphics(DisplayItem::Path { source, .. })
                 if *source == NodeId(13)
         )));
         assert!(
-            !display
+            !resolved
+                .display
                 .items
                 .iter()
                 .any(|item| matches!(item, ResolvedItem::Graphics(DisplayItem::GlyphRun(_))))

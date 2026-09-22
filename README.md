@@ -45,7 +45,9 @@ linear line, scatter and composed line-plus-marker artists now flow through the
 same formal layout and preview. B3.5 is complete: log axes, error bars,
 reference/baseline lines, semantic annotations and the explicit legend now use
 the formal layout. B3.6 is complete: Preview, PDF and PNG now consume one
-formal layout result and resolved Display List. B3 is closed; B4 is next. See
+formal layout result and resolved Display List. B4 is complete: versioned
+palette and semantic registries now drive a node-specific Publication Check in
+both the live Inspector and headless JSON report. B5 is next. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -102,6 +104,12 @@ Validate the B3.6 single Display List pipeline with:
 
 ```sh
 python3 scripts/validate_b3_6.py
+```
+
+Validate the B4 registries and Publication Check with:
+
+```sh
+python3 scripts/validate_b4.py
 ```
 
 The release binary also exposes window-independent project checks:

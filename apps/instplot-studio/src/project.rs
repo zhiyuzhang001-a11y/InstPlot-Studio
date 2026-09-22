@@ -806,6 +806,17 @@ impl ProjectDocument {
                     "override property is empty".to_owned(),
                 ));
             }
+            if override_record.property.starts_with("publication_check:")
+                && override_record
+                    .value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .is_none_or(|reason| reason.trim().is_empty())
+            {
+                return Err(ProjectError::Validation(
+                    "publication-check overrides must record a non-empty reason".to_owned(),
+                ));
+            }
         }
         if self.typography.id.trim().is_empty()
             || self.typography.font_version.trim().is_empty()

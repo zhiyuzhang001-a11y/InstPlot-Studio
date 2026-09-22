@@ -2,9 +2,12 @@
 
 mod document;
 mod export;
+mod palette;
 mod preview;
 mod project;
+mod publication;
 mod render;
+mod semantic;
 mod session;
 
 pub use document::{
@@ -13,6 +16,10 @@ pub use document::{
 pub use export::{
     FixedPdfExportError, figure_pdf, figure_png, fixed_figure_pdf, fixed_figure_png,
     save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
+};
+pub use palette::{
+    PALETTE_DATA_SCHEMA_VERSION, PaletteKind, PaletteMetadata, PaletteOrdering, PaletteReview,
+    ReviewStatus, builtin_palette, builtin_palettes, registry_matches_metadata,
 };
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
@@ -24,7 +31,15 @@ pub use project::{
     ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
     SourceFingerprint, SourceState, StrokeStyle, TypographyProfile, open_project, save_project,
 };
+pub use publication::{
+    CVD_SIMULATION_VERSION, CheckSeverity, PUBLICATION_RULES_VERSION, PublicationFinding,
+    PublicationReport, check_publication,
+};
 pub use render::{ResolvedFigure, resolve_document};
+pub use semantic::{
+    ColorPolicy, RequiredNonColorChannel, SEMANTIC_REGISTRY_VERSION, SemanticPolicy,
+    non_color_signature, policy_for,
+};
 pub use session::{ImportOutcome, StudioSession};
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";
