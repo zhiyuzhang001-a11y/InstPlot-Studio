@@ -2,7 +2,7 @@
 name = "text-shaping-spike"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT AND GUST-Font-License-1.0"
 publish = false
 
 [features]

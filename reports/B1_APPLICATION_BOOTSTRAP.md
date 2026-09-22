@@ -1,7 +1,7 @@
 # B1.1 — Independent Studio application bootstrap
 
 Date: 2026-09-22  
-Status: **DONE locally; cross-platform CI started by the implementation push**
+Status: **DONE**
 
 ## Boundary established
 
@@ -51,9 +51,13 @@ eframe 0.36 uses `App::ui(&mut Ui, ...)`, matching the accepted A6 prototype.
 The implementation was corrected to that already validated interface before the
 passing verification run.
 
+GitHub Actions run
+[`35693342002`](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/actions/runs/35693342002)
+passed the B1.1 workspace tests, Clippy, release build and product-identity check
+on macOS 15, Windows and Ubuntu 22.04.
+
 ## Next dependency
 
-Proceed to **B1.2**: add the shared `instplot-io` dependency and a small import
-service that can open one Lite-supported data file into `StudioSession`. Keep
-native file-dialog state in the application shell and do not start B2's formal
-project format.
+B1.2 and the remaining B1 application work are now complete. Continue with the
+scope and evidence in
+[`B1_STUDIO_APPLICATION_CLOSEOUT.md`](B1_STUDIO_APPLICATION_CLOSEOUT.md).
