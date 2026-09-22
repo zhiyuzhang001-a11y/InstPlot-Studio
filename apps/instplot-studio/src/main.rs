@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use eframe::egui;
 use instplot_studio::{
-    AxisRanges, EguiPreviewAdapter, FigureDocument, PRODUCT_NAME, PreviewAdapter, SeriesDescriptor,
-    StudioSession, product_info, save_fixed_figure_pdf,
+    AxisRanges, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
+    PreviewAdapter, SeriesDescriptor, StudioSession, product_info, save_fixed_figure_pdf,
 };
 use studio_render_spike::DisplayList;
 
@@ -28,6 +28,31 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
             println!("exported_pdf={} bytes={size}", path.display());
             Ok(())
         }
+        StartupCommand::CreateProject(path) => {
+            let document = FigureDocument::fixed();
+            document.save(&path)?;
+            println!(
+                "created_project={} schema={}",
+                path.display(),
+                document.project().schema_version
+            );
+            Ok(())
+        }
+        StartupCommand::CheckProject(path) => {
+            let (document, report) = FigureDocument::open(&path)?;
+            document.compile()?;
+            println!(
+                "checked_project={} schema={} source={:?} warnings={}",
+                path.display(),
+                document.project().schema_version,
+                report.source,
+                report.warnings.len()
+            );
+            for warning in report.warnings {
+                println!("warning={warning}");
+            }
+            Ok(())
+        }
         StartupCommand::Gui => launch_gui().map_err(Into::into),
     }
 }
@@ -37,6 +62,8 @@ enum StartupCommand {
     Gui,
     ProductInfo,
     ExportFixedPdf(PathBuf),
+    CreateProject(PathBuf),
+    CheckProject(PathBuf),
 }
 
 impl StartupCommand {
@@ -48,7 +75,15 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--export-fixed-pdf" => {
                 Ok(Self::ExportFixedPdf(path.into()))
             }
-            _ => Err("usage: instplot-studio [--product-info | --export-fixed-pdf PATH]"),
+            (Some(flag), Some(path), None) if flag == "--create-project" => {
+                Ok(Self::CreateProject(path.into()))
+            }
+            (Some(flag), Some(path), None) if flag == "--check-project" => {
+                Ok(Self::CheckProject(path.into()))
+            }
+            _ => Err(
+                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --create-project PATH | --check-project PATH]",
+            ),
         }
     }
 }
@@ -75,7 +110,8 @@ struct StudioApp {
     document: FigureDocument,
     display: DisplayList,
     preview: EguiPreviewAdapter,
-    selected_series: Option<u64>,
+    selected_series: Option<String>,
+    project_path: Option<PathBuf>,
     canvas_zoom: f32,
     warnings: Vec<String>,
     status: String,
@@ -98,6 +134,7 @@ impl StudioApp {
             display,
             preview: EguiPreviewAdapter,
             selected_series: None,
+            project_path: None,
             canvas_zoom: 1.5,
             warnings: Vec::new(),
             status: "Ready".to_owned(),
@@ -119,6 +156,13 @@ impl StudioApp {
         };
         match self.session.import_data_file(&path) {
             Ok(outcome) => {
+                if let Err(error) = self
+                    .document
+                    .sync_external_datasets(self.session.datasets())
+                {
+                    self.push_warning(format!("Project data-source update failed: {error}"));
+                    return;
+                }
                 self.status = format!(
                     "Imported {} dataset(s): {} added, {} replaced",
                     outcome.read, outcome.added, outcome.replaced
@@ -126,6 +170,63 @@ impl StudioApp {
                 self.clear_warning("Import failed:");
             }
             Err(error) => self.push_warning(format!("Import failed: {error}")),
+        }
+    }
+
+    fn open_project(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Open InstPlot Studio project")
+            .add_filter("InstPlot Studio project", &["instplot"])
+            .pick_file()
+        else {
+            return;
+        };
+        match FigureDocument::open(&path) {
+            Ok((document, report)) => match document.compile() {
+                Ok(display) => {
+                    let opened_primary = report.source == OpenProjectSource::Primary;
+                    self.document = document;
+                    self.display = display;
+                    self.project_path = opened_primary.then(|| path.clone());
+                    self.warnings.extend(report.warnings);
+                    self.status = match report.source {
+                        OpenProjectSource::Primary => {
+                            format!("Opened project {}", path.display())
+                        }
+                        OpenProjectSource::Backup => {
+                            format!("Recovered project backup for {}", path.display())
+                        }
+                    };
+                }
+                Err(error) => self.push_warning(format!("Project layout failed: {error}")),
+            },
+            Err(error) => self.push_warning(format!("Open project failed: {error}")),
+        }
+    }
+
+    fn save_project(&mut self, save_as: bool) {
+        let path = if !save_as {
+            self.project_path.clone()
+        } else {
+            None
+        };
+        let path = path.or_else(|| {
+            rfd::FileDialog::new()
+                .set_title("Save InstPlot Studio project")
+                .add_filter("InstPlot Studio project", &["instplot"])
+                .set_file_name("figure.instplot")
+                .save_file()
+        });
+        let Some(path) = path else {
+            return;
+        };
+        match self.document.save(&path) {
+            Ok(()) => {
+                self.project_path = Some(path.clone());
+                self.status = format!("Saved project {}", path.display());
+                self.clear_warning("Save project failed:");
+            }
+            Err(error) => self.push_warning(format!("Save project failed: {error}")),
         }
     }
 
@@ -181,9 +282,9 @@ impl StudioApp {
         ui.heading("Series");
         ui.collapsing("Fixed publication figure", |ui| {
             for series in self.document.series() {
-                let selected = self.selected_series == Some(series.id.0);
+                let selected = self.selected_series.as_deref() == Some(series.id.as_str());
                 if ui.selectable_label(selected, &series.label).clicked() {
-                    self.selected_series = Some(series.id.0);
+                    self.selected_series = Some(series.id);
                 }
             }
         });
@@ -205,11 +306,11 @@ impl StudioApp {
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
         ui.heading("Inspector");
-        let series = self.selected_series.and_then(|id| {
+        let series = self.selected_series.as_deref().and_then(|id| {
             self.document
                 .series()
                 .into_iter()
-                .find(|series| series.id.0 == id)
+                .find(|series| series.id == id)
         });
         describe_selection(ui, series.as_ref());
 
@@ -262,6 +363,15 @@ impl eframe::App for StudioApp {
                 ui.separator();
                 if ui.button("Open data…").clicked() {
                     self.open_data();
+                }
+                if ui.button("Open project…").clicked() {
+                    self.open_project();
+                }
+                if ui.button("Save project").clicked() {
+                    self.save_project(false);
+                }
+                if ui.button("Save project as…").clicked() {
+                    self.save_project(true);
                 }
                 if ui.button("Export fixed PDF…").clicked() {
                     self.export_fixed_pdf();
@@ -346,7 +456,7 @@ fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
     if let Some(series) = series {
         ui.label(&series.label);
         ui.weak(format!("Kind: {}", series.kind));
-        ui.weak(format!("Stable node: {}", series.id.0));
+        ui.weak(format!("Stable node: {}", series.id));
     } else {
         ui.weak("Select a series to inspect it.");
     }
@@ -370,6 +480,22 @@ mod tests {
             ])
             .unwrap(),
             StartupCommand::ExportFixedPdf(PathBuf::from("figure.pdf"))
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--create-project"),
+                OsString::from("figure.instplot")
+            ])
+            .unwrap(),
+            StartupCommand::CreateProject(PathBuf::from("figure.instplot"))
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--check-project"),
+                OsString::from("figure.instplot")
+            ])
+            .unwrap(),
+            StartupCommand::CheckProject(PathBuf::from("figure.instplot"))
         );
         assert!(StartupCommand::parse([OsString::from("--unknown")]).is_err());
     }

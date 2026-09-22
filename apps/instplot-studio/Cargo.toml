@@ -7,10 +7,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+atomicwrites.workspace = true
 eframe.workspace = true
 export-backend-spike.workspace = true
 instplot-core.workspace = true
 instplot-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 studio-render-spike.workspace = true
 ui-shell-spike.workspace = true
 

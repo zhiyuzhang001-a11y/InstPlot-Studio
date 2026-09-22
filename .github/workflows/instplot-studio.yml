@@ -12,6 +12,8 @@ on:
       - "prototypes/text-shaping-spike/**"
       - "prototypes/ui-shell-spike/**"
       - "scripts/validate_b1.py"
+      - "scripts/validate_b2.py"
+      - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   pull_request:
@@ -25,6 +27,8 @@ on:
       - "prototypes/text-shaping-spike/**"
       - "prototypes/ui-shell-spike/**"
       - "scripts/validate_b1.py"
+      - "scripts/validate_b2.py"
+      - "adr/022-versioned-project-container.md"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   workflow_dispatch:
@@ -73,6 +77,8 @@ jobs:
           test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.0'
           target/release/instplot-studio --export-fixed-pdf target/b1-fixed.pdf
           test -s target/b1-fixed.pdf
+          target/release/instplot-studio --create-project target/b2-ci.instplot
+          target/release/instplot-studio --check-project target/b2-ci.instplot
 
       - name: Check Windows product identity and headless export
         if: runner.os == 'Windows'
@@ -84,3 +90,5 @@ jobs:
           & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
           if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
           if ((Get-Item target/b1-fixed.pdf).Length -lt 1000) { throw "Headless PDF is unexpectedly small" }
+          & target/release/instplot-studio.exe --create-project target/b2-ci.instplot
+          & target/release/instplot-studio.exe --check-project target/b2-ci.instplot

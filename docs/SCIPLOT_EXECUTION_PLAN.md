@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B1 DONE；B2 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B2 DONE；B3 READY）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -145,8 +145,8 @@ B6  三平台打包、验收与预览发布
   发布声明前；SVG editor compatibility 由 ADR-021 保留为非阻断研究。
 - **已知迁移项：** A6 临时 shell 的纵轴占位文字不是出版级预览，必须在 B3
   接入 A3/A7 resolved text 后关闭。
-- **Part B：ACTIVE。** B0 共享核心与 B1 独立 Studio 应用已经关闭，下一步是 B2
-  正式 Figure Document 与项目格式。独立短计划见
+- **Part B：ACTIVE。** B0 共享核心、B1 独立 Studio 应用与 B2 正式 Figure
+  Document/项目格式已经关闭，下一步是 B3 single-axes 正式垂直切片。独立短计划见
   `docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`。
 
 ## 4. A0：冻结 InstPlot Lite 基线
@@ -1533,15 +1533,17 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B2.1 — 冻结正式 Figure Document schema 边界并确定容器/versioning ADR。**
+> **B3.1 — 将 A7 scale、locator、formatter 和有限迭代布局迁入正式模块。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
 B0 已完成，完整证据见
 [`../reports/B0_SHARED_CORE_CLOSEOUT.md`](../reports/B0_SHARED_CORE_CLOSEOUT.md)；早期盘点和
 分步证据仍保留在各 B0 报告中。B1 完整证据见
-[`../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md`](../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md)。
-后续按 B2 → B3 → B4 → B5 → B6 顺序执行。
+[`../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md`](../reports/B1_STUDIO_APPLICATION_CLOSEOUT.md)，
+B2 完整证据见
+[`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)。
+后续按 B3 → B4 → B5 → B6 顺序执行。
 
 ---
 

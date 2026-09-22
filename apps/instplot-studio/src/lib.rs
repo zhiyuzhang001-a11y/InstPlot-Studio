@@ -3,11 +3,21 @@
 mod document;
 mod export;
 mod preview;
+mod project;
 mod session;
 
 pub use document::{AxisRanges, FigureDocument, SeriesDescriptor, SeriesKind};
 pub use export::{FixedPdfExportError, fixed_figure_pdf, save_fixed_figure_pdf};
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
+pub use project::{
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord, AxisRecord, AxisScale,
+    DataBinding, DataSourceKind, DataSourcePayload, DataSourceRecord, EmbeddedColumn,
+    ExportPreferences, FigureRecord, FitIdentity, FontFaceRecord, FontStyle, FormatterSpec,
+    LabelNode, LegendEntry, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport,
+    OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor, PaletteRegistry,
+    ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
+    SourceFingerprint, SourceState, StrokeStyle, TypographyProfile, open_project, save_project,
+};
 pub use session::{ImportOutcome, StudioSession};
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";

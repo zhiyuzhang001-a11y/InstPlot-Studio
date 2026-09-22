@@ -29,10 +29,12 @@ Part B is active. B0 is complete: Lite now consumes the shared core, I/O,
 processing, fitting, and expression crates from one Cargo workspace, while an
 independent Studio-side consumer proves that the shared data model can be used
 through a pinned Git revision. B1 is complete: the independent
-`instplot-studio` application reads shared data, owns a non-persistent editing
-document, previews one Display List, exposes the minimum editing panels and
-exports the fixed PDF without creating a window. B2 is next: formalize the
-versioned Figure Document and project format before the single-axes production slice. See
+`instplot-studio` application reads shared data, previews one Display List,
+exposes the minimum editing panels and exports the fixed PDF without creating a
+window. B2 is complete: the formal versioned Figure Document, strict `.instplot`
+JSON project format, atomic save, backup recovery, migration and external-source
+change diagnostics are implemented. B3 is next: promote the validated layout
+stack into the formal single-axes production slice. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -47,6 +49,19 @@ Run the complete repeatable B1 validation with:
 
 ```sh
 python3 scripts/validate_b1.py
+```
+
+Run the complete repeatable B2 project-format validation with:
+
+```sh
+python3 scripts/validate_b2.py
+```
+
+The release binary also exposes window-independent project checks:
+
+```sh
+target/release/instplot-studio --create-project figure.instplot
+target/release/instplot-studio --check-project figure.instplot
 ```
 
 Validate the A1 contract with:

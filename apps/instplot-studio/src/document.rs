@@ -1,14 +1,18 @@
 use core::fmt;
+use std::path::Path;
 
-use studio_render_spike::{
-    Artist, CompileError, DisplayList, Figure, NodeId, compile, fixed_figure,
+use instplot_core::{DataSet, DataSetKind};
+use studio_render_spike::{CompileError, DisplayList, compile, fixed_figure};
+
+use crate::{
+    DataSourceKind, FitIdentity, OpenProjectReport, ProjectDocument, ProjectError, open_project,
+    save_project,
 };
 
-/// B1's in-memory editing model. Persistence, schema versions, migrations and
-/// provenance are deliberately deferred to the formal B2 Figure Document.
+/// The editable runtime view of the formal, versioned B2 Figure Document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FigureDocument {
-    figure: Figure,
+    project: ProjectDocument,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,7 +48,7 @@ impl fmt::Display for SeriesKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SeriesDescriptor {
-    pub id: NodeId,
+    pub id: String,
     pub kind: SeriesKind,
     pub label: String,
 }
@@ -52,20 +56,23 @@ pub struct SeriesDescriptor {
 impl FigureDocument {
     pub fn fixed() -> Self {
         Self {
-            figure: fixed_figure(),
+            project: ProjectDocument::fixed_fixture(),
         }
     }
 
     pub fn compile(&self) -> Result<DisplayList, CompileError> {
-        compile(&self.figure)
+        let mut figure = fixed_figure();
+        let stored = &self.project.figure.axes[0];
+        let axes = &mut figure.axes[0];
+        axes.x.minimum = stored.x.minimum;
+        axes.x.maximum = stored.x.maximum;
+        axes.y.minimum = stored.y.minimum;
+        axes.y.maximum = stored.y.maximum;
+        compile(&figure)
     }
 
     pub fn axis_ranges(&self) -> AxisRanges {
-        let axes = self
-            .figure
-            .axes
-            .first()
-            .expect("the B1 fixed document has one axes");
+        let axes = &self.project.figure.axes[0];
         AxisRanges {
             x_min: axes.x.minimum,
             x_max: axes.x.maximum,
@@ -85,11 +92,7 @@ impl FigureDocument {
         if ranges.x_min >= ranges.x_max || ranges.y_min >= ranges.y_max {
             return Err("each axis minimum must be smaller than its maximum");
         }
-        let axes = self
-            .figure
-            .axes
-            .first_mut()
-            .expect("the B1 fixed document has one axes");
+        let axes = &mut self.project.figure.axes[0];
         axes.x.minimum = ranges.x_min;
         axes.x.maximum = ranges.x_max;
         axes.y.minimum = ranges.y_min;
@@ -98,26 +101,91 @@ impl FigureDocument {
     }
 
     pub fn series(&self) -> Vec<SeriesDescriptor> {
-        self.figure
-            .axes
+        self.project
+            .figure
+            .artists
             .iter()
-            .flat_map(|axes| axes.artists.iter())
             .map(|artist| {
-                let (id, kind) = match artist {
-                    Artist::Line(value) => (value.id, SeriesKind::Line),
-                    Artist::Scatter(value) => (value.id, SeriesKind::Scatter),
-                    Artist::ErrorBar(value) => (value.id, SeriesKind::ErrorBar),
-                    Artist::ReferenceLine(value) => (value.id, SeriesKind::ReferenceLine),
-                    Artist::Text(value) => (value.id, SeriesKind::Annotation),
-                    Artist::Legend(value) => (value.id, SeriesKind::Legend),
+                let kind = match artist.kind {
+                    crate::ArtistKind::Line => SeriesKind::Line,
+                    crate::ArtistKind::Scatter => SeriesKind::Scatter,
+                    crate::ArtistKind::ErrorBar => SeriesKind::ErrorBar,
+                    crate::ArtistKind::ReferenceLine => SeriesKind::ReferenceLine,
+                    crate::ArtistKind::Annotation => SeriesKind::Annotation,
+                    crate::ArtistKind::Legend => SeriesKind::Legend,
                 };
                 SeriesDescriptor {
-                    id,
+                    id: artist.id.clone(),
                     kind,
-                    label: format!("{kind} · node {}", id.0),
+                    label: format!("{kind} · {}", artist.id),
                 }
             })
             .collect()
+    }
+
+    pub fn project(&self) -> &ProjectDocument {
+        &self.project
+    }
+
+    pub fn from_project(project: ProjectDocument) -> Result<Self, ProjectError> {
+        project.validate()?;
+        Ok(Self { project })
+    }
+
+    pub fn open(path: &Path) -> Result<(Self, OpenProjectReport), ProjectError> {
+        let report = open_project(path)?;
+        let document = Self::from_project(report.document.clone())?;
+        Ok((document, report))
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ProjectError> {
+        save_project(path, &self.project)
+    }
+
+    pub fn sync_external_datasets(&mut self, datasets: &[DataSet]) -> Result<(), ProjectError> {
+        let mut candidate = self.project.clone();
+        for dataset in datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DataSetKind::Source)
+        {
+            candidate.upsert_external_source(
+                dataset.plot_id.clone(),
+                dataset.display_name(),
+                &dataset.source,
+                DataSourceKind::Source,
+                None,
+            )?;
+        }
+        for dataset in datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DataSetKind::Fit)
+        {
+            let fit = dataset.fit_link.as_ref().ok_or_else(|| {
+                ProjectError::Validation(format!(
+                    "fit data source {} is missing its fit link",
+                    dataset.plot_id
+                ))
+            })?;
+            candidate.upsert_external_source(
+                dataset.plot_id.clone(),
+                dataset.display_name(),
+                &dataset.source,
+                DataSourceKind::Fit,
+                Some(FitIdentity {
+                    parent_data_source_id: fit.parent_dataset_id.clone().ok_or_else(|| {
+                        ProjectError::Validation(format!(
+                            "fit data source {} is missing its parent identity",
+                            dataset.plot_id
+                        ))
+                    })?,
+                    source_x_column: fit.source_x_column.clone(),
+                    source_y_column: fit.source_y_column.clone(),
+                    equation: fit.equation.clone(),
+                }),
+            )?;
+        }
+        self.project = candidate;
+        Ok(())
     }
 }
 
@@ -132,6 +200,7 @@ mod tests {
         assert!(display.validation_errors().is_empty());
         assert_eq!(document.series().len(), 6);
         assert_eq!(document.series()[1].kind, SeriesKind::Line);
+        assert_eq!(document.series()[1].id, "node-11");
     }
 
     #[test]
@@ -159,5 +228,14 @@ mod tests {
         };
         assert!(document.set_axis_ranges(invalid).is_err());
         assert_eq!(document.axis_ranges(), before);
+    }
+
+    #[test]
+    fn project_round_trip_preserves_the_resolved_display_list() {
+        let document = FigureDocument::fixed();
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let decoded = crate::project::decode_project(&encoded).unwrap();
+        let reopened = FigureDocument::from_project(decoded).unwrap();
+        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
     }
 }
