@@ -1,6 +1,6 @@
 use eframe::egui::{Painter, Pos2};
-use studio_render_spike::DisplayList;
-use ui_shell_spike::{ScreenTransform, paint_display_list};
+use export_backend_spike::ResolvedDisplayList;
+use ui_shell_spike::{ScreenTransform, paint_resolved_display_list};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewMetrics {
@@ -12,7 +12,7 @@ pub trait PreviewAdapter {
     fn paint(
         &self,
         painter: &Painter,
-        display: &DisplayList,
+        display: &ResolvedDisplayList,
         origin: Pos2,
         canvas_zoom: f32,
         pixels_per_point: f32,
@@ -26,15 +26,15 @@ impl PreviewAdapter for EguiPreviewAdapter {
     fn paint(
         &self,
         painter: &Painter,
-        display: &DisplayList,
+        display: &ResolvedDisplayList,
         origin: Pos2,
         canvas_zoom: f32,
         pixels_per_point: f32,
     ) -> PreviewMetrics {
         let transform = ScreenTransform::new(origin, canvas_zoom, pixels_per_point);
-        paint_display_list(painter, display, transform);
-        let [framebuffer_width, framebuffer_height] =
-            transform.framebuffer_size(display.width, display.height);
+        paint_resolved_display_list(painter, display, transform);
+        let framebuffer_width = (display.width * canvas_zoom * pixels_per_point).round() as u32;
+        let framebuffer_height = (display.height * canvas_zoom * pixels_per_point).round() as u32;
         PreviewMetrics {
             framebuffer_width,
             framebuffer_height,

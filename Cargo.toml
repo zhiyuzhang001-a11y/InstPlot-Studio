@@ -30,7 +30,7 @@ serde_json = "=1.0.145"
 sha2 = "=0.10.9"
 studio-render-spike = { path = "prototypes/studio-render-spike" }
 text-shaping-spike = { path = "prototypes/text-shaping-spike" }
-ui-shell-spike = { path = "prototypes/ui-shell-spike" }
+ui-shell-spike = { path = "prototypes/ui-shell-spike", features = ["publication-stack"] }
 
 [profile.release]
 opt-level = "z"

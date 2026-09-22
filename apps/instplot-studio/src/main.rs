@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use eframe::egui;
+use export_backend_spike::{ResolvedDisplayList, resolve};
 use instplot_studio::{
     AxisRanges, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
     PreviewAdapter, SeriesDescriptor, StudioSession, product_info, save_fixed_figure_pdf,
 };
-use studio_render_spike::DisplayList;
 
 fn main() {
     if let Err(error) = run(std::env::args_os().skip(1)) {
@@ -40,7 +40,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
         }
         StartupCommand::CheckProject(path) => {
             let (document, report) = FigureDocument::open(&path)?;
-            document.compile()?;
+            document.layout_axes()?;
             println!(
                 "checked_project={} schema={} source={:?} warnings={}",
                 path.display(),
@@ -108,7 +108,7 @@ fn launch_gui() -> eframe::Result {
 struct StudioApp {
     session: StudioSession,
     document: FigureDocument,
-    display: DisplayList,
+    display: ResolvedDisplayList,
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
     project_path: Option<PathBuf>,
@@ -124,10 +124,10 @@ impl StudioApp {
         creation.egui_ctx.options_mut(|options| {
             options.zoom_with_keyboard = true;
         });
+        ui_shell_spike::install_publication_fonts(&creation.egui_ctx);
         let document = FigureDocument::fixed();
-        let display = document
-            .compile()
-            .expect("the validated B1 fixed Figure Document compiles");
+        let display = resolved_preview(&document)
+            .expect("the validated Figure Document resolves through formal layout");
         Self {
             session: StudioSession::default(),
             document,
@@ -182,7 +182,7 @@ impl StudioApp {
             return;
         };
         match FigureDocument::open(&path) {
-            Ok((document, report)) => match document.compile() {
+            Ok((document, report)) => match resolved_preview(&document) {
                 Ok(display) => {
                     let opened_primary = report.source == OpenProjectSource::Primary;
                     self.document = document;
@@ -254,7 +254,7 @@ impl StudioApp {
 
     fn apply_ranges(&mut self, ranges: AxisRanges) {
         match self.document.set_axis_ranges(ranges) {
-            Ok(()) => match self.document.compile() {
+            Ok(()) => match resolved_preview(&self.document) {
                 Ok(display) => {
                     self.display = display;
                     self.status = "Figure Document updated".to_owned();
@@ -404,10 +404,8 @@ impl eframe::App for StudioApp {
 
         egui::CentralPanel::default().show(ui, |ui| {
             let available = ui.available_size();
-            let figure_size = egui::vec2(
-                self.display.width.get() as f32,
-                self.display.height.get() as f32,
-            ) * self.canvas_zoom;
+            let figure_size =
+                egui::vec2(self.display.width, self.display.height) * self.canvas_zoom;
             let origin = ui.min_rect().min
                 + egui::vec2(
                     ((available.x - figure_size.x) * 0.5).max(16.0),
@@ -452,6 +450,14 @@ impl eframe::App for StudioApp {
     }
 }
 
+fn resolved_preview(
+    document: &FigureDocument,
+) -> Result<ResolvedDisplayList, instplot_studio::DocumentLayoutError> {
+    document
+        .layout_axes()
+        .map(|layout| resolve(&layout.result.display_list))
+}
+
 fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
     if let Some(series) = series {
         ui.label(&series.label);
@@ -465,6 +471,8 @@ fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use export_backend_spike::ResolvedItem;
+    use studio_render_spike::{Color, DisplayItem, NodeId};
 
     #[test]
     fn startup_commands_keep_headless_work_before_gui_creation() {
@@ -498,5 +506,28 @@ mod tests {
             StartupCommand::CheckProject(PathBuf::from("figure.instplot"))
         );
         assert!(StartupCommand::parse([OsString::from("--unknown")]).is_err());
+    }
+
+    #[test]
+    fn preview_uses_formal_layout_and_resolved_rotated_text() {
+        let display = resolved_preview(&FigureDocument::fixed()).unwrap();
+        assert!(display.items.iter().any(|item| matches!(
+            item,
+            ResolvedItem::Graphics(DisplayItem::Path {
+                stroke: Some(stroke),
+                ..
+            }) if stroke.color == Color(218, 221, 224, 255)
+        )));
+        assert!(display.items.iter().any(|item| matches!(
+            item,
+            ResolvedItem::Text(text)
+                if text.source == NodeId(4) && text.rotation_degrees == -90.0
+        )));
+        assert!(
+            !display
+                .items
+                .iter()
+                .any(|item| matches!(item, ResolvedItem::Graphics(DisplayItem::GlyphRun(_))))
+        );
     }
 }

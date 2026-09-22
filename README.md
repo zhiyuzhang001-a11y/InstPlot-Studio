@@ -38,8 +38,10 @@ locator, formatter and bounded single-axes layout now live in the formal
 `instplot-layout` crate while the historical spike remains a compatibility test
 facade. B3.2 is complete: the versioned Figure Document now resolves formal
 axes geometry, spines, ticks, major grid, semantic labels and an explicit data
-clip with reversible stable identities. B3.3 is next: move preview text and
-geometry onto that resolved Display List. See
+clip with reversible stable identities. B3.3 is complete: the GUI preview now
+starts from the formal layout and paints resolved bundled-font runs, including
+scientific baseline shifts and the rotated Y label. B3.4 is next: populate the
+formal layout with line and marker artists. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -72,6 +74,12 @@ Validate the B3.2 formal axes and clipping contract with:
 
 ```sh
 python3 scripts/validate_b3_2.py
+```
+
+Validate the B3.3 resolved preview path with:
+
+```sh
+python3 scripts/validate_b3_3.py
 ```
 
 The release binary also exposes window-independent project checks:

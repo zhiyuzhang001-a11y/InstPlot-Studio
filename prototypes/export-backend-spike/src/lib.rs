@@ -10,7 +10,7 @@ pub use pdf::{ExportError, to_pdf};
 pub use raster::rasterize_via_svg;
 pub use raster::{Background, RasterImage, encode_png, rasterize_direct};
 pub use resolve::{
-    FontDiagnostic, FontOrigin, RasterAsset, ResolvedDisplayList, ResolvedGlyph, ResolvedItem,
-    ResolvedRun, ResolvedText, resolve, resolve_with_resources,
+    BundledFontFace, FontDiagnostic, FontOrigin, RasterAsset, ResolvedDisplayList, ResolvedGlyph,
+    ResolvedItem, ResolvedRun, ResolvedText, bundled_font_faces, resolve, resolve_with_resources,
 };
 pub use svg::to_svg;

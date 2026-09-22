@@ -18,6 +18,33 @@ const BOLD: &[u8] = include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyr
 const BOLD_ITALIC: &[u8] =
     include_bytes!("../../text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf");
 
+#[derive(Clone, Copy, Debug)]
+pub struct BundledFontFace {
+    pub postscript_name: &'static str,
+    pub data: &'static [u8],
+}
+
+pub fn bundled_font_faces() -> [BundledFontFace; 4] {
+    [
+        BundledFontFace {
+            postscript_name: "TeXGyreHeros-Regular",
+            data: REGULAR,
+        },
+        BundledFontFace {
+            postscript_name: "TeXGyreHeros-Italic",
+            data: ITALIC,
+        },
+        BundledFontFace {
+            postscript_name: "TeXGyreHeros-Bold",
+            data: BOLD,
+        },
+        BundledFontFace {
+            postscript_name: "TeXGyreHeros-BoldItalic",
+            data: BOLD_ITALIC,
+        },
+    ]
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedDisplayList {
     pub width: f32,

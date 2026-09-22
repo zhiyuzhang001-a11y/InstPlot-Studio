@@ -2974,6 +2974,7 @@ name = "ui-shell-spike"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "export-backend-spike",
  "rfd",
  "studio-render-spike",
 ]
