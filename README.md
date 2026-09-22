@@ -25,7 +25,8 @@ Windows 10 manual scaling/input/PDF review pass. Linux and physical Retina
 checks are explicitly deferred to a release that claims those targets; they are
 not represented as passed.
 
-Part B is ready and begins with B0 shared-core extraction, followed by the
+Part B is active. B0.1 shared-core inventory is complete, and B0.2 begins the
+minimal `instplot-core` extraction, followed by the
 independent Studio application, formal Figure Document, and the single-axes
 production slice. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).

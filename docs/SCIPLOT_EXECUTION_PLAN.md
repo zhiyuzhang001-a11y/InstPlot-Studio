@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B READY
+> 状态：Part A DONE；Part B ACTIVE（B0.1 DONE）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1532,11 +1532,14 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B0.1 — 对 Lite 现有实现进行只读盘点，形成共享核心的迁移边界与映射。**
+> **B0.2 — 刷新 Lite 0.3.7 基线并执行最小 `instplot-core` 抽取。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
-本任务只产出迁移清单，不立即移动代码；后续仍按 B0 → B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
+B0.1 盘点结果见
+[`../reports/B0_SHARED_CORE_INVENTORY.md`](../reports/B0_SHARED_CORE_INVENTORY.md)。
+B0.2 只移动 data model、identity、无 UI 方法和对应测试；后续仍按
+B0 → B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
 
 ---
 

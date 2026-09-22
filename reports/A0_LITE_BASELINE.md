@@ -88,14 +88,15 @@ The passing test suite provides evidence for:
 - bundled font presence and fallback order;
 - update manifest/signature validation.
 
-## Evidence still required before A0 is complete
+## Evidence disposition after Gate A
 
-- record GUI cold-start and idle-memory baseline using one agreed procedure;
-- archive one representative Lite PNG baseline;
-- record current Windows, macOS and Linux CI run identities and results;
-- record current Windows and Linux release executable sizes using the same scope;
-- confirm fixed representative fixtures for every critical import/export route;
-- document any warnings produced by clean release builds on all three platforms.
+- The original 0.3.4 local measurements remain the frozen A0 snapshot.
+- Subsequent macOS and Windows automated/manual evidence completed the approved
+  Gate A platform scope.
+- Linux and physical Retina validation are explicitly deferred and are not
+  represented as passed.
+- B0 refreshes size and memory measurements against the current Lite version
+  before the first code-moving extraction.
 
-Until those items are captured, A0 is in progress and A1 may define contracts, but
-no Lite shared-core extraction is permitted.
+A0 is complete under that disposition; shared-core extraction is now governed
+by the Part B plan.
