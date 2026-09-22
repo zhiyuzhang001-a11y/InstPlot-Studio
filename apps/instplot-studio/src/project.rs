@@ -219,6 +219,8 @@ pub enum DataSourcePayload {
     Embedded {
         columns: Vec<EmbeddedColumn>,
         row_count: usize,
+        #[serde(default)]
+        alive: Vec<bool>,
         sha256: String,
     },
 }
@@ -244,6 +246,8 @@ pub struct FitIdentity {
     pub source_x_column: String,
     pub source_y_column: String,
     pub equation: Option<String>,
+    #[serde(default)]
+    pub display_equation: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -453,7 +457,8 @@ impl ProjectDocument {
                 values: vec![0.0, 0.08, 0.0],
             },
         ];
-        let embedded_sha256 = embedded_digest(&embedded_columns, 3)
+        let embedded_alive = vec![true; 3];
+        let embedded_sha256 = embedded_digest(&embedded_columns, 3, &embedded_alive)
             .expect("the fixed project fixture has serializable embedded data");
         let blue_stroke = || StrokeStyle {
             color_id: "blue".to_owned(),
@@ -578,6 +583,7 @@ impl ProjectDocument {
                 payload: DataSourcePayload::Embedded {
                     columns: embedded_columns,
                     row_count: 3,
+                    alive: embedded_alive,
                     sha256: embedded_sha256,
                 },
                 fit: None,
@@ -881,6 +887,41 @@ impl ProjectDocument {
             payload: DataSourcePayload::External {
                 path: path_text.to_owned(),
                 fingerprint: fingerprint(path)?,
+            },
+            fit,
+        };
+        let mut candidate = self.clone();
+        if let Some(existing) = candidate.data_sources.iter_mut().find(|item| item.id == id) {
+            *existing = record;
+        } else {
+            candidate.data_sources.push(record);
+        }
+        candidate.validate()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    pub fn upsert_embedded_source(
+        &mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        columns: Vec<EmbeddedColumn>,
+        alive: Vec<bool>,
+        kind: DataSourceKind,
+        fit: Option<FitIdentity>,
+    ) -> Result<(), ProjectError> {
+        let id = id.into();
+        let row_count = columns.first().map_or(0, |column| column.values.len());
+        let sha256 = embedded_digest(&columns, row_count, &alive)?;
+        let record = DataSourceRecord {
+            id: id.clone(),
+            label: label.into(),
+            kind,
+            payload: DataSourcePayload::Embedded {
+                columns,
+                row_count,
+                alive,
+                sha256,
             },
             fit,
         };
@@ -1239,9 +1280,11 @@ fn validate_payload(source: &DataSourceRecord) -> Result<(), ProjectError> {
         DataSourcePayload::Embedded {
             columns,
             row_count,
+            alive,
             sha256,
         } => {
             if sha256.len() != 64
+                || (!alive.is_empty() && alive.len() != *row_count)
                 || columns
                     .iter()
                     .any(|column| column.values.len() != *row_count)
@@ -1249,7 +1292,7 @@ fn validate_payload(source: &DataSourceRecord) -> Result<(), ProjectError> {
                     .iter()
                     .flat_map(|column| &column.values)
                     .any(|value| !value.is_finite())
-                || sha256 != &embedded_digest(columns, *row_count)?
+                || sha256 != &embedded_digest(columns, *row_count, alive)?
             {
                 return Err(ProjectError::Validation(format!(
                     "embedded data source {} has inconsistent data",
@@ -1261,8 +1304,16 @@ fn validate_payload(source: &DataSourceRecord) -> Result<(), ProjectError> {
     Ok(())
 }
 
-fn embedded_digest(columns: &[EmbeddedColumn], row_count: usize) -> Result<String, ProjectError> {
-    let bytes = serde_json::to_vec(&(columns, row_count))?;
+fn embedded_digest(
+    columns: &[EmbeddedColumn],
+    row_count: usize,
+    alive: &[bool],
+) -> Result<String, ProjectError> {
+    let bytes = if alive.is_empty() {
+        serde_json::to_vec(&(columns, row_count))?
+    } else {
+        serde_json::to_vec(&(columns, row_count, alive))?
+    };
     Ok(hex_digest(&bytes))
 }
 
@@ -1442,16 +1493,37 @@ mod tests {
     }
 
     #[test]
+    fn older_schema_one_embedded_payload_without_alive_still_opens() {
+        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+        let payload = value["data_sources"][0]["payload"].as_object_mut().unwrap();
+        let columns: Vec<EmbeddedColumn> =
+            serde_json::from_value(payload["columns"].clone()).unwrap();
+        let row_count = payload["row_count"].as_u64().unwrap() as usize;
+        payload.remove("alive");
+        payload.insert(
+            "sha256".to_owned(),
+            Value::String(embedded_digest(&columns, row_count, &[]).unwrap()),
+        );
+        let decoded = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let DataSourcePayload::Embedded { alive, .. } = &decoded.data_sources[0].payload else {
+            panic!("fixed payload must remain embedded");
+        };
+        assert!(alive.is_empty());
+    }
+
+    #[test]
     fn source_and_fit_identity_survive_round_trip() {
         let embedded = || {
             let columns = vec![EmbeddedColumn {
                 name: "x".to_owned(),
                 values: vec![1.0, 2.0],
             }];
+            let alive = vec![true, false];
             DataSourcePayload::Embedded {
-                sha256: embedded_digest(&columns, 2).unwrap(),
+                sha256: embedded_digest(&columns, 2, &alive).unwrap(),
                 columns,
                 row_count: 2,
+                alive,
             }
         };
         let mut project = ProjectDocument::fixed_fixture();
@@ -1473,6 +1545,7 @@ mod tests {
                     source_x_column: "field".to_owned(),
                     source_y_column: "response".to_owned(),
                     equation: Some("a*x+b".to_owned()),
+                    display_equation: Some("y = a × x + b".to_owned()),
                 }),
             },
         ]);
@@ -1481,6 +1554,21 @@ mod tests {
         assert_eq!(decoded.data_sources, project.data_sources);
         assert_eq!(decoded.typography, project.typography);
         assert_eq!(decoded.palette, project.palette);
+
+        let mut legacy_value = serde_json::to_value(&project).unwrap();
+        legacy_value["data_sources"][2]["fit"]
+            .as_object_mut()
+            .unwrap()
+            .remove("display_equation");
+        let legacy = decode_project(&serde_json::to_vec(&legacy_value).unwrap()).unwrap();
+        assert_eq!(
+            legacy.data_sources[2]
+                .fit
+                .as_ref()
+                .unwrap()
+                .display_equation,
+            None
+        );
     }
 
     #[test]

@@ -1,0 +1,24 @@
+# -----BEGIN INSTPLOT DATA-----
+# Name: Measurement
+# Type: source
+# Dataset-ID: source-a
+field,response
+0,1
+1,2
+2,3
+# -----END INSTPLOT DATA-----
+
+# -----BEGIN INSTPLOT DATA-----
+# Name: Linear fit
+# Type: fit
+# Dataset-ID: fit-a
+# Parent-ID: source-a
+# Source-X: field
+# Source-Y: response
+# Equation: y=1+x
+# Display-Equation: y = 1 + x
+fit_x,fit_y
+0,1
+1,2
+2,3
+# -----END INSTPLOT DATA-----

@@ -2,6 +2,7 @@
 
 mod document;
 mod export;
+mod handoff;
 mod palette;
 mod preview;
 mod project;
@@ -16,6 +17,10 @@ pub use document::{
 pub use export::{
     FixedPdfExportError, figure_pdf, figure_png, fixed_figure_pdf, fixed_figure_png,
     save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png,
+};
+pub use handoff::{
+    HANDOFF_EXTENSION, HANDOFF_SCHEMA_VERSION, HandoffCleanup, HandoffError, HandoffImport,
+    encode_handoff, import_handoff, write_handoff,
 };
 pub use palette::{
     PALETTE_DATA_SCHEMA_VERSION, PaletteKind, PaletteMetadata, PaletteOrdering, PaletteReview,

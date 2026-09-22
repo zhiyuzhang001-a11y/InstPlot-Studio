@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use instplot_core::{DataSet, DataSetKind};
@@ -13,10 +13,11 @@ use studio_render_spike::{Color, CompileError, DisplayList, NodeId, compile, fix
 use text_shaping_spike::Label;
 
 use crate::{
-    ArtistProperties, AxisRecord, AxisScale, DataBinding, DataSourceKind, DataSourcePayload,
-    FitIdentity, FormatterSpec, LabelNode, LocatorSpec, MarkerShape, OpenProjectReport,
-    PaletteRegistry, ProjectDocument, ProjectError, ReferenceOrientation, SemanticLabel,
-    StrokeStyle, open_project, save_project,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale, DataBinding,
+    DataSourceKind, DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode,
+    LegendEntry, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport, PaletteColor,
+    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
+    SemanticLabel, StrokeStyle, open_project, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -137,6 +138,169 @@ impl FigureDocument {
         Self {
             project: ProjectDocument::fixed_fixture(),
         }
+    }
+
+    pub fn from_datasets(datasets: &[DataSet]) -> Result<Self, ProjectError> {
+        if datasets.is_empty() {
+            return Err(ProjectError::Validation(
+                "Lite handoff contains no datasets".to_owned(),
+            ));
+        }
+        validate_handoff_datasets(datasets)?;
+
+        let mut project = ProjectDocument::fixed_fixture();
+        project.data_sources.clear();
+        project.figure.artists.clear();
+        project.figure.axes[0].artist_ids.clear();
+        project.overrides.clear();
+        project.provenance.clear();
+        add_handoff_palette_colors(&mut project);
+
+        for dataset in datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DataSetKind::Source)
+        {
+            project.upsert_embedded_source(
+                dataset.plot_id.clone(),
+                dataset.display_name(),
+                embedded_columns(dataset),
+                dataset.alive.clone(),
+                DataSourceKind::Source,
+                None,
+            )?;
+        }
+        for dataset in datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DataSetKind::Fit)
+        {
+            let link = dataset.fit_link.as_ref().expect("validated fit link");
+            project.upsert_embedded_source(
+                dataset.plot_id.clone(),
+                dataset.display_name(),
+                embedded_columns(dataset),
+                dataset.alive.clone(),
+                DataSourceKind::Fit,
+                Some(FitIdentity {
+                    parent_data_source_id: link
+                        .parent_dataset_id
+                        .clone()
+                        .expect("validated parent identity"),
+                    source_x_column: link.source_x_column.clone(),
+                    source_y_column: link.source_y_column.clone(),
+                    equation: link.equation.clone(),
+                    display_equation: link.display_equation.clone(),
+                }),
+            )?;
+        }
+
+        let source_colors = datasets
+            .iter()
+            .filter(|dataset| dataset.kind == DataSetKind::Source)
+            .enumerate()
+            .map(|(index, dataset)| {
+                (
+                    dataset.plot_id.clone(),
+                    HANDOFF_COLORS[index % HANDOFF_COLORS.len()].0.to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut artists = Vec::new();
+        let mut legend_entries = Vec::new();
+        let mut plotted_values = Vec::new();
+        for (index, dataset) in datasets.iter().enumerate() {
+            let (x_column, y_column) = plotted_columns(dataset, datasets)?;
+            let color_id = match dataset.kind {
+                DataSetKind::Source => source_colors
+                    .get(&dataset.plot_id)
+                    .expect("every source has a color"),
+                DataSetKind::Fit => source_colors
+                    .get(
+                        dataset
+                            .fit_link
+                            .as_ref()
+                            .and_then(|link| link.parent_dataset_id.as_ref())
+                            .expect("validated fit parent"),
+                    )
+                    .expect("validated fit parent has a color"),
+            };
+            let artist_id = format!("handoff-artist-{}", dataset.plot_id);
+            let label_id = format!("handoff-label-{}", dataset.plot_id);
+            project.semantic_registry.push(SemanticLabel {
+                id: label_id.clone(),
+                nodes: vec![LabelNode::Text(dataset.display_name())],
+            });
+            let binding = DataBinding {
+                data_source_id: dataset.plot_id.clone(),
+                x_column: x_column.clone(),
+                y_column: y_column.clone(),
+            };
+            let (kind, role, properties) = match dataset.kind {
+                DataSetKind::Source => (
+                    ArtistKind::Scatter,
+                    ArtistRole::Data,
+                    ArtistProperties::Scatter {
+                        binding,
+                        marker: MarkerStyle {
+                            color_id: color_id.clone(),
+                            shape: HANDOFF_MARKERS[index % HANDOFF_MARKERS.len()],
+                            size_pt: 4.0,
+                        },
+                    },
+                ),
+                DataSetKind::Fit => (
+                    ArtistKind::Line,
+                    ArtistRole::Fit,
+                    ArtistProperties::Line {
+                        binding,
+                        stroke: StrokeStyle {
+                            color_id: color_id.clone(),
+                            width_pt: 0.9,
+                            dash_pt: Vec::new(),
+                        },
+                    },
+                ),
+            };
+            artists.push(ArtistRecord {
+                id: artist_id.clone(),
+                kind,
+                role,
+                properties,
+            });
+            legend_entries.push(LegendEntry {
+                artist_id: artist_id.clone(),
+                label_id,
+            });
+            project.figure.axes[0].artist_ids.push(artist_id);
+            collect_plotted_values(dataset, &x_column, &y_column, &mut plotted_values);
+        }
+        let legend_id = "handoff-legend".to_owned();
+        artists.push(ArtistRecord {
+            id: legend_id.clone(),
+            kind: ArtistKind::Legend,
+            role: ArtistRole::Legend,
+            properties: ArtistProperties::Legend {
+                entries: legend_entries,
+                x_pt: 164.0,
+                y_pt: 30.0,
+            },
+        });
+        project.figure.axes[0].artist_ids.push(legend_id);
+        project.figure.artists = artists;
+        set_handoff_axes(&mut project, datasets, &plotted_values)?;
+        project.provenance.push(ProvenanceRecord {
+            id: "provenance-lite-handoff".to_owned(),
+            operation: "import_lite_datasets_embedded".to_owned(),
+            input_ids: datasets
+                .iter()
+                .map(|dataset| dataset.plot_id.clone())
+                .collect(),
+            parameters: BTreeMap::from([(
+                "dataset_count".to_owned(),
+                serde_json::Value::from(datasets.len()),
+            )]),
+        });
+        project.validate()?;
+        Ok(Self { project })
     }
 
     pub fn compile(&self) -> Result<DisplayList, CompileError> {
@@ -331,12 +495,237 @@ impl FigureDocument {
                     source_x_column: fit.source_x_column.clone(),
                     source_y_column: fit.source_y_column.clone(),
                     equation: fit.equation.clone(),
+                    display_equation: fit.display_equation.clone(),
                 }),
             )?;
         }
         self.project = candidate;
         Ok(())
     }
+}
+
+const HANDOFF_COLORS: [(&str, [u8; 4]); 7] = [
+    ("blue", [68, 119, 170, 255]),
+    ("object-red", [238, 102, 119, 255]),
+    ("object-green", [34, 136, 51, 255]),
+    ("object-yellow", [204, 187, 68, 255]),
+    ("object-cyan", [102, 204, 238, 255]),
+    ("object-purple", [170, 51, 119, 255]),
+    ("object-light-gray", [187, 187, 187, 255]),
+];
+
+const HANDOFF_MARKERS: [MarkerShape; 4] = [
+    MarkerShape::Circle,
+    MarkerShape::Square,
+    MarkerShape::Triangle,
+    MarkerShape::Diamond,
+];
+
+fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
+    let ids = datasets
+        .iter()
+        .map(|dataset| dataset.plot_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if ids.len() != datasets.len() || ids.contains("") {
+        return Err(ProjectError::Validation(
+            "Lite handoff dataset IDs must be non-empty and unique".to_owned(),
+        ));
+    }
+    let source_ids = datasets
+        .iter()
+        .filter(|dataset| dataset.kind == DataSetKind::Source)
+        .map(|dataset| dataset.plot_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if source_ids.is_empty() {
+        return Err(ProjectError::Validation(
+            "Lite handoff must contain at least one source dataset".to_owned(),
+        ));
+    }
+    for dataset in datasets {
+        if dataset.columns.len() < 2
+            || dataset
+                .columns
+                .iter()
+                .any(|column| column.values.len() != dataset.row_count)
+            || dataset
+                .columns
+                .iter()
+                .flat_map(|column| &column.values)
+                .any(|value| !value.is_finite())
+            || dataset.alive.len() != dataset.row_count
+        {
+            return Err(ProjectError::Validation(format!(
+                "Lite handoff dataset {} has inconsistent columns or alive state",
+                dataset.plot_id
+            )));
+        }
+        match (dataset.kind, &dataset.fit_link) {
+            (DataSetKind::Source, None) => {}
+            (DataSetKind::Source, Some(_)) => {
+                return Err(ProjectError::Validation(format!(
+                    "source dataset {} unexpectedly contains a fit link",
+                    dataset.plot_id
+                )));
+            }
+            (DataSetKind::Fit, Some(link)) => {
+                let parent_id = link.parent_dataset_id.as_deref().ok_or_else(|| {
+                    ProjectError::Validation(format!(
+                        "fit dataset {} is missing Parent-ID",
+                        dataset.plot_id
+                    ))
+                })?;
+                let parent = datasets
+                    .iter()
+                    .find(|candidate| candidate.plot_id == parent_id)
+                    .filter(|candidate| candidate.kind == DataSetKind::Source)
+                    .ok_or_else(|| {
+                        ProjectError::Validation(format!(
+                            "fit dataset {} references unknown source {}",
+                            dataset.plot_id, parent_id
+                        ))
+                    })?;
+                for name in [&link.source_x_column, &link.source_y_column] {
+                    if !parent.columns.iter().any(|column| column.name == *name) {
+                        return Err(ProjectError::Validation(format!(
+                            "fit dataset {} references missing parent column {}",
+                            dataset.plot_id, name
+                        )));
+                    }
+                }
+            }
+            (DataSetKind::Fit, None) => {
+                return Err(ProjectError::Validation(format!(
+                    "fit dataset {} is missing its explicit fit link",
+                    dataset.plot_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn embedded_columns(dataset: &DataSet) -> Vec<EmbeddedColumn> {
+    dataset
+        .columns
+        .iter()
+        .map(|column| EmbeddedColumn {
+            name: column.name.clone(),
+            values: column.values.clone(),
+        })
+        .collect()
+}
+
+fn add_handoff_palette_colors(project: &mut ProjectDocument) {
+    for (id, rgba) in HANDOFF_COLORS {
+        if !project.palette.colors.iter().any(|color| color.id == id) {
+            project.palette.colors.push(PaletteColor {
+                id: id.to_owned(),
+                rgba,
+            });
+        }
+    }
+}
+
+fn plotted_columns(
+    dataset: &DataSet,
+    datasets: &[DataSet],
+) -> Result<(String, String), ProjectError> {
+    if dataset.kind == DataSetKind::Source
+        && let Some(link) = datasets.iter().find_map(|candidate| {
+            candidate
+                .fit_link
+                .as_ref()
+                .filter(|link| link.parent_dataset_id.as_deref() == Some(dataset.plot_id.as_str()))
+        })
+    {
+        return Ok((link.source_x_column.clone(), link.source_y_column.clone()));
+    }
+    let mut columns = dataset.columns.iter();
+    let x = columns
+        .next()
+        .ok_or_else(|| ProjectError::Validation("dataset is missing an X column".to_owned()))?;
+    let y = columns
+        .next()
+        .ok_or_else(|| ProjectError::Validation("dataset is missing a Y column".to_owned()))?;
+    Ok((x.name.clone(), y.name.clone()))
+}
+
+fn collect_plotted_values(
+    dataset: &DataSet,
+    x_column: &str,
+    y_column: &str,
+    output: &mut Vec<(f64, f64)>,
+) {
+    let x = dataset
+        .columns
+        .iter()
+        .find(|column| column.name == x_column)
+        .expect("validated X column");
+    let y = dataset
+        .columns
+        .iter()
+        .find(|column| column.name == y_column)
+        .expect("validated Y column");
+    output.extend(
+        x.values
+            .iter()
+            .zip(&y.values)
+            .enumerate()
+            .filter(|(index, _)| dataset.alive[*index])
+            .map(|(_, (x, y))| (*x, *y)),
+    );
+}
+
+fn set_handoff_axes(
+    project: &mut ProjectDocument,
+    datasets: &[DataSet],
+    values: &[(f64, f64)],
+) -> Result<(), ProjectError> {
+    let source = datasets
+        .iter()
+        .find(|dataset| dataset.kind == DataSetKind::Source)
+        .expect("validated source dataset");
+    let (x_column, y_column) = plotted_columns(source, datasets)?;
+    let Some((x_min, x_max, y_min, y_max)) =
+        values
+            .iter()
+            .copied()
+            .fold(None, |bounds, (x, y)| match bounds {
+                None => Some((x, x, y, y)),
+                Some((x_min, x_max, y_min, y_max)) => {
+                    Some((x_min.min(x), x_max.max(x), y_min.min(y), y_max.max(y)))
+                }
+            })
+    else {
+        return Err(ProjectError::Validation(
+            "Lite handoff contains no alive plotted rows".to_owned(),
+        ));
+    };
+    let padded = |minimum: f64, maximum: f64| {
+        let span = maximum - minimum;
+        let padding = if span > 0.0 { span * 0.05 } else { 1.0 };
+        (minimum - padding, maximum + padding)
+    };
+    let (x_min, x_max) = padded(x_min, x_max);
+    let (y_min, y_max) = padded(y_min, y_max);
+    let axes = &mut project.figure.axes[0];
+    axes.x.minimum = x_min;
+    axes.x.maximum = x_max;
+    axes.y.minimum = y_min;
+    axes.y.maximum = y_max;
+    let x_label = project
+        .semantic_registry
+        .iter_mut()
+        .find(|label| label.id == axes.x.label_id)
+        .expect("fixed document has an X label");
+    x_label.nodes = vec![LabelNode::Variable(x_column)];
+    let y_label = project
+        .semantic_registry
+        .iter_mut()
+        .find(|label| label.id == axes.y.label_id)
+        .expect("fixed document has a Y label");
+    y_label.nodes = vec![LabelNode::Variable(y_column)];
+    Ok(())
 }
 
 fn formal_series(
@@ -548,7 +937,7 @@ fn bound_points(
         .iter()
         .find(|source| source.id == binding.data_source_id)
         .ok_or_else(|| DocumentLayoutError::MissingDataSource(binding.data_source_id.clone()))?;
-    let DataSourcePayload::Embedded { columns, .. } = &source.payload else {
+    let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
         return Err(DocumentLayoutError::ExternalDataUnavailable(
             source.id.clone(),
         ));
@@ -574,7 +963,9 @@ fn bound_points(
     }
     Ok(x.iter()
         .zip(y)
-        .map(|(x, y)| DataPoint { x: *x, y: *y })
+        .enumerate()
+        .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
+        .map(|(_, (x, y))| DataPoint { x: *x, y: *y })
         .collect())
 }
 
@@ -588,7 +979,7 @@ fn bound_column(
         .iter()
         .find(|source| source.id == source_id)
         .ok_or_else(|| DocumentLayoutError::MissingDataSource(source_id.to_owned()))?;
-    let DataSourcePayload::Embedded { columns, .. } = &source.payload else {
+    let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
         return Err(DocumentLayoutError::ExternalDataUnavailable(
             source.id.clone(),
         ));
@@ -596,7 +987,15 @@ fn bound_column(
     columns
         .iter()
         .find(|column| column.name == column_name)
-        .map(|column| column.values.clone())
+        .map(|column| {
+            column
+                .values
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
+                .map(|(_, value)| *value)
+                .collect()
+        })
         .ok_or_else(|| DocumentLayoutError::MissingColumn {
             source: source.id.clone(),
             column: column_name.to_owned(),

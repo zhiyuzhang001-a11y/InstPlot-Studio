@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use eframe::egui;
 use instplot_studio::{
-    AxisRanges, CheckSeverity, EguiPreviewAdapter, FigureDocument, OpenProjectSource, PRODUCT_NAME,
-    PreviewAdapter, PublicationReport, ResolvedFigure, SeriesDescriptor, StudioSession,
-    check_publication, product_info, resolve_document, save_figure_pdf, save_figure_png,
-    save_fixed_figure_pdf, save_fixed_figure_png,
+    AxisRanges, CheckSeverity, EguiPreviewAdapter, FigureDocument, HandoffCleanup, HandoffImport,
+    OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport, ResolvedFigure,
+    SeriesDescriptor, StudioSession, check_publication, import_handoff, product_info,
+    resolve_document, save_figure_pdf, save_figure_png, save_fixed_figure_pdf,
+    save_fixed_figure_png, write_handoff,
 };
 
 fn main() {
@@ -70,7 +71,38 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Erro
                 Ok(())
             }
         }
-        StartupCommand::Gui => launch_gui().map_err(Into::into),
+        StartupCommand::CreateHandoff { source, output } => {
+            let mut session = StudioSession::default();
+            let outcome = session.import_data_file(&source)?;
+            let size = write_handoff(
+                &output,
+                session.datasets(),
+                "InstPlot Lite compatible producer",
+                env!("CARGO_PKG_VERSION"),
+            )?;
+            println!(
+                "created_handoff={} datasets={} bytes={size}",
+                output.display(),
+                outcome.read
+            );
+            Ok(())
+        }
+        StartupCommand::ImportHandoff { source, project } => {
+            let imported = import_handoff(&source, HandoffCleanup::Keep)?;
+            imported.document.save(&project)?;
+            println!(
+                "imported_handoff={} project={} datasets={} source_removed=false",
+                source.display(),
+                project.display(),
+                imported.datasets.len()
+            );
+            Ok(())
+        }
+        StartupCommand::OpenHandoff(path) => {
+            let imported = import_handoff(&path, HandoffCleanup::DeleteAfterImport)?;
+            launch_gui(Some(imported)).map_err(Into::into)
+        }
+        StartupCommand::Gui => launch_gui(None).map_err(Into::into),
     }
 }
 
@@ -83,6 +115,9 @@ enum StartupCommand {
     CreateProject(PathBuf),
     CheckProject(PathBuf),
     PublicationCheck(PathBuf),
+    CreateHandoff { source: PathBuf, output: PathBuf },
+    ImportHandoff { source: PathBuf, project: PathBuf },
+    OpenHandoff(PathBuf),
 }
 
 impl StartupCommand {
@@ -106,14 +141,29 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--publication-check" => {
                 Ok(Self::PublicationCheck(path.into()))
             }
+            (Some(flag), Some(path), None) if flag == "--open-handoff" => {
+                Ok(Self::OpenHandoff(path.into()))
+            }
+            (Some(flag), Some(source), Some(output)) if flag == "--create-handoff" => {
+                Ok(Self::CreateHandoff {
+                    source: source.into(),
+                    output: output.into(),
+                })
+            }
+            (Some(flag), Some(source), Some(project)) if flag == "--import-handoff" => {
+                Ok(Self::ImportHandoff {
+                    source: source.into(),
+                    project: project.into(),
+                })
+            }
             _ => Err(
-                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --export-fixed-png PATH | --create-project PATH | --check-project PATH | --publication-check PATH]",
+                "usage: instplot-studio [--product-info | --export-fixed-pdf PATH | --export-fixed-png PATH | --create-project PATH | --check-project PATH | --publication-check PATH | --create-handoff SOURCE PACKAGE | --import-handoff PACKAGE PROJECT | --open-handoff PACKAGE]",
             ),
         }
     }
 }
 
-fn launch_gui() -> eframe::Result {
+fn launch_gui(startup: Option<HandoffImport>) -> eframe::Result {
     let started = Instant::now();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -126,7 +176,7 @@ fn launch_gui() -> eframe::Result {
     eframe::run_native(
         "instplot-studio",
         options,
-        Box::new(move |creation| Ok(Box::new(StudioApp::new(creation, started)))),
+        Box::new(move |creation| Ok(Box::new(StudioApp::new(creation, started, startup)))),
     )
 }
 
@@ -146,17 +196,35 @@ struct StudioApp {
 }
 
 impl StudioApp {
-    fn new(creation: &eframe::CreationContext<'_>, started: Instant) -> Self {
+    fn new(
+        creation: &eframe::CreationContext<'_>,
+        started: Instant,
+        startup: Option<HandoffImport>,
+    ) -> Self {
         creation.egui_ctx.options_mut(|options| {
             options.zoom_with_keyboard = true;
         });
         ui_shell_spike::install_publication_fonts(&creation.egui_ctx);
-        let document = FigureDocument::fixed();
+        let (document, datasets, status) = startup.map_or_else(
+            || (FigureDocument::fixed(), Vec::new(), "Ready".to_owned()),
+            |imported| {
+                (
+                    imported.document,
+                    imported.datasets,
+                    format!(
+                        "Opened Lite handoff from {} {}; temporary package removed",
+                        imported.producer_name, imported.producer_version
+                    ),
+                )
+            },
+        );
         let resolved = resolved_preview(&document)
             .expect("the validated Figure Document resolves through formal layout");
         let publication_report = check_publication(&document, &resolved, 300);
+        let mut session = StudioSession::default();
+        session.replace_datasets(datasets);
         Self {
-            session: StudioSession::default(),
+            session,
             document,
             resolved,
             publication_report,
@@ -165,7 +233,7 @@ impl StudioApp {
             project_path: None,
             canvas_zoom: 1.5,
             warnings: Vec::new(),
-            status: "Ready".to_owned(),
+            status,
             first_frame: true,
             started,
         }
@@ -208,6 +276,35 @@ impl StudioApp {
                 self.clear_warning("Import failed:");
             }
             Err(error) => self.push_warning(format!("Import failed: {error}")),
+        }
+    }
+
+    fn open_lite_handoff(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Open temporary handoff from InstPlot Lite")
+            .add_filter("InstPlot handoff", &["instplot-handoff"])
+            .pick_file()
+        else {
+            return;
+        };
+        match import_handoff(&path, HandoffCleanup::DeleteAfterImport) {
+            Ok(imported) => match resolved_preview(&imported.document) {
+                Ok(resolved) => {
+                    self.publication_report = check_publication(&imported.document, &resolved, 300);
+                    self.session.replace_datasets(imported.datasets);
+                    self.document = imported.document;
+                    self.resolved = resolved;
+                    self.project_path = None;
+                    self.selected_series = None;
+                    self.status = format!(
+                        "Opened Lite handoff from {} {}; temporary package removed",
+                        imported.producer_name, imported.producer_version
+                    );
+                    self.clear_warning("Handoff failed:");
+                }
+                Err(error) => self.push_warning(format!("Handoff layout failed: {error}")),
+            },
+            Err(error) => self.push_warning(format!("Handoff failed: {error}")),
         }
     }
 
@@ -453,6 +550,9 @@ impl eframe::App for StudioApp {
                 if ui.button("Open data…").clicked() {
                     self.open_data();
                 }
+                if ui.button("Open from Lite…").clicked() {
+                    self.open_lite_handoff();
+                }
                 if ui.button("Open project…").clicked() {
                     self.open_project();
                 }
@@ -612,6 +712,38 @@ mod tests {
             ])
             .unwrap(),
             StartupCommand::PublicationCheck(PathBuf::from("figure.instplot"))
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--open-handoff"),
+                OsString::from("transfer.instplot-handoff")
+            ])
+            .unwrap(),
+            StartupCommand::OpenHandoff(PathBuf::from("transfer.instplot-handoff"))
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--create-handoff"),
+                OsString::from("lite.txt"),
+                OsString::from("transfer.instplot-handoff")
+            ])
+            .unwrap(),
+            StartupCommand::CreateHandoff {
+                source: PathBuf::from("lite.txt"),
+                output: PathBuf::from("transfer.instplot-handoff")
+            }
+        );
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--import-handoff"),
+                OsString::from("transfer.instplot-handoff"),
+                OsString::from("figure.instplot")
+            ])
+            .unwrap(),
+            StartupCommand::ImportHandoff {
+                source: PathBuf::from("transfer.instplot-handoff"),
+                project: PathBuf::from("figure.instplot")
+            }
         );
         assert!(StartupCommand::parse([OsString::from("--unknown")]).is_err());
     }

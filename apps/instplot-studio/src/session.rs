@@ -24,6 +24,10 @@ impl StudioSession {
         &self.datasets
     }
 
+    pub fn replace_datasets(&mut self, datasets: Vec<DataSet>) {
+        self.datasets = datasets;
+    }
+
     pub fn import_data_file(&mut self, path: &Path) -> Result<ImportOutcome, ImportError> {
         let imported = read_data_file(path)?;
         let mut outcome = ImportOutcome {
@@ -56,6 +60,13 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join("smoke.csv")
+    }
+
+    fn lite_source_fit_fixture() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("lite-source-fit.txt")
     }
 
     #[test]
@@ -91,5 +102,70 @@ mod tests {
         );
         assert_eq!(session.dataset_count(), 1);
         assert_eq!(session.datasets()[0].plot_id, plot_id);
+    }
+
+    #[test]
+    fn lite_partitioned_export_preserves_explicit_fit_identity_and_equations() {
+        let mut session = StudioSession::default();
+        let outcome = session
+            .import_data_file(&lite_source_fit_fixture())
+            .unwrap();
+        assert_eq!(outcome.read, 2);
+        let source = &session.datasets()[0];
+        let fit = &session.datasets()[1];
+        assert_eq!(source.plot_id, "source-a");
+        assert_eq!(fit.plot_id, "fit-a");
+        let link = fit.fit_link.as_ref().unwrap();
+        assert_eq!(link.parent_dataset_id.as_deref(), Some("source-a"));
+        assert_eq!(link.source_x_column, "field");
+        assert_eq!(link.source_y_column, "response");
+        assert_eq!(link.equation.as_deref(), Some("y=1+x"));
+        assert_eq!(link.display_equation.as_deref(), Some("y = 1 + x"));
+
+        let source_path = lite_source_fit_fixture();
+        let source_before = std::fs::read(&source_path).unwrap();
+        let mut document = crate::FigureDocument::from_datasets(session.datasets()).unwrap();
+        document
+            .set_axis_ranges(crate::AxisRanges {
+                x_min: -1.0,
+                x_max: 3.0,
+                y_min: 0.0,
+                y_max: 4.0,
+            })
+            .unwrap();
+        let output = std::env::temp_dir().join(format!(
+            "instplot-no-writeback-{}.instplot",
+            std::process::id()
+        ));
+        document.save(&output).unwrap();
+        assert_eq!(std::fs::read(&source_path).unwrap(), source_before);
+        std::fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn lite_xlsx_round_trip_preserves_the_same_fit_link() {
+        let mut source_session = StudioSession::default();
+        source_session
+            .import_data_file(&lite_source_fit_fixture())
+            .unwrap();
+        let workbook =
+            std::env::temp_dir().join(format!("instplot-lite-handoff-{}.xlsx", std::process::id()));
+        let references = source_session.datasets().iter().collect::<Vec<_>>();
+        instplot_io::save_workbook_refs_with_fits(&workbook, &references, &[]).unwrap();
+
+        let mut imported = StudioSession::default();
+        let outcome = imported.import_data_file(&workbook).unwrap();
+        assert_eq!(outcome.read, 2);
+        let fit = imported
+            .datasets()
+            .iter()
+            .find(|dataset| dataset.kind == instplot_core::DataSetKind::Fit)
+            .unwrap();
+        let link = fit.fit_link.as_ref().unwrap();
+        assert_eq!(link.parent_dataset_id.as_deref(), Some("source-a"));
+        assert_eq!(link.source_x_column, "field");
+        assert_eq!(link.source_y_column, "response");
+        assert_eq!(link.display_equation.as_deref(), Some("y = 1 + x"));
+        std::fs::remove_file(workbook).unwrap();
     }
 }

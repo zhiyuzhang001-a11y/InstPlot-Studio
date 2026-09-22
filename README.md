@@ -47,7 +47,9 @@ reference/baseline lines, semantic annotations and the explicit legend now use
 the formal layout. B3.6 is complete: Preview, PDF and PNG now consume one
 formal layout result and resolved Display List. B4 is complete: versioned
 palette and semantic registries now drive a node-specific Publication Check in
-both the live Inspector and headless JSON report. B5 is next. See
+both the live Inspector and headless JSON report. B5 is active: the Studio-side
+Lite import and versioned handoff consumer are implemented; the separate Lite
+application still needs its producer/launcher integration. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -111,6 +113,15 @@ Validate the B4 registries and Publication Check with:
 ```sh
 python3 scripts/validate_b4.py
 ```
+
+Validate the Studio side of the B5 Lite handoff with:
+
+```sh
+python3 scripts/validate_b5_studio.py
+```
+
+The versioned exchange contract is documented in
+[`docs/INSTPLOT_HANDOFF_PROTOCOL.md`](docs/INSTPLOT_HANDOFF_PROTOCOL.md).
 
 The release binary also exposes window-independent project checks:
 

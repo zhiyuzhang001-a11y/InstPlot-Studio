@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B4 DONE；B5 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B4 DONE；B5 Studio side DONE，Lite integration pending）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,7 +1533,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B5 — 建立 Lite → Studio 交接，且 Studio 样式不得回写 Lite 源文件。**
+> **B5 — 在独立 InstPlot-Lite 仓库完成 producer/launcher 集成。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1557,7 +1557,10 @@ B3.6 单一 Display List 与 Preview/PDF/PNG 闭环证据见
 [`../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md`](../reports/B3_6_SINGLE_DISPLAY_LIST_CLOSEOUT.md)。
 B4 palette/semantic registry 与 Publication Check 闭环证据见
 [`../reports/B4_PUBLICATION_CHECK_CLOSEOUT.md`](../reports/B4_PUBLICATION_CHECK_CLOSEOUT.md)。
-后续按 B5 → B6 顺序执行。
+B5 Studio 侧交接协议、消费者与审计证据见
+[`../reports/B5_STUDIO_HANDOFF_FOUNDATION.md`](../reports/B5_STUDIO_HANDOFF_FOUNDATION.md)，
+协议见 [`INSTPLOT_HANDOFF_PROTOCOL.md`](INSTPLOT_HANDOFF_PROTOCOL.md)。
+Lite producer/launcher 集成完成后再关闭 B5，随后进入 B6。
 
 ---
 
