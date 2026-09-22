@@ -23,6 +23,13 @@ pub struct AxisSpec {
     pub scale: Scale,
     pub locator: Locator,
     pub formatter: Formatter,
+    pub grid: GridSpec,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GridSpec {
+    pub major: bool,
+    pub minor: bool,
 }
 
 #[derive(Clone, Debug)]

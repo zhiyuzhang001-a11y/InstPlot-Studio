@@ -2,8 +2,8 @@ use studio_render_spike::{Color, NodeId};
 use text_shaping_spike::Label;
 
 use crate::{
-    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, Formatter, LineStyle, Locator,
-    MarkerShape, MarkerStyle, Scale, Series,
+    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, Formatter, GridSpec, LineStyle,
+    Locator, MarkerShape, MarkerStyle, Scale, Series,
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
@@ -78,6 +78,7 @@ pub fn publication_fixture() -> Chart {
                 target_spacing_pt: 34.0,
             },
             formatter: Formatter::Auto,
+            grid: GridSpec::default(),
         },
         y: AxisSpec {
             id: NodeId(3),
@@ -89,6 +90,7 @@ pub fn publication_fixture() -> Chart {
                 target_spacing_pt: 28.0,
             },
             formatter: Formatter::Auto,
+            grid: GridSpec::default(),
         },
         series: vec![
             Series {

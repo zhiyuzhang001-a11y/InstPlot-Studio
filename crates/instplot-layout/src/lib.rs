@@ -12,7 +12,7 @@ pub use layout::{
     TickLayout, layout, layout_with_measurer,
 };
 pub use model::{
-    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, LineStyle, MarkerShape,
+    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, GridSpec, LineStyle, MarkerShape,
     MarkerStyle, Series,
 };
 pub use scale::{

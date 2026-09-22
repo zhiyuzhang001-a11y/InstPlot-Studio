@@ -649,6 +649,7 @@ fn draw_axes(
     hit_map: &mut HitMap,
     warnings: &mut Vec<LayoutWarning>,
 ) {
+    draw_grid(chart, axes, x_axis, y_axis, list);
     list.items.push(DisplayItem::Path {
         source: chart.id,
         path: rectangle(axes),
@@ -774,6 +775,80 @@ fn draw_axes(
             });
         }
     }
+}
+
+fn draw_grid(
+    chart: &Chart,
+    axes: Bounds,
+    x_axis: &AxisLayout,
+    y_axis: &AxisLayout,
+    list: &mut DisplayList,
+) {
+    let major = stroke(Color(218, 221, 224, 255), 0.4, DashStyle::Solid);
+    let minor = stroke(Color(232, 234, 236, 255), 0.3, DashStyle::Dotted);
+    if chart.x.grid.minor {
+        for value in &x_axis.minor {
+            if let Some(fraction) = chart.x.scale.map(*value, chart.x.minimum, chart.x.maximum) {
+                grid_line(
+                    list,
+                    chart.x.id,
+                    (axes.x + fraction * axes.width, axes.y),
+                    (axes.x + fraction * axes.width, axes.bottom()),
+                    &minor,
+                );
+            }
+        }
+    }
+    if chart.y.grid.minor {
+        for value in &y_axis.minor {
+            if let Some(fraction) = chart.y.scale.map(*value, chart.y.minimum, chart.y.maximum) {
+                let y = axes.bottom() - fraction * axes.height;
+                grid_line(list, chart.y.id, (axes.x, y), (axes.right(), y), &minor);
+            }
+        }
+    }
+    if chart.x.grid.major {
+        for tick in &x_axis.major {
+            grid_line(
+                list,
+                chart.x.id,
+                (tick.position, axes.y),
+                (tick.position, axes.bottom()),
+                &major,
+            );
+        }
+    }
+    if chart.y.grid.major {
+        for tick in &y_axis.major {
+            grid_line(
+                list,
+                chart.y.id,
+                (axes.x, tick.position),
+                (axes.right(), tick.position),
+                &major,
+            );
+        }
+    }
+}
+
+fn grid_line(
+    list: &mut DisplayList,
+    node: NodeId,
+    start: (f64, f64),
+    end: (f64, f64),
+    style: &Stroke,
+) {
+    list.items.push(DisplayItem::Path {
+        source: node,
+        path: Path {
+            verbs: vec![
+                PathVerb::MoveTo(pt(start.0), pt(start.1)),
+                PathVerb::LineTo(pt(end.0), pt(end.1)),
+            ],
+        },
+        fill: None,
+        stroke: Some(style.clone()),
+    });
 }
 
 fn draw_series(

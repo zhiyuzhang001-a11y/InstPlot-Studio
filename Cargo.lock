@@ -1376,6 +1376,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "studio-render-spike",
+ "text-shaping-spike",
  "ui-shell-spike",
 ]
 

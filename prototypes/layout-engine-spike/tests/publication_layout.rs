@@ -17,6 +17,40 @@ fn publication_fixture_is_deterministic_and_unclipped() {
     );
     assert_eq!(first.display_list.width.get(), chart.width_pt);
     assert_eq!(first.display_list.height.get(), chart.height_pt);
+    let clip_rectangles: Vec<_> = first
+        .display_list
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::ClipPush {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => Some((x.get(), y.get(), width.get(), height.get())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        clip_rectangles,
+        vec![(
+            first.axes.x,
+            first.axes.y,
+            first.axes.width,
+            first.axes.height
+        )]
+    );
+    assert_eq!(
+        first
+            .display_list
+            .items
+            .iter()
+            .filter(|item| matches!(item, DisplayItem::ClipPop { .. }))
+            .count(),
+        1
+    );
+    assert!(first.display_list.validation_errors().is_empty());
     assert!(first.iterations <= 4);
     assert!(!first.warnings.iter().any(|warning| matches!(
         warning,

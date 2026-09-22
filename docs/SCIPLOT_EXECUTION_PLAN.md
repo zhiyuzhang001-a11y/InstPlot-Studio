@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1 DONE；B3.2 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1–B3.2 DONE；B3.3 READY）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,7 +1533,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B3.2 — 固定正式 axes rectangle、spines、ticks、grid、labels 与 clipping。**
+> **B3.3 — 让 preview 消费 resolved glyph runs 或 outlines，并移除临时布局路径。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1545,6 +1545,8 @@ B2 完整证据见
 [`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)。
 B3.1 正式布局模块提升证据见
 [`../reports/B3_1_LAYOUT_PROMOTION.md`](../reports/B3_1_LAYOUT_PROMOTION.md)。
+B3.2 正式坐标轴、网格与裁切证据见
+[`../reports/B3_2_FORMAL_AXES.md`](../reports/B3_2_FORMAL_AXES.md)。
 后续按 B3 → B4 → B5 → B6 顺序执行。
 
 ---

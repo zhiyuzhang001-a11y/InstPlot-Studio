@@ -6,7 +6,9 @@ mod preview;
 mod project;
 mod session;
 
-pub use document::{AxisRanges, FigureDocument, SeriesDescriptor, SeriesKind};
+pub use document::{
+    AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, SeriesDescriptor, SeriesKind,
+};
 pub use export::{FixedPdfExportError, fixed_figure_pdf, save_fixed_figure_pdf};
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{

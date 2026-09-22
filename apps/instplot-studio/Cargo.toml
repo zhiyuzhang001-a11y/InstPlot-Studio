@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 studio-render-spike.workspace = true
+text-shaping-spike.workspace = true
 ui-shell-spike.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
