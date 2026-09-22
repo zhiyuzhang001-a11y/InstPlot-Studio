@@ -3048,6 +3048,17 @@ mod tests {
     }
 
     #[test]
+    fn fixed_tick_text_accepts_finite_values_and_rejects_bad_input() {
+        assert_eq!(
+            parse_fixed_ticks("-2; 0, 1.5\t3").unwrap(),
+            vec![-2.0, 0.0, 1.5, 3.0]
+        );
+        for invalid in ["", "   ", "oops", "1, NaN", "-inf 1", "1e999"] {
+            assert!(parse_fixed_ticks(invalid).is_err(), "accepted {invalid:?}");
+        }
+    }
+
+    #[test]
     fn preview_uses_formal_layout_and_resolved_rotated_text() {
         let resolved = resolved_preview(&FigureDocument::fixed()).unwrap();
         assert!(resolved.display.items.iter().any(|item| matches!(

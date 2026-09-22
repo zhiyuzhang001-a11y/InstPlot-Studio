@@ -1,7 +1,7 @@
 # B5P P8 稳定化与阶段关闭记录
 
 > 状态：AUTOMATED PASS；macOS 最终视觉交互确认待完成  
-> 日期：2026-09-22  
+> 更新：2026-09-23
 > 上位计划：`docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`
 
 ## 已完成的稳定化
@@ -20,6 +20,9 @@
 - Publication Check 的透明 palette 风险现在指向第一个实际受影响的 artist，可由 finding
   跳转到对象与 Inspector；P4 自动组合矩阵覆盖 85/89 mm、两类 formatter、负数/大数 tick
   与长 Greek/上下标/单位标签。
+- P8 边界矩阵新增直接测试：无 dataset、零行或无 alive row 会给出具体错误；NaN/Inf、空白及
+  非数字 fixed tick 输入不会进入文档；X=±1e12、Y=±1e-9 的有限科学计数范围可完成正式
+  layout，且所选 precision 不被重写。
 
 ## 自动审计结果
 
@@ -46,5 +49,13 @@
   中文界面本机视觉检查，P3 及本次 release 已完成真实首画布启动，但这不能替代新增交互的
   最终视觉验收。
 - Windows 本阶段未重新测试；按既定范围只在最终必要时做最小人工确认。
+
+## 解锁后的最小人工清单
+
+1. 在正常窗口和窄窗口各确认一次对象树、画布、Inspector 与问题面板均可到达且不互相遮挡；
+2. 用 Tab/Shift-Tab 检查主要控件焦点，以键盘编辑一个标签，再撤销、重做并保存重开；
+3. 点击 line、marker、error bar、annotation、legend，确认画布选中反馈与 Inspector 对象一致；
+4. 执行滚轮缩放、拖动画布、Fit 与 100%，确认这些 view 操作不制造 dirty 状态或改变导出；
+5. 从一个 finding 跳到对应对象，打开导出摘要，分别导出 PDF、白底 PNG 和透明 PNG。
 
 在上述 macOS 人工确认完成前，B5P 不标记为完全关闭，也不启动 Lite 集成或发布工作。

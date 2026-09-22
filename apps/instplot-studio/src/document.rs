@@ -1914,7 +1914,10 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use instplot_core::NumericColumn;
     use instplot_layout::SelectableRole;
     use studio_render_spike::{Color, DisplayItem};
 
@@ -1953,6 +1956,80 @@ mod tests {
         };
         assert!(document.set_axis_ranges(invalid).is_err());
         assert_eq!(document.axis_ranges(), before);
+    }
+
+    #[test]
+    fn empty_and_non_finite_handoff_data_fail_with_specific_errors() {
+        let empty = DataSet {
+            source: PathBuf::from("empty.txt"),
+            label: Some("Empty".to_owned()),
+            kind: DataSetKind::Source,
+            plot_id: "empty-source".to_owned(),
+            fit_link: None,
+            encoding: "UTF-8".to_owned(),
+            separator: "tab".to_owned(),
+            columns: vec![
+                NumericColumn {
+                    name: "x".to_owned(),
+                    values: Vec::new(),
+                },
+                NumericColumn {
+                    name: "y".to_owned(),
+                    values: Vec::new(),
+                },
+            ],
+            row_count: 0,
+            alive: Vec::new(),
+        };
+        assert!(
+            FigureDocument::from_datasets(&[])
+                .unwrap_err()
+                .to_string()
+                .contains("no datasets")
+        );
+        assert!(
+            FigureDocument::from_datasets(std::slice::from_ref(&empty))
+                .unwrap_err()
+                .to_string()
+                .contains("no alive plotted rows")
+        );
+
+        let mut non_finite = empty;
+        non_finite.row_count = 1;
+        non_finite.alive = vec![true];
+        non_finite.columns[0].values = vec![f64::NAN];
+        non_finite.columns[1].values = vec![1.0];
+        assert!(
+            FigureDocument::from_datasets(&[non_finite])
+                .unwrap_err()
+                .to_string()
+                .contains("inconsistent columns or alive state")
+        );
+    }
+
+    #[test]
+    fn extreme_finite_scientific_ranges_compile_without_changing_precision() {
+        let mut document = FigureDocument::fixed();
+        let mut x = document.axis_record(AxisDimension::X);
+        x.minimum = -1.0e12;
+        x.maximum = 1.0e12;
+        x.formatter = FormatterSpec::Scientific { precision: 6 };
+        document
+            .set_axis_record(AxisDimension::X, x.clone())
+            .unwrap();
+
+        let mut y = document.axis_record(AxisDimension::Y);
+        y.minimum = -1.0e-9;
+        y.maximum = 1.0e-9;
+        y.formatter = FormatterSpec::Scientific { precision: 8 };
+        document
+            .set_axis_record(AxisDimension::Y, y.clone())
+            .unwrap();
+
+        let display = document.compile().unwrap();
+        assert!(display.validation_errors().is_empty());
+        assert_eq!(document.axis_record(AxisDimension::X), x);
+        assert_eq!(document.axis_record(AxisDimension::Y), y);
     }
 
     #[test]
