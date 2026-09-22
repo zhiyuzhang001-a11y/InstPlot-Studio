@@ -2707,7 +2707,7 @@ impl eframe::App for StudioApp {
                             metrics.framebuffer_width,
                             metrics.framebuffer_height
                         ),
-                        egui::FontId::monospace(12.0),
+                        egui::FontId::proportional(12.0),
                         ui.visuals().text_color(),
                     );
 
