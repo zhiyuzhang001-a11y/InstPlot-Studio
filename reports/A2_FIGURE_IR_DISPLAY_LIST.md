@@ -45,8 +45,9 @@ and SVG mapping of the fixed axes and curve.
   this minimal spike; A7 owns publication layout policy.
 - The SVG mapper is validation-only and does not establish the production SVG
   dependency or text policy.
-- A0 cross-platform evidence remains open and Lite shared-core extraction remains
-  prohibited.
+- Part A cross-platform evidence is resolved under the current gate policy:
+  Windows validation is complete and Linux is deferred. Shared-core extraction
+  is now governed by B0 of the Part B short plan.
 
 ## Next dependency
 

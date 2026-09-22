@@ -1,6 +1,6 @@
 # ADR-020: InstPlot Studio V1 typography profile
 
-Status: Accepted; local implementation evidence complete, cross-platform evidence pending
+Status: Accepted; Part A implementation and Gate A evidence complete within the approved platform scope
 
 Date: 2026-09-21
 
@@ -39,8 +39,9 @@ The detailed acceptance contract is
   but they no longer satisfy the current typography acceptance contract.
 - A3 pins the exact TeX Gyre Heros release, hashes and license files, verifies
   all four faces and both V1 Core sets, and implements the semantic Label AST.
-- A4 and A8 now pass locally with semantic runs and reviewed Heros baselines;
-  native Windows/Linux evidence remains part of Gate A.
+- A4 and A8 pass on macOS, and Windows automated plus manual evidence is
+  complete. Linux is explicitly deferred by the product owner and is not
+  represented as passed.
 - The repository and package rename from SciPlot to InstPlot Studio is a
   separate mechanical migration; user-facing documentation should use the new
   product name immediately without renaming paths or package identifiers

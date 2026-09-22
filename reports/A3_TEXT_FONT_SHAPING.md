@@ -56,13 +56,13 @@ CJK is rejected before shaping and produces no fallback run.
 The selected Parley tests currently pass locally. The cosmic-text probe remains
 an exit-path comparison, not a production dependency decision.
 
-## Remaining gate evidence
+## Gate evidence disposition
 
-A2/A4 now carry semantic labels end-to-end, use ordinary base characters for
-script layout, and prove that every successful PDF/SVG/raster run uses a bundled
-Heros face. A7's metric snapshot and A8's five local visual baselines have been
-regenerated and reviewed. The remaining A3/A8 gate evidence is the native
-Windows/Linux deterministic metric and export matrix.
+A2/A4 carry semantic labels end-to-end, use ordinary base characters for script
+layout, and prove that every successful PDF/SVG/raster run uses a bundled Heros
+face. A7's metric snapshot and A8's five local visual baselines were regenerated
+and reviewed. Windows automated and manual validation is complete. Linux is
+deferred by the product owner and is not represented as passed.
 
 The historical Source Sans 3 and system-CJK measurements remain available in
 Git history, but are not current acceptance evidence.

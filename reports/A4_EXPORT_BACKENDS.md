@@ -45,9 +45,11 @@ The exact A1 round-half-away dimensions remain unchanged:
 Normal, transparent, grayscale, and deuteranopia routes pass against the newly
 reviewed TeX Gyre Heros baselines.
 
-## Remaining gate evidence
+## Gate evidence disposition
 
-- complete native Windows/Linux and PDF-viewer sampling in A8.
+- Native Windows automated and manual checks, including Edge PDF viewing, are
+  complete.
+- Linux is deferred by the product owner and is not represented as passed.
 
 ## Verification
 

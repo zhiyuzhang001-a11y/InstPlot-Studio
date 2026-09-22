@@ -1,6 +1,6 @@
 # A0 — InstPlot Lite baseline
 
-Status: **local baseline captured; cross-platform evidence remains open**  
+Status: **local baseline captured; Windows validation complete; Linux deferred**
 Captured: 2026-09-20, macOS arm64
 
 ## Identity

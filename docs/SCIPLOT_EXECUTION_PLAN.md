@@ -1,8 +1,8 @@
 # InstPlot Studio 执行计划
 
-> 文档性质：技术验证与正式开发执行计划  
-> 状态：Draft V1  
-> 制定日期：2026-09-20  
+> 文档性质：技术验证与正式开发执行计划
+> 状态：Part A DONE；Part B READY
+> 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
 
@@ -136,28 +136,17 @@ B6  三平台打包、验收与预览发布
 
 # Part A：启动前技术验证
 
-## 当前检查点（2026-09-21，ADR-020 后）
+## 当前检查点（2026-09-22，Gate A 关闭）
 
-- **A0：可继续使用。** Lite 基线与 Studio 出版字体无耦合；跨平台证据仍按原计划补齐。
-- **A1：可继续使用。** 几何、数据、palette、尺寸和输出合同不变；正向文本 fixture
-  已迁移到 V1 支持范围，unsupported CJK 仅保留为负向 fixture，当前验证通过。
-- **A2：本机通过。** point-based Figure IR、稳定 node identity 和 Display List 保留，
-  `GlyphRun` 已接入 A3 semantic Label AST，不再扁平化 Unicode presentation characters。
-- **A3：本机迁移已通过。** 已固定 TeX Gyre Heros 2.004 四个真实 face、GUST
-  许可证和 checksum；新的 AST、U+03BC 规则与 unsupported-script 诊断通过本机测试。
-- **A4：本机通过。** PDF/raster 使用同一 semantic shaping 结果；bundled-only、
-  字体嵌入/subset、文本提取、结构与 raster 对照测试通过。SVG 原型按 ADR-021
-  保留为非阻断研究。
-- **A5：可继续使用。** Plotine 不进入生产依赖的结论不受字体更换影响。
-- **A6：可继续使用。** UI shell、file dialog 与 HiDPI 证据保留；本地化 UI 字体不等于
-  publication-label 字体策略。
-- **A7：本机通过。** 已在 bundled-only 断言下重新审查并冻结 TeX Gyre Heros metrics。
-- **A8：本机字体与视觉矩阵通过。** 五组 Heros baseline 已审查并零差异复跑；
-  Windows/Linux 原生矩阵和最终许可证/PDF-viewer 检查仍待完成。SVG editor
-  检查已由 ADR-021 移出 Gate A。
-
-因此，昨天的 A0–A8 主体架构继续有效，字体依赖的三个本机检查已经重新闭环。
-Gate A 当前仅因跨平台与最终审计证据保持 open。
+- **A0–A8：DONE。** 本机 21 项验证、字体/视觉矩阵、PDF Viewer、依赖审计和
+  Windows 21 项自动化验证均通过；Windows 10 的四档 scaling、Unicode 输入、
+  原生文件窗口和 Edge PDF 检查也通过。
+- **延期但不冒充通过：** Linux 与物理 Retina/HiDPI 由产品负责人明确移到相应
+  发布声明前；SVG editor compatibility 由 ADR-021 保留为非阻断研究。
+- **已知迁移项：** A6 临时 shell 的纵轴占位文字不是出版级预览，必须在 B3
+  接入 A3/A7 resolved text 后关闭。
+- **Part B：READY。** 必须从 B0 共享核心开始，不直接跳过 B0–B2。独立短计划见
+  `docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`。
 
 ## 4. A0：冻结 InstPlot Lite 基线
 
@@ -1539,19 +1528,15 @@ Next dependency:
 
 ---
 
-## 25. 第一个可执行任务
+## 25. 当前第一个可执行任务
 
-本计划批准后的第一个任务应是：
+Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> 完成 A0 Lite baseline，并创建 A1 固定出版测试图的 fixture manifest。
+> **B0.1 — 对 Lite 现有实现进行只读盘点，形成共享核心的迁移边界与映射。**
 
-它不引入新的生产依赖，不修改 Lite 用户界面，也不开始渲染器实现。完成后才能创建 `studio-render-spike`。
-
-紧接着的第一个代码原型是：
-
-> A2：用 pt 坐标生成固定 Figure IR 和 backend-neutral Display List，并通过 snapshot 验证确定性。
-
-这两个任务共同把项目从“已有方向”推进到“可以安全开始验证”。
+具体范围和验收条件见
+[`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
+本任务只产出迁移清单，不立即移动代码；后续仍按 B0 → B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
 
 ---
 

@@ -19,26 +19,16 @@ the historical `SciPlot` name until a separate mechanical rename is completed.
 
 ## Current phase
 
-Part A:
+Part A and Gate A are complete. The local 21-check validation, typography and
+visual matrix, dependency audit, macOS PDF review, Windows automated audit and
+Windows 10 manual scaling/input/PDF review pass. Linux and physical Retina
+checks are explicitly deferred to a release that claims those targets; they are
+not represented as passed.
 
-1. A0 — local InstPlot Lite baseline captured; cross-platform evidence remains open;
-2. A1 — fixed publication fixture and acceptance contract frozen and validated;
-3. A2 — point-based Figure IR and backend-neutral Display List spike implemented
-   and locally verified;
-4. A3 — Parley/fontique/HarfRust/skrifa retained; bundled TeX Gyre Heros and the
-   revised semantic/Unicode contract now pass the local shaping prototype;
-5. A4 — semantic labels now reach Krilla PDF and direct tiny-skia raster with
-   only bundled Heros faces; local embedding/extraction checks pass. The direct
-   SVG prototype is retained as optional, non-blocking research under ADR-021;
-6. A5 — Plotine 0.5.2 compared against the same fixture; ADR-012 keeps it out of
-   production dependencies and retains only algorithm/test ideas;
-7. A6 — eframe/egui shell, native dialog, keyboard input, view zoom, HiDPI
-   transform, and window-independent export locally validated; three-platform
-   scaling/theme evidence remains an A8 check;
-8. A7 — deterministic single-Axes layout, ticks, publication marks, legend
-   placement, warnings, hit map, and the Heros metric snapshot pass locally;
-9. A8 — the local Heros typography and five-image visual-regression matrix pass;
-   native Windows/Linux and remaining final-audit evidence remain.
+Part B is ready and begins with B0 shared-core extraction, followed by the
+independent Studio application, formal Figure Document, and the single-axes
+production slice. See
+[`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Validate the A1 contract with:
 
