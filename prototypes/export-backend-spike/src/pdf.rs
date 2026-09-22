@@ -40,8 +40,8 @@ pub fn to_pdf(list: &ResolvedDisplayList) -> Result<Vec<u8>, ExportError> {
     let mut document = Document::new();
     document.set_metadata(
         Metadata::new()
-            .title("SciPlot A4 publication fixture".into())
-            .creator("SciPlot export-backend-spike".into()),
+            .title("InstPlot Studio fixed publication figure".into())
+            .creator("InstPlot Studio".into()),
     );
     let settings =
         PageSettings::from_wh(list.width, list.height).ok_or(ExportError::InvalidPage)?;

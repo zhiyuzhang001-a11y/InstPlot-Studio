@@ -8,4 +8,14 @@ publish = false
 
 [dependencies]
 eframe.workspace = true
+export-backend-spike.workspace = true
 instplot-core.workspace = true
+instplot-io.workspace = true
+studio-render-spike.workspace = true
+ui-shell-spike.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { workspace = true, features = ["xdg-portal"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd.workspace = true

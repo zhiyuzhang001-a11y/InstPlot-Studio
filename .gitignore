@@ -1,4 +1,7 @@
 **/target/
+**/__pycache__/
 /.agent-token-manager/
+/output/
+/tmp/
 *.log
 .DS_Store

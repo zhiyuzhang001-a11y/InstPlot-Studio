@@ -1,24 +1,17 @@
-//! Product boundary and non-UI session state for InstPlot Studio.
+//! Product boundary and non-UI application services for InstPlot Studio.
 
-use instplot_core::DataSet;
+mod document;
+mod export;
+mod preview;
+mod session;
+
+pub use document::{AxisRanges, FigureDocument, SeriesDescriptor, SeriesKind};
+pub use export::{FixedPdfExportError, fixed_figure_pdf, save_fixed_figure_pdf};
+pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
+pub use session::{ImportOutcome, StudioSession};
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";
 pub const BINARY_NAME: &str = "instplot-studio";
-
-#[derive(Default)]
-pub struct StudioSession {
-    datasets: Vec<DataSet>,
-}
-
-impl StudioSession {
-    pub fn dataset_count(&self) -> usize {
-        self.datasets.len()
-    }
-
-    pub fn datasets(&self) -> &[DataSet] {
-        &self.datasets
-    }
-}
 
 pub fn product_info() -> String {
     format!(

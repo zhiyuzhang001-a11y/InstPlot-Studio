@@ -7,6 +7,12 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "apps/**"
+      - "prototypes/export-backend-spike/**"
+      - "prototypes/studio-render-spike/**"
+      - "prototypes/text-shaping-spike/**"
+      - "prototypes/ui-shell-spike/**"
+      - "scripts/validate_b1.py"
+      - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   pull_request:
     paths:
@@ -14,6 +20,12 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "apps/**"
+      - "prototypes/export-backend-spike/**"
+      - "prototypes/studio-render-spike/**"
+      - "prototypes/text-shaping-spike/**"
+      - "prototypes/ui-shell-spike/**"
+      - "scripts/validate_b1.py"
+      - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   workflow_dispatch:
 
@@ -57,12 +69,18 @@ jobs:
 
       - name: Check product identity
         if: runner.os != 'Windows'
-        run: test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.0'
+        run: |
+          test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.0'
+          target/release/instplot-studio --export-fixed-pdf target/b1-fixed.pdf
+          test -s target/b1-fixed.pdf
 
-      - name: Check Windows product identity
+      - name: Check Windows product identity and headless export
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $actual = & target/release/instplot-studio.exe --product-info
           $expected = "InstPlot Studio`tinstplot-studio`t0.1.0"
           if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }
+          & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
+          if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
+          if ((Get-Item target/b1-fixed.pdf).Length -lt 1000) { throw "Headless PDF is unexpectedly small" }
