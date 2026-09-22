@@ -25,6 +25,49 @@ pub struct AxisSpec {
     pub locator: Locator,
     pub formatter: Formatter,
     pub grid: GridSpec,
+    pub appearance: AxisAppearance,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickDirection {
+    In,
+    Out,
+    InOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AxisAppearance {
+    pub near_spine: bool,
+    pub far_spine: bool,
+    pub near_ticks: bool,
+    pub far_ticks: bool,
+    pub near_tick_labels: bool,
+    pub far_tick_labels: bool,
+    pub major_ticks: bool,
+    pub minor_ticks: bool,
+    pub tick_direction: TickDirection,
+    pub tick_label_pad_pt: f64,
+    pub label_edge_pad_pt: f64,
+    pub label_tick_pad_pt: f64,
+}
+
+impl Default for AxisAppearance {
+    fn default() -> Self {
+        Self {
+            near_spine: true,
+            far_spine: true,
+            near_ticks: true,
+            far_ticks: true,
+            near_tick_labels: true,
+            far_tick_labels: false,
+            major_ticks: true,
+            minor_ticks: true,
+            tick_direction: TickDirection::In,
+            tick_label_pad_pt: 4.0,
+            label_edge_pad_pt: 6.0,
+            label_tick_pad_pt: 4.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -9,11 +9,13 @@ mod workspace;
 use eframe::egui;
 use instplot_core::{DataSet, DataSetKind};
 use instplot_studio::{
-    AxisRanges, CheckSeverity, EditCommand, EditGroup, EditHistory, EguiPreviewAdapter,
-    FigureDocument, HandoffCleanup, HandoffImport, MoveDirection, OpenProjectSource, PRODUCT_NAME,
-    PreviewAdapter, PublicationReport, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor,
-    SeriesKind, StudioSession, check_publication, import_handoff, product_info, resolve_document,
-    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
+    AxisDimension, AxisRanges, AxisRecord, AxisScale, CheckSeverity, EditCommand, EditGroup,
+    EditHistory, EguiPreviewAdapter, FigureDocument, FormatterSpec, HandoffCleanup, HandoffImport,
+    LabelNode, LocatorSpec, MoveDirection, OpenProjectSource, PRODUCT_NAME, PreviewAdapter,
+    PublicationReport, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind,
+    StudioSession, TickDirection, check_publication, import_handoff, product_info,
+    resolve_document, save_figure_pdf, save_figure_png, save_fixed_figure_pdf,
+    save_fixed_figure_png, write_handoff,
 };
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;
@@ -199,6 +201,10 @@ struct StudioApp {
     binding_error: String,
     creation_style: SeriesCreationStyle,
     pending_delete_source: Option<String>,
+    x_label_draft: LabelDraft,
+    y_label_draft: LabelDraft,
+    x_fixed_ticks: String,
+    y_fixed_ticks: String,
     workspace: WorkspaceState,
     edit_history: EditHistory,
     pending_action: Option<PendingAction>,
@@ -230,6 +236,134 @@ struct AppMessage {
     code: String,
     level: MessageLevel,
     text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LabelPartKind {
+    Text,
+    Variable,
+    Upright,
+    GreekVariable,
+    Number,
+    DescriptiveSubscript,
+    VariableSubscript,
+    Superscript,
+    Unit,
+    UnitSeparator,
+    Operator,
+    Emphasis,
+    BoldVariable,
+}
+
+#[derive(Clone, Debug)]
+struct LabelPartDraft {
+    kind: LabelPartKind,
+    value: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LabelDraft {
+    parts: Vec<LabelPartDraft>,
+}
+
+impl LabelDraft {
+    fn from_nodes(nodes: &[LabelNode]) -> Self {
+        Self {
+            parts: nodes.iter().map(LabelPartDraft::from_node).collect(),
+        }
+    }
+
+    fn to_nodes(&self) -> Result<Vec<LabelNode>, String> {
+        if self.parts.is_empty() {
+            return Err("axis label requires at least one semantic part".to_owned());
+        }
+        self.parts.iter().map(LabelPartDraft::to_node).collect()
+    }
+}
+
+impl LabelPartDraft {
+    fn from_node(node: &LabelNode) -> Self {
+        let (kind, value) = match node {
+            LabelNode::Text(value) => (LabelPartKind::Text, value.clone()),
+            LabelNode::Variable(value) => (LabelPartKind::Variable, value.clone()),
+            LabelNode::Upright(value) => (LabelPartKind::Upright, value.clone()),
+            LabelNode::GreekVariable(value) => (LabelPartKind::GreekVariable, value.to_string()),
+            LabelNode::Number(value) => (LabelPartKind::Number, value.clone()),
+            LabelNode::DescriptiveSubscript(nodes) => {
+                (LabelPartKind::DescriptiveSubscript, label_nodes_text(nodes))
+            }
+            LabelNode::VariableSubscript(nodes) => {
+                (LabelPartKind::VariableSubscript, label_nodes_text(nodes))
+            }
+            LabelNode::Superscript(nodes) => (LabelPartKind::Superscript, label_nodes_text(nodes)),
+            LabelNode::Unit(value) => (LabelPartKind::Unit, value.clone()),
+            LabelNode::UnitSeparator => (LabelPartKind::UnitSeparator, String::new()),
+            LabelNode::Operator(value) => (LabelPartKind::Operator, value.clone()),
+            LabelNode::Emphasis(value) => (LabelPartKind::Emphasis, value.clone()),
+            LabelNode::BoldVariable(value) => (LabelPartKind::BoldVariable, value.clone()),
+        };
+        Self { kind, value }
+    }
+
+    fn to_node(&self) -> Result<LabelNode, String> {
+        if self.kind != LabelPartKind::UnitSeparator && self.value.is_empty() {
+            return Err("semantic label parts cannot be empty".to_owned());
+        }
+        Ok(match self.kind {
+            LabelPartKind::Text => LabelNode::Text(self.value.clone()),
+            LabelPartKind::Variable => LabelNode::Variable(self.value.clone()),
+            LabelPartKind::Upright => LabelNode::Upright(self.value.clone()),
+            LabelPartKind::GreekVariable => {
+                let mut chars = self.value.chars();
+                let value = chars
+                    .next()
+                    .filter(|_| chars.next().is_none())
+                    .ok_or_else(|| {
+                        "Greek variable must contain exactly one character".to_owned()
+                    })?;
+                if !matches!(value as u32, 0x0370..=0x03ff | 0x1f00..=0x1fff) {
+                    return Err("Greek variable must use a Greek Unicode character".to_owned());
+                }
+                LabelNode::GreekVariable(value)
+            }
+            LabelPartKind::Number => LabelNode::Number(self.value.clone()),
+            LabelPartKind::DescriptiveSubscript => {
+                LabelNode::DescriptiveSubscript(vec![LabelNode::Text(self.value.clone())])
+            }
+            LabelPartKind::VariableSubscript => {
+                LabelNode::VariableSubscript(vec![LabelNode::Variable(self.value.clone())])
+            }
+            LabelPartKind::Superscript => {
+                LabelNode::Superscript(vec![LabelNode::Number(self.value.clone())])
+            }
+            LabelPartKind::Unit => LabelNode::Unit(self.value.clone()),
+            LabelPartKind::UnitSeparator => LabelNode::UnitSeparator,
+            LabelPartKind::Operator => LabelNode::Operator(self.value.clone()),
+            LabelPartKind::Emphasis => LabelNode::Emphasis(self.value.clone()),
+            LabelPartKind::BoldVariable => LabelNode::BoldVariable(self.value.clone()),
+        })
+    }
+}
+
+fn label_nodes_text(nodes: &[LabelNode]) -> String {
+    nodes
+        .iter()
+        .map(|node| match node {
+            LabelNode::Text(value)
+            | LabelNode::Variable(value)
+            | LabelNode::Upright(value)
+            | LabelNode::Number(value)
+            | LabelNode::Unit(value)
+            | LabelNode::Operator(value)
+            | LabelNode::Emphasis(value)
+            | LabelNode::BoldVariable(value) => value.clone(),
+            LabelNode::GreekVariable(value) => value.to_string(),
+            LabelNode::DescriptiveSubscript(nodes)
+            | LabelNode::VariableSubscript(nodes)
+            | LabelNode::Superscript(nodes) => label_nodes_text(nodes),
+            LabelNode::UnitSeparator => " ".to_owned(),
+        })
+        .collect()
 }
 
 impl StudioApp {
@@ -270,6 +404,10 @@ impl StudioApp {
         let mut session = StudioSession::default();
         session.replace_datasets(datasets);
         let edit_history = EditHistory::new(&document, !startup_unsaved);
+        let x_label_draft = LabelDraft::from_nodes(document.axis_label(AxisDimension::X));
+        let y_label_draft = LabelDraft::from_nodes(document.axis_label(AxisDimension::Y));
+        let x_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::X));
+        let y_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::Y));
         Self {
             session,
             document,
@@ -283,6 +421,10 @@ impl StudioApp {
             binding_error: String::new(),
             creation_style: SeriesCreationStyle::Scatter,
             pending_delete_source: None,
+            x_label_draft,
+            y_label_draft,
+            x_fixed_ticks,
+            y_fixed_ticks,
             workspace,
             edit_history,
             pending_action: None,
@@ -385,6 +527,7 @@ impl StudioApp {
                     self.workspace = WorkspaceState::from_lite(self.language.text(Text::Untitled));
                     self.selected_series = None;
                     self.selected_dataset = None;
+                    self.sync_axis_editors();
                     self.messages.clear();
                     self.set_success(
                         self.language
@@ -426,6 +569,7 @@ impl StudioApp {
                     self.resolved = resolved;
                     self.selected_series = None;
                     self.selected_dataset = None;
+                    self.sync_axis_editors();
                     self.workspace = WorkspaceState::from_project(&path, !opened_primary);
                     self.messages.clear();
                     for (index, warning) in report
@@ -467,6 +611,7 @@ impl StudioApp {
         (self.session, _) = StudioSession::from_project(self.document.project());
         self.selected_series = None;
         self.selected_dataset = None;
+        self.sync_axis_editors();
         self.workspace = WorkspaceState::new(self.language.text(Text::Untitled));
         self.edit_history.reset(&self.document, true);
         self.messages.clear();
@@ -599,6 +744,7 @@ impl StudioApp {
             && self.refresh_document("undo-layout")
         {
             (self.session, _) = StudioSession::from_project(self.document.project());
+            self.sync_axis_editors();
             self.set_success(self.language.undo(&description));
         }
     }
@@ -608,6 +754,7 @@ impl StudioApp {
             && self.refresh_document("redo-layout")
         {
             (self.session, _) = StudioSession::from_project(self.document.project());
+            self.sync_axis_editors();
             self.set_success(self.language.redo(&description));
         }
     }
@@ -706,7 +853,19 @@ impl StudioApp {
     }
 
     fn execute_document_edit(&mut self, command: EditCommand, success: &str) -> bool {
-        match self.edit_history.execute(&mut self.document, command, None) {
+        self.execute_document_edit_with_group(command, success, None)
+    }
+
+    fn execute_document_edit_with_group(
+        &mut self,
+        command: EditCommand,
+        success: &str,
+        group: Option<EditGroup>,
+    ) -> bool {
+        match self
+            .edit_history
+            .execute(&mut self.document, command, group)
+        {
             Ok(outcome) if outcome.changed && self.refresh_document("edit-layout") => {
                 self.set_success(success.to_owned());
                 self.clear_message("edit");
@@ -718,6 +877,379 @@ impl StudioApp {
                 false
             }
         }
+    }
+
+    fn figure_size_editor(&mut self, ui: &mut egui::Ui) {
+        ui.label(self.language.text(Text::FigureSize));
+        let (mut width, mut height) = self.document.figure_size_mm();
+        let mut changed_group = None;
+        let mut finish = false;
+        ui.horizontal(|ui| {
+            let response = ui.add(
+                egui::DragValue::new(&mut width)
+                    .range(20.0..=500.0)
+                    .speed(0.5)
+                    .prefix(format!("{}: ", self.language.text(Text::WidthMm))),
+            );
+            if response.changed() {
+                changed_group = Some(EditGroup::FigureWidth);
+            }
+            finish |= response.drag_stopped() || response.lost_focus();
+            let response = ui.add(
+                egui::DragValue::new(&mut height)
+                    .range(20.0..=500.0)
+                    .speed(0.5)
+                    .prefix(format!("{}: ", self.language.text(Text::HeightMm))),
+            );
+            if response.changed() {
+                changed_group = Some(EditGroup::FigureHeight);
+            }
+            finish |= response.drag_stopped() || response.lost_focus();
+        });
+        ui.horizontal(|ui| {
+            if ui.button("85 × 65 mm").clicked() {
+                width = 85.0;
+                height = 65.0;
+                changed_group = Some(EditGroup::FigureWidth);
+                finish = true;
+            }
+            if ui.button("89 × 65 mm").clicked() {
+                width = 89.0;
+                height = 65.0;
+                changed_group = Some(EditGroup::FigureWidth);
+                finish = true;
+            }
+        });
+        if let Some(group) = changed_group {
+            self.execute_document_edit_with_group(
+                EditCommand::SetFigureSize {
+                    width_mm: width,
+                    height_mm: height,
+                },
+                self.language.text(Text::ApplySize),
+                Some(group),
+            );
+        }
+        if finish {
+            self.edit_history.finish_coalescing();
+        }
+    }
+
+    fn axis_editor(&mut self, ui: &mut egui::Ui, dimension: AxisDimension) {
+        let title = match dimension {
+            AxisDimension::X => self.language.text(Text::XAxis),
+            AxisDimension::Y => self.language.text(Text::YAxis),
+        };
+        let mut record = self.document.axis_record(dimension);
+        let mut changed = false;
+        let mut fixed_ticks = match dimension {
+            AxisDimension::X => self.x_fixed_ticks.clone(),
+            AxisDimension::Y => self.y_fixed_ticks.clone(),
+        };
+        let mut fixed_tick_error = None;
+        ui.collapsing(title, |ui| {
+            changed |= ui
+                .checkbox(&mut record.autoscale, self.language.text(Text::Autoscale))
+                .changed();
+            ui.label(self.language.text(Text::Scale));
+            egui::ComboBox::from_id_salt(("scale", dimension))
+                .selected_text(match record.scale {
+                    AxisScale::Linear => self.language.text(Text::Linear),
+                    AxisScale::Log10 => self.language.text(Text::Log10),
+                })
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(
+                            &mut record.scale,
+                            AxisScale::Linear,
+                            self.language.text(Text::Linear),
+                        )
+                        .changed();
+                    changed |= ui
+                        .selectable_value(
+                            &mut record.scale,
+                            AxisScale::Log10,
+                            self.language.text(Text::Log10),
+                        )
+                        .changed();
+                });
+
+            let locator_is_fixed = matches!(record.locator, LocatorSpec::Fixed { .. });
+            ui.label(self.language.text(Text::Locator));
+            egui::ComboBox::from_id_salt(("locator", dimension))
+                .selected_text(if locator_is_fixed {
+                    self.language.text(Text::Fixed)
+                } else {
+                    self.language.text(Text::Auto)
+                })
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(!locator_is_fixed, self.language.text(Text::Auto))
+                        .clicked()
+                    {
+                        record.locator = LocatorSpec::Auto { target_count: 6 };
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_label(locator_is_fixed, self.language.text(Text::Fixed))
+                        .clicked()
+                    {
+                        let values = parse_fixed_ticks(&fixed_ticks)
+                            .unwrap_or_else(|_| vec![record.minimum, record.maximum]);
+                        record.locator = LocatorSpec::Fixed { values };
+                        changed = true;
+                    }
+                });
+            match &mut record.locator {
+                LocatorSpec::Auto { target_count } => {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(target_count)
+                                .range(2..=20)
+                                .prefix(format!("{}: ", self.language.text(Text::TargetTickCount))),
+                        )
+                        .changed();
+                }
+                LocatorSpec::Fixed { values } => {
+                    ui.label(self.language.text(Text::FixedTickValues));
+                    ui.text_edit_singleline(&mut fixed_ticks);
+                    if ui.button(self.language.text(Text::Apply)).clicked() {
+                        match parse_fixed_ticks(&fixed_ticks) {
+                            Ok(parsed) => {
+                                *values = parsed;
+                                changed = true;
+                            }
+                            Err(error) => fixed_tick_error = Some(error),
+                        }
+                    }
+                }
+            }
+
+            let formatter_kind = match record.formatter {
+                FormatterSpec::Auto => 0,
+                FormatterSpec::Decimal { .. } => 1,
+                FormatterSpec::Scientific { .. } => 2,
+            };
+            ui.label(self.language.text(Text::Formatter));
+            egui::ComboBox::from_id_salt(("formatter", dimension))
+                .selected_text(match formatter_kind {
+                    0 => self.language.text(Text::Auto),
+                    1 => self.language.text(Text::Decimal),
+                    _ => self.language.text(Text::Scientific),
+                })
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(formatter_kind == 0, self.language.text(Text::Auto))
+                        .clicked()
+                    {
+                        record.formatter = FormatterSpec::Auto;
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_label(formatter_kind == 1, self.language.text(Text::Decimal))
+                        .clicked()
+                    {
+                        record.formatter = FormatterSpec::Decimal { precision: 2 };
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_label(formatter_kind == 2, self.language.text(Text::Scientific))
+                        .clicked()
+                    {
+                        record.formatter = FormatterSpec::Scientific { precision: 2 };
+                        changed = true;
+                    }
+                });
+            if let FormatterSpec::Decimal { precision } | FormatterSpec::Scientific { precision } =
+                &mut record.formatter
+            {
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(precision)
+                            .range(0..=15)
+                            .prefix(format!("{}: ", self.language.text(Text::Precision))),
+                    )
+                    .changed();
+            }
+
+            ui.separator();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.near_spine,
+                    self.language.text(Text::NearSpine),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.far_spine,
+                    self.language.text(Text::FarSpine),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.near_ticks,
+                    self.language.text(Text::NearTicks),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.far_ticks,
+                    self.language.text(Text::FarTicks),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.near_tick_labels,
+                    self.language.text(Text::NearTickLabels),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.far_tick_labels,
+                    self.language.text(Text::FarTickLabels),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.major_ticks,
+                    self.language.text(Text::MajorTicks),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.minor_ticks,
+                    self.language.text(Text::MinorTicks),
+                )
+                .changed();
+            ui.label(self.language.text(Text::TickDirection));
+            egui::ComboBox::from_id_salt(("tick-direction", dimension))
+                .selected_text(tick_direction_name(
+                    self.language,
+                    record.appearance.tick_direction,
+                ))
+                .show_ui(ui, |ui| {
+                    for direction in [TickDirection::In, TickDirection::Out, TickDirection::InOut] {
+                        changed |= ui
+                            .selectable_value(
+                                &mut record.appearance.tick_direction,
+                                direction,
+                                tick_direction_name(self.language, direction),
+                            )
+                            .changed();
+                    }
+                });
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.grid_major,
+                    self.language.text(Text::MajorGrid),
+                )
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut record.appearance.grid_minor,
+                    self.language.text(Text::MinorGrid),
+                )
+                .changed();
+            for (value, label) in [
+                (
+                    &mut record.appearance.tick_label_pad_pt,
+                    self.language.text(Text::TickLabelPad),
+                ),
+                (
+                    &mut record.appearance.label_edge_pad_pt,
+                    self.language.text(Text::LabelEdgePad),
+                ),
+                (
+                    &mut record.appearance.label_tick_pad_pt,
+                    self.language.text(Text::LabelTickPad),
+                ),
+            ] {
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(value)
+                            .range(0.0..=72.0)
+                            .prefix(format!("{label}: ")),
+                    )
+                    .changed();
+            }
+        });
+        match dimension {
+            AxisDimension::X => self.x_fixed_ticks = fixed_ticks,
+            AxisDimension::Y => self.y_fixed_ticks = fixed_ticks,
+        }
+        if let Some(error) = fixed_tick_error {
+            self.push_error("fixed-ticks", error);
+        }
+        if changed {
+            self.execute_document_edit(EditCommand::SetAxisRecord { dimension, record }, title);
+        }
+        self.axis_label_editor(ui, dimension);
+    }
+
+    fn axis_label_editor(&mut self, ui: &mut egui::Ui, dimension: AxisDimension) {
+        let draft = match dimension {
+            AxisDimension::X => &mut self.x_label_draft,
+            AxisDimension::Y => &mut self.y_label_draft,
+        };
+        let mut remove = None;
+        ui.collapsing(self.language.text(Text::AxisLabel), |ui| {
+            ui.weak(self.language.text(Text::SemanticPart));
+            for (index, part) in draft.parts.iter_mut().enumerate() {
+                ui.push_id(("label-part", dimension, index), |ui| {
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("kind")
+                            .selected_text(label_part_kind_name(self.language, part.kind))
+                            .show_ui(ui, |ui| {
+                                for kind in label_part_kinds() {
+                                    ui.selectable_value(
+                                        &mut part.kind,
+                                        kind,
+                                        label_part_kind_name(self.language, kind),
+                                    );
+                                }
+                            });
+                        if part.kind != LabelPartKind::UnitSeparator {
+                            ui.text_edit_singleline(&mut part.value);
+                        }
+                        if ui
+                            .small_button("−")
+                            .on_hover_text(self.language.text(Text::Remove))
+                            .clicked()
+                        {
+                            remove = Some(index);
+                        }
+                    });
+                });
+            }
+            if ui.button(self.language.text(Text::AddPart)).clicked() {
+                draft.parts.push(LabelPartDraft {
+                    kind: LabelPartKind::Text,
+                    value: String::new(),
+                });
+            }
+        });
+        if let Some(index) = remove {
+            draft.parts.remove(index);
+        }
+        let apply = ui.button(self.language.text(Text::ApplyLabel)).clicked();
+        if apply {
+            match draft.to_nodes() {
+                Ok(nodes) => {
+                    self.execute_document_edit(
+                        EditCommand::SetAxisLabel { dimension, nodes },
+                        self.language.text(Text::ApplyLabel),
+                    );
+                }
+                Err(error) => self.push_error("axis-label", error),
+            }
+        }
+    }
+
+    fn sync_axis_editors(&mut self) {
+        self.x_label_draft = LabelDraft::from_nodes(self.document.axis_label(AxisDimension::X));
+        self.y_label_draft = LabelDraft::from_nodes(self.document.axis_label(AxisDimension::Y));
+        self.x_fixed_ticks = fixed_ticks_text(&self.document.axis_record(AxisDimension::X));
+        self.y_fixed_ticks = fixed_ticks_text(&self.document.axis_record(AxisDimension::Y));
     }
 
     fn select_dataset(&mut self, data_source_id: &str) {
@@ -1126,6 +1658,9 @@ impl StudioApp {
         }
 
         ui.separator();
+        self.figure_size_editor(ui);
+
+        ui.separator();
         ui.label(self.language.text(Text::AxesRanges));
         let mut ranges = self.document.axis_ranges();
         let mut changed_group = None;
@@ -1168,6 +1703,9 @@ impl StudioApp {
         if finish_coalescing {
             self.edit_history.finish_coalescing();
         }
+
+        self.axis_editor(ui, AxisDimension::X);
+        self.axis_editor(ui, AxisDimension::Y);
 
         ui.separator();
         ui.label(self.language.text(Text::ViewOnly));
@@ -1512,6 +2050,77 @@ fn series_kind_name(language: UiLanguage, kind: SeriesKind) -> &'static str {
         SeriesKind::Annotation => language.text(Text::Annotation),
         SeriesKind::Legend => language.text(Text::Legend),
     }
+}
+
+fn fixed_ticks_text(record: &AxisRecord) -> String {
+    match &record.locator {
+        LocatorSpec::Fixed { values } => values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        LocatorSpec::Auto { .. } => String::new(),
+    }
+}
+
+fn parse_fixed_ticks(value: &str) -> Result<Vec<f64>, String> {
+    let parsed = value
+        .split([',', ';', ' ', '\t'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<f64>()
+                .map_err(|_| format!("invalid fixed tick value: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if parsed.is_empty() || parsed.iter().any(|value| !value.is_finite()) {
+        return Err("fixed ticks require one or more finite values".to_owned());
+    }
+    Ok(parsed)
+}
+
+fn tick_direction_name(language: UiLanguage, direction: TickDirection) -> &'static str {
+    match direction {
+        TickDirection::In => language.text(Text::Inward),
+        TickDirection::Out => language.text(Text::Outward),
+        TickDirection::InOut => language.text(Text::InAndOut),
+    }
+}
+
+fn label_part_kinds() -> [LabelPartKind; 13] {
+    [
+        LabelPartKind::Text,
+        LabelPartKind::Variable,
+        LabelPartKind::Upright,
+        LabelPartKind::GreekVariable,
+        LabelPartKind::Number,
+        LabelPartKind::DescriptiveSubscript,
+        LabelPartKind::VariableSubscript,
+        LabelPartKind::Superscript,
+        LabelPartKind::Unit,
+        LabelPartKind::UnitSeparator,
+        LabelPartKind::Operator,
+        LabelPartKind::Emphasis,
+        LabelPartKind::BoldVariable,
+    ]
+}
+
+fn label_part_kind_name(language: UiLanguage, kind: LabelPartKind) -> &'static str {
+    let key = match kind {
+        LabelPartKind::Text => "text",
+        LabelPartKind::Variable => "variable",
+        LabelPartKind::Upright => "upright",
+        LabelPartKind::GreekVariable => "greek_variable",
+        LabelPartKind::Number => "number",
+        LabelPartKind::DescriptiveSubscript => "descriptive_subscript",
+        LabelPartKind::VariableSubscript => "variable_subscript",
+        LabelPartKind::Superscript => "superscript",
+        LabelPartKind::Unit => "unit",
+        LabelPartKind::UnitSeparator => "unit_separator",
+        LabelPartKind::Operator => "operator",
+        LabelPartKind::Emphasis => "emphasis",
+        LabelPartKind::BoldVariable => "bold_variable",
+    };
+    language.semantic_part_name(key)
 }
 
 fn column_combo(

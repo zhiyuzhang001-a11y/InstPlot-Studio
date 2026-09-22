@@ -1,6 +1,6 @@
 use export_backend_spike::{FontOrigin, resolve};
 use layout_engine_spike::{
-    LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize, layout,
+    LayoutWarning, Locator, Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout,
     layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
 use studio_render_spike::{DisplayItem, NodeId, PathVerb};
@@ -320,6 +320,42 @@ fn log_axes_layout_uses_decades_and_minor_ticks() {
         vec![1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0, 1000.0]
     );
     assert!(!result.x_axis.minor.is_empty());
+}
+
+#[test]
+fn axis_appearance_controls_spines_ticks_labels_and_direction() {
+    let mut chart = publication_fixture();
+    chart.x.appearance.far_spine = false;
+    chart.x.appearance.far_ticks = false;
+    chart.x.appearance.minor_ticks = false;
+    chart.x.appearance.tick_direction = TickDirection::Out;
+    chart.x.appearance.far_tick_labels = true;
+    chart.y.appearance.near_spine = false;
+    chart.y.appearance.near_ticks = false;
+    let result = layout(&chart).unwrap();
+
+    assert!(!result.x_axis.minor.is_empty());
+    let x_ticks = axis_segments(&result.display_list.items, chart.x.id);
+    assert_eq!(x_ticks.len(), result.x_axis.major.len());
+    assert!(x_ticks.iter().all(|((_, start_y), (_, end_y))| {
+        *start_y == result.axes.bottom() && end_y > start_y
+    }));
+    let axis_spines = axis_segments(&result.display_list.items, chart.id);
+    assert!(!axis_spines.iter().any(|((_, y1), (_, y2))| {
+        *y1 == result.axes.y && *y2 == result.axes.y
+    }));
+    assert!(!axis_spines.iter().any(|((x1, _), (x2, _))| {
+        *x1 == result.axes.x && *x2 == result.axes.x
+    }));
+    assert!(
+        result
+            .hit_map
+            .items
+            .iter()
+            .filter(|item| item.node == chart.x.id && item.role == SelectableRole::Tick)
+            .count()
+            > result.x_axis.major.len()
+    );
 }
 
 #[test]

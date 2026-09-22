@@ -13,7 +13,7 @@ mod semantic;
 mod session;
 
 pub use document::{
-    AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, MoveDirection,
+    AxisDimension, AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, MoveDirection,
     SeriesCreationStyle, SeriesDescriptor, SeriesKind,
 };
 pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
@@ -31,13 +31,14 @@ pub use palette::{
 };
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord, AxisRecord, AxisScale,
-    DataBinding, DataSourceKind, DataSourcePayload, DataSourceRecord, EmbeddedColumn,
-    ExportPreferences, FigureRecord, FitIdentity, FontFaceRecord, FontStyle, FormatterSpec,
-    LabelNode, LegendEntry, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport,
-    OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor, PaletteRegistry,
-    ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
-    SourceFingerprint, SourceState, StrokeStyle, TypographyProfile, open_project, save_project,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord, AxisAppearanceRecord,
+    AxisRecord, AxisScale, DataBinding, DataSourceKind, DataSourcePayload, DataSourceRecord,
+    EmbeddedColumn, ExportPreferences, FigureRecord, FitIdentity, FontFaceRecord, FontStyle,
+    FormatterSpec, LabelNode, LegendEntry, LocatorSpec, MarkerShape, MarkerStyle,
+    OpenProjectReport, OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor,
+    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
+    SemanticLabel, SourceFingerprint, SourceState, StrokeStyle, TickDirection, TypographyProfile,
+    open_project, save_project,
 };
 pub use publication::{
     CVD_SIMULATION_VERSION, CheckSeverity, PUBLICATION_RULES_VERSION, PublicationFinding,

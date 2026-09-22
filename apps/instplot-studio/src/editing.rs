@@ -1,4 +1,7 @@
-use crate::{AxisRanges, FigureDocument, MoveDirection, ProjectDocument, SeriesCreationStyle};
+use crate::{
+    AxisDimension, AxisRanges, AxisRecord, FigureDocument, LabelNode, MoveDirection,
+    ProjectDocument, SeriesCreationStyle,
+};
 
 const MAX_HISTORY: usize = 100;
 
@@ -8,6 +11,8 @@ pub enum EditGroup {
     AxisXMaximum,
     AxisYMinimum,
     AxisYMaximum,
+    FigureWidth,
+    FigureHeight,
 }
 
 pub enum EditCommand {
@@ -43,6 +48,18 @@ pub enum EditCommand {
         data_source_id: String,
         cascade: bool,
     },
+    SetAxisRecord {
+        dimension: AxisDimension,
+        record: AxisRecord,
+    },
+    SetAxisLabel {
+        dimension: AxisDimension,
+        nodes: Vec<LabelNode>,
+    },
+    SetFigureSize {
+        width_mm: f64,
+        height_mm: f64,
+    },
 }
 
 impl EditCommand {
@@ -57,6 +74,9 @@ impl EditCommand {
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
             Self::DeleteDataSource { .. } => "Delete data source",
+            Self::SetAxisRecord { .. } => "Change axis settings",
+            Self::SetAxisLabel { .. } => "Change axis label",
+            Self::SetFigureSize { .. } => "Change figure size",
         }
     }
 
@@ -101,6 +121,14 @@ impl EditCommand {
                 data_source_id,
                 cascade,
             } => document.delete_data_source(&data_source_id, cascade),
+            Self::SetAxisRecord { dimension, record } => {
+                document.set_axis_record(dimension, record)
+            }
+            Self::SetAxisLabel { dimension, nodes } => document.set_axis_label(dimension, nodes),
+            Self::SetFigureSize {
+                width_mm,
+                height_mm,
+            } => document.set_figure_size_mm(width_mm, height_mm),
         }
     }
 }

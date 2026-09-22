@@ -4,10 +4,10 @@ use std::path::Path;
 
 use instplot_core::{DataSet, DataSetKind};
 use instplot_layout::{
-    Annotation, AnnotationPosition, AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar,
-    ErrorStyle, Formatter, GridSpec, LayoutError, LayoutResult, LegendPosition, LegendSpec,
-    LineStyle, Locator, MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle, Scale,
-    Series, layout,
+    Annotation, AnnotationPosition, AxisAppearance as LayoutAxisAppearance, AxisSpec, Bounds,
+    Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec, LayoutError,
+    LayoutResult, LegendPosition, LegendSpec, LineStyle, Locator, MarkerShape as LayoutMarkerShape,
+    MarkerStyle as LayoutMarkerStyle, Scale, Series, TickDirection as LayoutTickDirection, layout,
 };
 use studio_render_spike::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
 use text_shaping_spike::Label;
@@ -147,6 +147,12 @@ pub enum SeriesCreationStyle {
 pub enum MoveDirection {
     Earlier,
     Later,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AxisDimension {
+    X,
+    Y,
 }
 
 impl FigureDocument {
@@ -427,8 +433,93 @@ impl FigureDocument {
         let axes = &mut self.project.figure.axes[0];
         axes.x.minimum = ranges.x_min;
         axes.x.maximum = ranges.x_max;
+        axes.x.autoscale = false;
         axes.y.minimum = ranges.y_min;
         axes.y.maximum = ranges.y_max;
+        axes.y.autoscale = false;
+        Ok(())
+    }
+
+    pub fn axis_record(&self, dimension: AxisDimension) -> crate::AxisRecord {
+        let axes = &self.project.figure.axes[0];
+        match dimension {
+            AxisDimension::X => axes.x.clone(),
+            AxisDimension::Y => axes.y.clone(),
+        }
+    }
+
+    pub fn set_axis_record(
+        &mut self,
+        dimension: AxisDimension,
+        record: crate::AxisRecord,
+    ) -> Result<(), String> {
+        let current = match dimension {
+            AxisDimension::X => &self.project.figure.axes[0].x,
+            AxisDimension::Y => &self.project.figure.axes[0].y,
+        };
+        if record.id != current.id || record.label_id != current.label_id {
+            return Err("axis identity and label identity cannot be replaced".to_owned());
+        }
+        let mut candidate = self.project.clone();
+        match dimension {
+            AxisDimension::X => candidate.figure.axes[0].x = record,
+            AxisDimension::Y => candidate.figure.axes[0].y = record,
+        }
+        apply_autoscale(&mut candidate, dimension)?;
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn set_axis_label(
+        &mut self,
+        dimension: AxisDimension,
+        nodes: Vec<LabelNode>,
+    ) -> Result<(), String> {
+        if nodes.is_empty() {
+            return Err("axis label cannot be empty".to_owned());
+        }
+        let label_id = match dimension {
+            AxisDimension::X => self.project.figure.axes[0].x.label_id.clone(),
+            AxisDimension::Y => self.project.figure.axes[0].y.label_id.clone(),
+        };
+        let label = self
+            .project
+            .semantic_registry
+            .iter_mut()
+            .find(|label| label.id == label_id)
+            .ok_or_else(|| format!("semantic label {label_id} is missing"))?;
+        label.nodes = nodes;
+        Ok(())
+    }
+
+    pub fn axis_label(&self, dimension: AxisDimension) -> &[LabelNode] {
+        let label_id = match dimension {
+            AxisDimension::X => &self.project.figure.axes[0].x.label_id,
+            AxisDimension::Y => &self.project.figure.axes[0].y.label_id,
+        };
+        self.project
+            .semantic_registry
+            .iter()
+            .find(|label| label.id == *label_id)
+            .map(|label| label.nodes.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn figure_size_mm(&self) -> (f64, f64) {
+        (self.project.figure.width_mm, self.project.figure.height_mm)
+    }
+
+    pub fn set_figure_size_mm(&mut self, width: f64, height: f64) -> Result<(), String> {
+        if !width.is_finite()
+            || !height.is_finite()
+            || !(20.0..=500.0).contains(&width)
+            || !(20.0..=500.0).contains(&height)
+        {
+            return Err("figure width and height must be within 20..=500 mm".to_owned());
+        }
+        self.project.figure.width_mm = width;
+        self.project.figure.height_mm = height;
         Ok(())
     }
 
@@ -831,9 +922,94 @@ impl FigureDocument {
                 }),
             )?;
         }
+        apply_autoscale(&mut candidate, AxisDimension::X).map_err(ProjectError::Validation)?;
+        apply_autoscale(&mut candidate, AxisDimension::Y).map_err(ProjectError::Validation)?;
         self.project = candidate;
         Ok(())
     }
+}
+
+fn apply_autoscale(project: &mut ProjectDocument, dimension: AxisDimension) -> Result<(), String> {
+    let axis = match dimension {
+        AxisDimension::X => &project.figure.axes[0].x,
+        AxisDimension::Y => &project.figure.axes[0].y,
+    };
+    if !axis.autoscale {
+        return Ok(());
+    }
+    let scale = axis.scale;
+    let mut values = Vec::new();
+    for artist in &project.figure.artists {
+        if !artist.visible {
+            continue;
+        }
+        match &artist.properties {
+            ArtistProperties::Line { binding, .. }
+            | ArtistProperties::Scatter { binding, .. }
+            | ArtistProperties::ErrorBar { binding, .. } => {
+                let column_name = match dimension {
+                    AxisDimension::X => &binding.x_column,
+                    AxisDimension::Y => &binding.y_column,
+                };
+                let Some(source) = project
+                    .data_sources
+                    .iter()
+                    .find(|source| source.id == binding.data_source_id)
+                else {
+                    continue;
+                };
+                let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
+                    continue;
+                };
+                if let Some(column) = columns.iter().find(|column| column.name == *column_name) {
+                    values.extend(
+                        column
+                            .values
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
+                            .map(|(_, value)| *value),
+                    );
+                }
+            }
+            ArtistProperties::ReferenceLine {
+                orientation, value, ..
+            } if matches!(
+                (dimension, orientation),
+                (AxisDimension::X, ReferenceOrientation::Vertical)
+                    | (AxisDimension::Y, ReferenceOrientation::Horizontal)
+            ) =>
+            {
+                values.push(*value)
+            }
+            _ => {}
+        }
+    }
+    if values.is_empty() {
+        return Err("autoscale requires at least one visible bound value".to_owned());
+    }
+    if scale == AxisScale::Log10 && values.iter().any(|value| *value <= 0.0) {
+        return Err("log autoscale requires every visible value to be positive".to_owned());
+    }
+    let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let (minimum, maximum) = if scale == AxisScale::Log10 {
+        (minimum / 1.1, maximum * 1.1)
+    } else {
+        let pad = if minimum == maximum {
+            (minimum.abs() * 0.05).max(0.5)
+        } else {
+            (maximum - minimum) * 0.05
+        };
+        (minimum - pad, maximum + pad)
+    };
+    let axis = match dimension {
+        AxisDimension::X => &mut project.figure.axes[0].x,
+        AxisDimension::Y => &mut project.figure.axes[0].y,
+    };
+    axis.minimum = minimum;
+    axis.maximum = maximum;
+    Ok(())
 }
 
 fn artist_binding(artist: &ArtistRecord) -> Option<&DataBinding> {
@@ -1560,6 +1736,11 @@ fn axis_spec(
             precision: usize::from(precision),
         },
     };
+    let tick_direction = match axis.appearance.tick_direction {
+        crate::TickDirection::In => LayoutTickDirection::In,
+        crate::TickDirection::Out => LayoutTickDirection::Out,
+        crate::TickDirection::InOut => LayoutTickDirection::InOut,
+    };
     Ok(AxisSpec {
         id: register_node_id(&axis.id, project_ids)?,
         label: Label::Group(semantic.nodes.iter().map(label_node).collect()),
@@ -1569,8 +1750,22 @@ fn axis_spec(
         locator,
         formatter,
         grid: GridSpec {
-            major: true,
-            minor: false,
+            major: axis.appearance.grid_major,
+            minor: axis.appearance.grid_minor,
+        },
+        appearance: LayoutAxisAppearance {
+            near_spine: axis.appearance.near_spine,
+            far_spine: axis.appearance.far_spine,
+            near_ticks: axis.appearance.near_ticks,
+            far_ticks: axis.appearance.far_ticks,
+            near_tick_labels: axis.appearance.near_tick_labels,
+            far_tick_labels: axis.appearance.far_tick_labels,
+            major_ticks: axis.appearance.major_ticks,
+            minor_ticks: axis.appearance.minor_ticks,
+            tick_direction,
+            tick_label_pad_pt: axis.appearance.tick_label_pad_pt,
+            label_edge_pad_pt: axis.appearance.label_edge_pad_pt,
+            label_tick_pad_pt: axis.appearance.label_tick_pad_pt,
         },
     })
 }
@@ -1668,6 +1863,62 @@ mod tests {
         };
         assert!(document.set_axis_ranges(invalid).is_err());
         assert_eq!(document.axis_ranges(), before);
+    }
+
+    #[test]
+    fn p4_axis_size_and_semantic_label_settings_round_trip() {
+        let mut document = FigureDocument::fixed();
+        document.set_figure_size_mm(89.0, 65.0).unwrap();
+
+        let mut x_axis = document.axis_record(AxisDimension::X);
+        x_axis.autoscale = false;
+        x_axis.minimum = -2.0;
+        x_axis.maximum = 2.0;
+        x_axis.locator = LocatorSpec::Fixed {
+            values: vec![-2.0, 0.0, 2.0],
+        };
+        x_axis.formatter = FormatterSpec::Scientific { precision: 3 };
+        x_axis.appearance.tick_direction = crate::TickDirection::InOut;
+        x_axis.appearance.far_tick_labels = true;
+        x_axis.appearance.grid_minor = true;
+        document
+            .set_axis_record(AxisDimension::X, x_axis.clone())
+            .unwrap();
+        let label = vec![
+            LabelNode::GreekVariable('μ'),
+            LabelNode::VariableSubscript(vec![LabelNode::Text("eff".to_owned())]),
+            LabelNode::UnitSeparator,
+            LabelNode::Unit("mA cm^-2".to_owned()),
+        ];
+        document
+            .set_axis_label(AxisDimension::X, label.clone())
+            .unwrap();
+
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let reopened =
+            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
+                .unwrap();
+        assert_eq!(reopened.figure_size_mm(), (89.0, 65.0));
+        assert_eq!(reopened.axis_record(AxisDimension::X), x_axis);
+        assert_eq!(reopened.axis_label(AxisDimension::X), label.as_slice());
+        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
+    }
+
+    #[test]
+    fn p4_autoscale_is_stable_and_failed_log_autoscale_is_atomic() {
+        let mut document = FigureDocument::fixed();
+        let mut x_axis = document.axis_record(AxisDimension::X);
+        x_axis.autoscale = true;
+        document.set_axis_record(AxisDimension::X, x_axis).unwrap();
+        let autoscaled = document.axis_record(AxisDimension::X);
+        assert!(autoscaled.minimum < autoscaled.maximum);
+
+        let before = document.project().clone();
+        let mut y_axis = document.axis_record(AxisDimension::Y);
+        y_axis.autoscale = true;
+        y_axis.scale = AxisScale::Log10;
+        assert!(document.set_axis_record(AxisDimension::Y, y_axis).is_err());
+        assert_eq!(document.project(), &before);
     }
 
     #[test]

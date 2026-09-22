@@ -22,7 +22,7 @@ EXPECTED_CASES = {
     "multi-source": (2, 2, 3, 8, 8),
     "disabled-row": (1, 1, 2, 5, 4),
 }
-EXPECTED_PROJECT_SCHEMA = 2
+EXPECTED_PROJECT_SCHEMA = 3
 FIXTURE_NAMES = [
     "smoke.csv",
     "lite-source-fit.txt",

@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE（P0–P3 DONE；P4 next）
+> 状态：ACTIVE（P0–P4 DONE；P5 next）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  
@@ -295,4 +295,7 @@ P0 已完成，真实样例、结构化验证和分级问题清单见
 [`../reports/B5P_P0_WORKFLOW_BASELINE.md`](../reports/B5P_P0_WORKFLOW_BASELINE.md)。P1 的编辑事务、
 dirty 状态、Undo/Redo、保存点与未保存保护已完成，证据见
 [`../reports/B5P_P1_EDIT_TRANSACTIONS.md`](../reports/B5P_P1_EDIT_TRANSACTIONS.md)。当前任务是
-**P4：axes、标签、刻度与图尺寸**。
+P3 的数据绑定与 series 管理证据见
+[`../reports/B5P_P3_DATA_SERIES.md`](../reports/B5P_P3_DATA_SERIES.md)，P4 的 axes、语义标签、
+刻度和尺寸证据见 [`../reports/B5P_P4_AXES_LABELS_SIZE.md`](../reports/B5P_P4_AXES_LABELS_SIZE.md)。
+当前任务是 **P5：artist、颜色与 legend/annotation 编辑**。

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 2;
+pub const PROJECT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +55,58 @@ pub struct AxisRecord {
     pub scale: AxisScale,
     pub locator: LocatorSpec,
     pub formatter: FormatterSpec,
+    #[serde(default)]
+    pub autoscale: bool,
+    #[serde(default)]
+    pub appearance: AxisAppearanceRecord,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxisAppearanceRecord {
+    pub near_spine: bool,
+    pub far_spine: bool,
+    pub near_ticks: bool,
+    pub far_ticks: bool,
+    pub near_tick_labels: bool,
+    pub far_tick_labels: bool,
+    pub major_ticks: bool,
+    pub minor_ticks: bool,
+    pub tick_direction: TickDirection,
+    pub grid_major: bool,
+    pub grid_minor: bool,
+    pub tick_label_pad_pt: f64,
+    pub label_edge_pad_pt: f64,
+    pub label_tick_pad_pt: f64,
+}
+
+impl Default for AxisAppearanceRecord {
+    fn default() -> Self {
+        Self {
+            near_spine: true,
+            far_spine: true,
+            near_ticks: true,
+            far_ticks: true,
+            near_tick_labels: true,
+            far_tick_labels: false,
+            major_ticks: true,
+            minor_ticks: true,
+            tick_direction: TickDirection::In,
+            grid_major: true,
+            grid_minor: false,
+            tick_label_pad_pt: 4.0,
+            label_edge_pad_pt: 6.0,
+            label_tick_pad_pt: 4.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TickDirection {
+    In,
+    Out,
+    InOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -488,6 +540,8 @@ impl ProjectDocument {
                         scale: AxisScale::Linear,
                         locator: LocatorSpec::Auto { target_count: 6 },
                         formatter: FormatterSpec::Auto,
+                        autoscale: false,
+                        appearance: AxisAppearanceRecord::default(),
                     },
                     y: AxisRecord {
                         id: "node-4".to_owned(),
@@ -497,6 +551,8 @@ impl ProjectDocument {
                         scale: AxisScale::Linear,
                         locator: LocatorSpec::Auto { target_count: 6 },
                         formatter: FormatterSpec::Auto,
+                        autoscale: false,
+                        appearance: AxisAppearanceRecord::default(),
                     },
                     artist_ids: artist_ids.to_vec(),
                 }],
@@ -1013,6 +1069,7 @@ pub fn decode_project(bytes: &[u8]) -> Result<ProjectDocument, ProjectError> {
     let document = match version {
         PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
             .map_err(|error| ProjectError::Decode(error.to_string()))?,
+        2 => migrate_v2(value)?,
         1 => migrate_v1(value)?,
         0 => migrate_v0(value)?,
         future => return Err(ProjectError::UnsupportedSchema(future)),
@@ -1124,10 +1181,15 @@ fn validate_axis(axis: &AxisRecord, labels: &BTreeSet<String>) -> Result<(), Pro
             )));
         }
         LocatorSpec::Fixed { values }
-            if values.is_empty() || values.iter().any(|value| !value.is_finite()) =>
+            if values.is_empty()
+                || values.iter().any(|value| !value.is_finite())
+                || values.windows(2).any(|pair| pair[0] >= pair[1])
+                || values
+                    .iter()
+                    .any(|value| *value < axis.minimum || *value > axis.maximum) =>
         {
             return Err(ProjectError::Validation(format!(
-                "axis {} fixed locator requires finite values",
+                "axis {} fixed locator requires finite, strictly increasing values within its range",
                 axis.id
             )));
         }
@@ -1143,6 +1205,19 @@ fn validate_axis(axis: &AxisRecord, labels: &BTreeSet<String>) -> Result<(), Pro
             )));
         }
         _ => {}
+    }
+    if [
+        axis.appearance.tick_label_pad_pt,
+        axis.appearance.label_edge_pad_pt,
+        axis.appearance.label_tick_pad_pt,
+    ]
+    .into_iter()
+    .any(|value| !value.is_finite() || value < 0.0 || value > 72.0)
+    {
+        return Err(ProjectError::Validation(format!(
+            "axis {} has invalid label spacing",
+            axis.id
+        )));
     }
     Ok(())
 }
@@ -1461,7 +1536,7 @@ fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> {
     axes.y.maximum = legacy.y_max;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v0".to_owned(),
-        operation: "migrate_schema_0_to_2".to_owned(),
+        operation: "migrate_schema_0_to_3".to_owned(),
         input_ids: vec![legacy.producer_version],
         parameters: BTreeMap::new(),
     });
@@ -1483,7 +1558,20 @@ fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectError> {
         .map_err(|error| ProjectError::Decode(format!("schema 1 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v1".to_owned(),
-        operation: "migrate_schema_1_to_2".to_owned(),
+        operation: "migrate_schema_1_to_3".to_owned(),
+        input_ids: Vec::new(),
+        parameters: BTreeMap::new(),
+    });
+    Ok(document)
+}
+
+fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectError> {
+    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    let mut document: ProjectDocument = serde_json::from_value(value)
+        .map_err(|error| ProjectError::Decode(format!("schema 2 migration: {error}")))?;
+    document.provenance.push(ProvenanceRecord {
+        id: "provenance-migrate-v2".to_owned(),
+        operation: "migrate_schema_2_to_3".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -1628,7 +1716,7 @@ mod tests {
         assert_eq!(migrated.figure.axes[0].x.minimum, -4.0);
         assert_eq!(
             migrated.provenance.last().unwrap().operation,
-            "migrate_schema_0_to_2"
+            "migrate_schema_0_to_3"
         );
     }
 
@@ -1644,7 +1732,31 @@ mod tests {
         assert!(migrated.figure.artists.iter().all(|artist| artist.visible));
         assert_eq!(
             migrated.provenance.last().unwrap().operation,
-            "migrate_schema_1_to_2"
+            "migrate_schema_1_to_3"
+        );
+    }
+
+    #[test]
+    fn schema_two_migrates_axis_appearance_defaults() {
+        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+        value["schema_version"] = Value::from(2);
+        for axes in value["figure"]["axes"].as_array_mut().unwrap() {
+            for name in ["x", "y"] {
+                let axis = axes[name].as_object_mut().unwrap();
+                axis.remove("autoscale");
+                axis.remove("appearance");
+            }
+        }
+        let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(migrated.figure.axes[0].x.appearance.far_ticks);
+        assert_eq!(
+            migrated.figure.axes[0].y.appearance.tick_direction,
+            TickDirection::In
+        );
+        assert_eq!(
+            migrated.provenance.last().unwrap().operation,
+            "migrate_schema_2_to_3"
         );
     }
 

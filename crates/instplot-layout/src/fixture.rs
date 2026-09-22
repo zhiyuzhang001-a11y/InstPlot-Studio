@@ -80,6 +80,7 @@ pub fn publication_fixture() -> Chart {
             },
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
+            appearance: crate::AxisAppearance::default(),
         },
         y: AxisSpec {
             id: NodeId(3),
@@ -92,6 +93,7 @@ pub fn publication_fixture() -> Chart {
             },
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
+            appearance: crate::AxisAppearance::default(),
         },
         series: vec![
             Series {
