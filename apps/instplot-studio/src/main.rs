@@ -1935,12 +1935,16 @@ impl StudioApp {
                         if let Some(node) = &finding.node_id {
                             if ui.button(title).clicked() {
                                 self.selected_canvas_node = Some(node.clone());
-                                self.selected_series = self
+                                let series = self
                                     .document
                                     .series()
                                     .into_iter()
-                                    .find(|series| series.id == *node)
-                                    .map(|series| series.id);
+                                    .find(|series| series.id == *node);
+                                if let Some(series) = series {
+                                    self.select_series_for_editing(&series);
+                                } else {
+                                    self.selected_series = None;
+                                }
                             }
                         } else {
                             ui.colored_label(color, title);

@@ -144,7 +144,7 @@ fn finding_guidance(rule_id: &str) -> (&'static str, &'static str) {
             "Readers may not be able to distinguish objects from colour alone.",
             "Use distinct marker shapes or dash patterns in addition to colour.",
         ),
-        "palette_relationship" => (
+        "palette_data_relationship" => (
             "Untracked colour relationships can break source/fit identity.",
             "Use the project palette and keep related source and fit colours aligned.",
         ),
