@@ -1356,6 +1356,7 @@ impl StudioApp {
             AxisDimension::Y => &mut self.y_label_draft,
         };
         let mut remove = None;
+        let mut apply = false;
         ui.collapsing(self.language.text(Text::AxisLabel), |ui| {
             ui.weak(self.language.text(Text::SemanticPart));
             for (index, part) in draft.parts.iter_mut().enumerate() {
@@ -1391,11 +1392,11 @@ impl StudioApp {
                     value: String::new(),
                 });
             }
+            apply = ui.button(self.language.text(Text::ApplyLabel)).clicked();
         });
         if let Some(index) = remove {
             draft.parts.remove(index);
         }
-        let apply = ui.button(self.language.text(Text::ApplyLabel)).clicked();
         if apply {
             match draft.to_nodes() {
                 Ok(nodes) => {
@@ -2584,18 +2585,16 @@ impl eframe::App for StudioApp {
             .show(ui, |ui| self.series_tree(ui));
 
         egui::Panel::right("inspector")
-            .default_size(260.0)
+            .default_size(300.0)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
             });
 
-        egui::Panel::bottom("warning_panel")
-            .default_size(90.0)
-            .show(ui, |ui| {
-                ui.heading(self.language.text(Text::WarningsAndErrors));
-                if self.messages.is_empty() {
-                    ui.weak(self.language.text(Text::NoWarnings));
-                } else {
+        if !self.messages.is_empty() {
+            egui::Panel::bottom("warning_panel")
+                .default_size(90.0)
+                .show(ui, |ui| {
+                    ui.heading(self.language.text(Text::WarningsAndErrors));
                     for message in &self.messages {
                         let (label, color) = match message.level {
                             MessageLevel::Warning => {
@@ -2607,8 +2606,8 @@ impl eframe::App for StudioApp {
                         };
                         ui.colored_label(color, format!("{label}: {}", message.text));
                     }
-                }
-            });
+                });
+        }
 
         egui::CentralPanel::default().show(ui, |ui| {
             let canvas_available = ui.available_size();
@@ -2627,10 +2626,10 @@ impl eframe::App for StudioApp {
                 if ui.small_button("−").clicked() {
                     self.canvas_zoom = (self.canvas_zoom / 1.2).clamp(0.1, 8.0);
                 }
+                ui.label(format!("{:.0}%", self.canvas_zoom * 100.0));
                 if ui.small_button("+").clicked() {
                     self.canvas_zoom = (self.canvas_zoom * 1.2).clamp(0.1, 8.0);
                 }
-                ui.label(format!("{:.0}%", self.canvas_zoom * 100.0));
                 ui.weak(self.language.text(Text::WheelZoomHint));
             });
             ui.separator();
