@@ -13,7 +13,8 @@ mod semantic;
 mod session;
 
 pub use document::{
-    AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, SeriesDescriptor, SeriesKind,
+    AxisRanges, DocumentLayout, DocumentLayoutError, FigureDocument, MoveDirection,
+    SeriesCreationStyle, SeriesDescriptor, SeriesKind,
 };
 pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
 pub use export::{

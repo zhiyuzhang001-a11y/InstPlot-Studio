@@ -1,4 +1,4 @@
-use crate::{AxisRanges, FigureDocument, ProjectDocument};
+use crate::{AxisRanges, FigureDocument, MoveDirection, ProjectDocument, SeriesCreationStyle};
 
 const MAX_HISTORY: usize = 100;
 
@@ -12,12 +12,51 @@ pub enum EditGroup {
 
 pub enum EditCommand {
     SetAxisRanges(AxisRanges),
+    CreateSeries {
+        data_source_id: String,
+        x_column: String,
+        y_column: String,
+        style: SeriesCreationStyle,
+    },
+    DuplicateSeries {
+        artist_id: String,
+    },
+    DeleteSeries {
+        artist_id: String,
+    },
+    SetSeriesVisible {
+        artist_id: String,
+        visible: bool,
+    },
+    MoveSeries {
+        artist_id: String,
+        direction: MoveDirection,
+    },
+    RebindSeries {
+        artist_id: String,
+        data_source_id: String,
+        x_column: String,
+        y_column: String,
+        y_error_column: Option<String>,
+    },
+    DeleteDataSource {
+        data_source_id: String,
+        cascade: bool,
+    },
 }
 
 impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
             Self::SetAxisRanges(_) => "Change axes ranges",
+            Self::CreateSeries { .. } => "Create series",
+            Self::DuplicateSeries { .. } => "Duplicate series",
+            Self::DeleteSeries { .. } => "Delete series",
+            Self::SetSeriesVisible { visible: true, .. } => "Show series",
+            Self::SetSeriesVisible { visible: false, .. } => "Hide series",
+            Self::MoveSeries { .. } => "Reorder series",
+            Self::RebindSeries { .. } => "Change data binding",
+            Self::DeleteDataSource { .. } => "Delete data source",
         }
     }
 
@@ -26,6 +65,42 @@ impl EditCommand {
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }
+            Self::CreateSeries {
+                data_source_id,
+                x_column,
+                y_column,
+                style,
+            } => document
+                .create_series(&data_source_id, &x_column, &y_column, style)
+                .map(|_| ()),
+            Self::DuplicateSeries { artist_id } => {
+                document.duplicate_series(&artist_id).map(|_| ())
+            }
+            Self::DeleteSeries { artist_id } => document.delete_series(&artist_id),
+            Self::SetSeriesVisible { artist_id, visible } => {
+                document.set_series_visible(&artist_id, visible)
+            }
+            Self::MoveSeries {
+                artist_id,
+                direction,
+            } => document.move_series(&artist_id, direction),
+            Self::RebindSeries {
+                artist_id,
+                data_source_id,
+                x_column,
+                y_column,
+                y_error_column,
+            } => document.rebind_series(
+                &artist_id,
+                &data_source_id,
+                &x_column,
+                &y_column,
+                y_error_column.as_deref(),
+            ),
+            Self::DeleteDataSource {
+                data_source_id,
+                cascade,
+            } => document.delete_data_source(&data_source_id, cascade),
         }
     }
 }
@@ -279,5 +354,66 @@ mod tests {
         history.rebase_after_external_change();
         assert!(history.undo(&mut document).is_none());
         assert!(history.is_dirty(&document));
+    }
+
+    #[test]
+    fn series_lifecycle_commands_are_atomic_and_undoable() {
+        let mut document = FigureDocument::fixed();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::CreateSeries {
+                    data_source_id: "fixture-data".to_owned(),
+                    x_column: "line_x".to_owned(),
+                    y_column: "line_y".to_owned(),
+                    style: SeriesCreationStyle::LineAndMarker,
+                },
+                None,
+            )
+            .unwrap();
+        assert!(
+            document
+                .series()
+                .iter()
+                .any(|series| series.id == "series-1")
+        );
+        assert!(history.is_dirty(&document));
+
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSeriesVisible {
+                    artist_id: "series-1".to_owned(),
+                    visible: false,
+                },
+                None,
+            )
+            .unwrap();
+        assert!(
+            !document
+                .series()
+                .iter()
+                .find(|series| series.id == "series-1")
+                .unwrap()
+                .visible
+        );
+        history.undo(&mut document).unwrap();
+        assert!(
+            document
+                .series()
+                .iter()
+                .find(|series| series.id == "series-1")
+                .unwrap()
+                .visible
+        );
+        history.undo(&mut document).unwrap();
+        assert!(
+            !document
+                .series()
+                .iter()
+                .any(|series| series.id == "series-1")
+        );
+        assert!(!history.is_dirty(&document));
     }
 }

@@ -7,12 +7,13 @@ mod ui_text;
 mod workspace;
 
 use eframe::egui;
+use instplot_core::{DataSet, DataSetKind};
 use instplot_studio::{
     AxisRanges, CheckSeverity, EditCommand, EditGroup, EditHistory, EguiPreviewAdapter,
-    FigureDocument, HandoffCleanup, HandoffImport, OpenProjectSource, PRODUCT_NAME, PreviewAdapter,
-    PublicationReport, ResolvedFigure, SeriesDescriptor, StudioSession, check_publication,
-    import_handoff, product_info, resolve_document, save_figure_pdf, save_figure_png,
-    save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
+    FigureDocument, HandoffCleanup, HandoffImport, MoveDirection, OpenProjectSource, PRODUCT_NAME,
+    PreviewAdapter, PublicationReport, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor,
+    SeriesKind, StudioSession, check_publication, import_handoff, product_info, resolve_document,
+    save_figure_pdf, save_figure_png, save_fixed_figure_pdf, save_fixed_figure_png, write_handoff,
 };
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;
@@ -192,6 +193,12 @@ struct StudioApp {
     publication_report: PublicationReport,
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
+    selected_dataset: Option<String>,
+    binding_x: String,
+    binding_y: String,
+    binding_error: String,
+    creation_style: SeriesCreationStyle,
+    pending_delete_source: Option<String>,
     workspace: WorkspaceState,
     edit_history: EditHistory,
     pending_action: Option<PendingAction>,
@@ -270,6 +277,12 @@ impl StudioApp {
             publication_report,
             preview: EguiPreviewAdapter,
             selected_series: None,
+            selected_dataset: None,
+            binding_x: String::new(),
+            binding_y: String::new(),
+            binding_error: String::new(),
+            creation_style: SeriesCreationStyle::Scatter,
+            pending_delete_source: None,
             workspace,
             edit_history,
             pending_action: None,
@@ -298,9 +311,7 @@ impl StudioApp {
         match candidate_session.import_data_file(&path) {
             Ok(outcome) => {
                 let mut candidate_document = self.document.clone();
-                if let Err(error) =
-                    candidate_document.sync_external_datasets(candidate_session.datasets())
-                {
+                if let Err(error) = candidate_document.sync_datasets(candidate_session.datasets()) {
                     self.push_error(
                         "data-sync",
                         self.language.operation_failed(
@@ -329,6 +340,16 @@ impl StudioApp {
                 self.publication_report = check_publication(&self.document, &resolved, 300);
                 self.resolved = resolved;
                 self.workspace.note_data_import(&path);
+                if let Some(data_source_id) = self
+                    .session
+                    .datasets()
+                    .iter()
+                    .rev()
+                    .find(|dataset| dataset.source == path)
+                    .map(|dataset| dataset.plot_id.clone())
+                {
+                    self.select_dataset(&data_source_id);
+                }
                 self.set_success(self.language.imported(
                     outcome.read,
                     outcome.added,
@@ -363,6 +384,7 @@ impl StudioApp {
                     self.resolved = resolved;
                     self.workspace = WorkspaceState::from_lite(self.language.text(Text::Untitled));
                     self.selected_series = None;
+                    self.selected_dataset = None;
                     self.messages.clear();
                     self.set_success(
                         self.language
@@ -403,6 +425,7 @@ impl StudioApp {
                     self.edit_history.reset(&self.document, opened_primary);
                     self.resolved = resolved;
                     self.selected_series = None;
+                    self.selected_dataset = None;
                     self.workspace = WorkspaceState::from_project(&path, !opened_primary);
                     self.messages.clear();
                     for (index, warning) in report
@@ -443,6 +466,7 @@ impl StudioApp {
         self.resolved = resolved;
         (self.session, _) = StudioSession::from_project(self.document.project());
         self.selected_series = None;
+        self.selected_dataset = None;
         self.workspace = WorkspaceState::new(self.language.text(Text::Untitled));
         self.edit_history.reset(&self.document, true);
         self.messages.clear();
@@ -574,6 +598,7 @@ impl StudioApp {
         if let Some(description) = self.edit_history.undo(&mut self.document)
             && self.refresh_document("undo-layout")
         {
+            (self.session, _) = StudioSession::from_project(self.document.project());
             self.set_success(self.language.undo(&description));
         }
     }
@@ -582,6 +607,7 @@ impl StudioApp {
         if let Some(description) = self.edit_history.redo(&mut self.document)
             && self.refresh_document("redo-layout")
         {
+            (self.session, _) = StudioSession::from_project(self.document.project());
             self.set_success(self.language.redo(&description));
         }
     }
@@ -679,27 +705,339 @@ impl StudioApp {
         self.messages.retain(|message| message.code != code);
     }
 
+    fn execute_document_edit(&mut self, command: EditCommand, success: &str) -> bool {
+        match self.edit_history.execute(&mut self.document, command, None) {
+            Ok(outcome) if outcome.changed && self.refresh_document("edit-layout") => {
+                self.set_success(success.to_owned());
+                self.clear_message("edit");
+                true
+            }
+            Ok(_) => false,
+            Err(error) => {
+                self.push_error("edit", error);
+                false
+            }
+        }
+    }
+
+    fn select_dataset(&mut self, data_source_id: &str) {
+        self.selected_dataset = Some(data_source_id.to_owned());
+        if let Some(dataset) = self
+            .session
+            .datasets()
+            .iter()
+            .find(|dataset| dataset.plot_id == data_source_id)
+        {
+            self.binding_x = dataset
+                .fit_link
+                .as_ref()
+                .map(|fit| fit.source_x_column.clone())
+                .filter(|name| dataset.columns.iter().any(|column| column.name == *name))
+                .or_else(|| dataset.columns.first().map(|column| column.name.clone()))
+                .unwrap_or_default();
+            self.binding_y = dataset
+                .fit_link
+                .as_ref()
+                .map(|fit| fit.source_y_column.clone())
+                .filter(|name| dataset.columns.iter().any(|column| column.name == *name))
+                .or_else(|| dataset.columns.get(1).map(|column| column.name.clone()))
+                .or_else(|| dataset.columns.first().map(|column| column.name.clone()))
+                .unwrap_or_default();
+            self.binding_error = dataset
+                .columns
+                .iter()
+                .find(|column| column.name != self.binding_x && column.name != self.binding_y)
+                .map(|column| column.name.clone())
+                .unwrap_or_default();
+            self.creation_style = match dataset.kind {
+                DataSetKind::Source => SeriesCreationStyle::Scatter,
+                DataSetKind::Fit => SeriesCreationStyle::Line,
+            };
+        }
+    }
+
+    fn select_series_for_editing(&mut self, series: &SeriesDescriptor) {
+        self.selected_series = Some(series.id.clone());
+        if let Some(binding) = &series.binding {
+            self.select_dataset(&binding.data_source_id);
+            self.binding_x.clone_from(&binding.x_column);
+            self.binding_y.clone_from(&binding.y_column);
+            if series.kind == SeriesKind::ErrorBar
+                && let Some(error_column) = self
+                    .document
+                    .project()
+                    .figure
+                    .artists
+                    .iter()
+                    .find_map(|artist| (artist.id == series.id).then_some(&artist.properties))
+                && let instplot_studio::ArtistProperties::ErrorBar { y_error_column, .. } =
+                    error_column
+            {
+                self.binding_error.clone_from(y_error_column);
+            }
+        }
+    }
+
+    fn create_series_from_selection(&mut self) {
+        let Some(data_source_id) = self.selected_dataset.clone() else {
+            return;
+        };
+        let before = self
+            .document
+            .series()
+            .into_iter()
+            .map(|series| series.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let command = EditCommand::CreateSeries {
+            data_source_id,
+            x_column: self.binding_x.clone(),
+            y_column: self.binding_y.clone(),
+            style: self.creation_style,
+        };
+        if self.execute_document_edit(command, self.language.text(Text::AddSeries)) {
+            self.selected_series = self
+                .document
+                .series()
+                .into_iter()
+                .find(|series| !before.contains(&series.id) && series.kind != SeriesKind::Legend)
+                .map(|series| series.id);
+        }
+    }
+
+    fn delete_data_source_dialog(&mut self, context: &egui::Context) {
+        let Some(data_source_id) = self.pending_delete_source.clone() else {
+            return;
+        };
+        let dependencies = self.document.data_source_dependency_count(&data_source_id);
+        let label = self
+            .session
+            .datasets()
+            .iter()
+            .find(|dataset| dataset.plot_id == data_source_id)
+            .map_or_else(|| data_source_id.clone(), |dataset| dataset.display_name());
+        egui::Window::new(self.language.text(Text::DeleteDataSourceQuestion))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(context, |ui| {
+                ui.label(&label);
+                if dependencies > 0 {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        self.language.dependencies_will_be_deleted(dependencies),
+                    );
+                }
+                ui.horizontal(|ui| {
+                    let delete_label = if dependencies > 0 {
+                        self.language.text(Text::DeleteWithDependencies)
+                    } else {
+                        self.language.text(Text::Delete)
+                    };
+                    if ui.button(delete_label).clicked() {
+                        let command = EditCommand::DeleteDataSource {
+                            data_source_id: data_source_id.clone(),
+                            cascade: dependencies > 0,
+                        };
+                        if self.execute_document_edit(command, delete_label) {
+                            (self.session, _) =
+                                StudioSession::from_project(self.document.project());
+                            self.selected_dataset = None;
+                            self.selected_series = None;
+                        }
+                        self.pending_delete_source = None;
+                    }
+                    if ui.button(self.language.text(Text::Cancel)).clicked() {
+                        self.pending_delete_source = None;
+                    }
+                });
+            });
+    }
+
     fn series_tree(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.language.text(Text::Series));
         ui.collapsing(self.language.text(Text::FixedFigure), |ui| {
             for series in self.document.series() {
                 let selected = self.selected_series.as_deref() == Some(series.id.as_str());
-                if ui.selectable_label(selected, &series.label).clicked() {
-                    self.selected_series = Some(series.id);
-                }
+                ui.horizontal(|ui| {
+                    let mut visible = series.visible;
+                    if ui.checkbox(&mut visible, "").changed() {
+                        self.execute_document_edit(
+                            EditCommand::SetSeriesVisible {
+                                artist_id: series.id.clone(),
+                                visible,
+                            },
+                            self.language.text(Text::Visible),
+                        );
+                    }
+                    let label = format!(
+                        "{} · {}",
+                        series.label,
+                        series_kind_name(self.language, series.kind)
+                    );
+                    if ui.selectable_label(selected, label).clicked() {
+                        self.select_series_for_editing(&series);
+                    }
+                });
             }
         });
+        if let Some(selected_id) = self.selected_series.clone()
+            && let Some(series) = self
+                .document
+                .series()
+                .into_iter()
+                .find(|series| series.id == selected_id)
+            && matches!(
+                series.kind,
+                SeriesKind::Line | SeriesKind::Scatter | SeriesKind::ErrorBar
+            )
+        {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(self.language.text(Text::Duplicate)).clicked() {
+                    let before = self
+                        .document
+                        .series()
+                        .into_iter()
+                        .map(|series| series.id)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if self.execute_document_edit(
+                        EditCommand::DuplicateSeries {
+                            artist_id: selected_id.clone(),
+                        },
+                        self.language.text(Text::Duplicate),
+                    ) {
+                        self.selected_series = self
+                            .document
+                            .series()
+                            .into_iter()
+                            .find(|series| !before.contains(&series.id))
+                            .map(|series| series.id);
+                    }
+                }
+                if ui.button(self.language.text(Text::Delete)).clicked()
+                    && self.execute_document_edit(
+                        EditCommand::DeleteSeries {
+                            artist_id: selected_id.clone(),
+                        },
+                        self.language.text(Text::Delete),
+                    )
+                {
+                    self.selected_series = None;
+                }
+                if ui.button(self.language.text(Text::MoveEarlier)).clicked() {
+                    self.execute_document_edit(
+                        EditCommand::MoveSeries {
+                            artist_id: selected_id.clone(),
+                            direction: MoveDirection::Earlier,
+                        },
+                        self.language.text(Text::MoveEarlier),
+                    );
+                }
+                if ui.button(self.language.text(Text::MoveLater)).clicked() {
+                    self.execute_document_edit(
+                        EditCommand::MoveSeries {
+                            artist_id: selected_id.clone(),
+                            direction: MoveDirection::Later,
+                        },
+                        self.language.text(Text::MoveLater),
+                    );
+                }
+            });
+        }
         ui.separator();
         ui.heading(self.language.text(Text::Data));
-        if self.session.datasets().is_empty() {
+        let datasets = self.session.datasets().to_vec();
+        if datasets.is_empty() {
             ui.weak(self.language.text(Text::NoData));
         } else {
-            for dataset in self.session.datasets() {
-                ui.label(dataset.display_name());
-                ui.weak(
-                    self.language
-                        .rows_columns(dataset.row_count, dataset.columns.len()),
-                );
+            for dataset in &datasets {
+                let selected = self.selected_dataset.as_deref() == Some(dataset.plot_id.as_str());
+                ui.push_id(&dataset.plot_id, |ui| {
+                    if ui
+                        .selectable_label(selected, dataset.display_name())
+                        .clicked()
+                    {
+                        self.select_dataset(&dataset.plot_id);
+                    }
+                    let kind = match dataset.kind {
+                        DataSetKind::Source => self.language.text(Text::SourceKind),
+                        DataSetKind::Fit => self.language.text(Text::FitKind),
+                    };
+                    let alive = dataset.alive.iter().filter(|alive| **alive).count();
+                    ui.weak(format!(
+                        "{kind} · {} · {}: {alive}",
+                        self.language
+                            .rows_columns(dataset.row_count, dataset.columns.len()),
+                        self.language.text(Text::AliveRows)
+                    ));
+                    if let Some(link) = &dataset.fit_link
+                        && let Some(parent) = &link.parent_dataset_id
+                    {
+                        ui.weak(format!(
+                            "{}: {parent}",
+                            self.language.text(Text::ParentSource)
+                        ));
+                    }
+                    ui.weak(format!(
+                        "{}: {}",
+                        self.language.text(Text::Columns),
+                        dataset
+                            .columns
+                            .iter()
+                            .map(|column| column.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                });
+            }
+        }
+        if let Some(selected_id) = self.selected_dataset.clone()
+            && let Some(dataset) = datasets
+                .iter()
+                .find(|dataset| dataset.plot_id == selected_id)
+        {
+            ui.separator();
+            ui.label(self.language.text(Text::CreateSeries));
+            column_combo(
+                ui,
+                "create-x-column",
+                self.language.text(Text::XColumn),
+                &mut self.binding_x,
+                dataset,
+            );
+            column_combo(
+                ui,
+                "create-y-column",
+                self.language.text(Text::YColumn),
+                &mut self.binding_y,
+                dataset,
+            );
+            egui::ComboBox::from_label(self.language.text(Text::SeriesStyle))
+                .selected_text(series_style_name(self.language, self.creation_style))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut self.creation_style,
+                        SeriesCreationStyle::Line,
+                        self.language.text(Text::Line),
+                    );
+                    ui.selectable_value(
+                        &mut self.creation_style,
+                        SeriesCreationStyle::Scatter,
+                        self.language.text(Text::Scatter),
+                    );
+                    ui.selectable_value(
+                        &mut self.creation_style,
+                        SeriesCreationStyle::LineAndMarker,
+                        self.language.text(Text::LineAndMarker),
+                    );
+                });
+            if ui.button(self.language.text(Text::AddSeries)).clicked() {
+                self.create_series_from_selection();
+            }
+            if ui
+                .button(self.language.text(Text::DeleteDataSource))
+                .clicked()
+            {
+                self.pending_delete_source = Some(selected_id);
             }
         }
     }
@@ -713,6 +1051,79 @@ impl StudioApp {
                 .find(|series| series.id == id)
         });
         describe_selection(ui, series.as_ref(), self.language);
+
+        if let Some(series) = &series
+            && let Some(binding) = &series.binding
+        {
+            ui.separator();
+            ui.label(self.language.text(Text::DataBinding));
+            let datasets = self.session.datasets().to_vec();
+            egui::ComboBox::from_id_salt("binding-data-source")
+                .selected_text(
+                    datasets
+                        .iter()
+                        .find(|dataset| dataset.plot_id == binding.data_source_id)
+                        .map_or_else(
+                            || binding.data_source_id.clone(),
+                            |data| data.display_name(),
+                        ),
+                )
+                .show_ui(ui, |ui| {
+                    for dataset in &datasets {
+                        if ui
+                            .selectable_label(
+                                self.selected_dataset.as_deref() == Some(dataset.plot_id.as_str()),
+                                dataset.display_name(),
+                            )
+                            .clicked()
+                        {
+                            self.select_dataset(&dataset.plot_id);
+                        }
+                    }
+                });
+            if let Some(dataset_id) = self.selected_dataset.as_deref()
+                && let Some(dataset) = datasets
+                    .iter()
+                    .find(|dataset| dataset.plot_id == dataset_id)
+            {
+                column_combo(
+                    ui,
+                    "binding-x-column",
+                    self.language.text(Text::XColumn),
+                    &mut self.binding_x,
+                    dataset,
+                );
+                column_combo(
+                    ui,
+                    "binding-y-column",
+                    self.language.text(Text::YColumn),
+                    &mut self.binding_y,
+                    dataset,
+                );
+                if series.kind == SeriesKind::ErrorBar {
+                    column_combo(
+                        ui,
+                        "binding-error-column",
+                        self.language.text(Text::ErrorColumn),
+                        &mut self.binding_error,
+                        dataset,
+                    );
+                }
+                if ui.button(self.language.text(Text::ApplyBinding)).clicked() {
+                    self.execute_document_edit(
+                        EditCommand::RebindSeries {
+                            artist_id: series.id.clone(),
+                            data_source_id: dataset.plot_id.clone(),
+                            x_column: self.binding_x.clone(),
+                            y_column: self.binding_y.clone(),
+                            y_error_column: (series.kind == SeriesKind::ErrorBar)
+                                .then(|| self.binding_error.clone()),
+                        },
+                        self.language.text(Text::ApplyBinding),
+                    );
+                }
+            }
+        }
 
         ui.separator();
         ui.label(self.language.text(Text::AxesRanges));
@@ -1074,6 +1485,7 @@ impl eframe::App for StudioApp {
             );
         }
         self.unsaved_dialog(&context);
+        self.delete_data_source_dialog(&context);
     }
 }
 
@@ -1081,6 +1493,41 @@ fn resolved_preview(
     document: &FigureDocument,
 ) -> Result<ResolvedFigure, instplot_studio::DocumentLayoutError> {
     resolve_document(document)
+}
+
+fn series_style_name(language: UiLanguage, style: SeriesCreationStyle) -> &'static str {
+    match style {
+        SeriesCreationStyle::Line => language.text(Text::Line),
+        SeriesCreationStyle::Scatter => language.text(Text::Scatter),
+        SeriesCreationStyle::LineAndMarker => language.text(Text::LineAndMarker),
+    }
+}
+
+fn series_kind_name(language: UiLanguage, kind: SeriesKind) -> &'static str {
+    match kind {
+        SeriesKind::Line => language.text(Text::Line),
+        SeriesKind::Scatter => language.text(Text::Scatter),
+        SeriesKind::ErrorBar => language.text(Text::ErrorBar),
+        SeriesKind::ReferenceLine => language.text(Text::ReferenceLine),
+        SeriesKind::Annotation => language.text(Text::Annotation),
+        SeriesKind::Legend => language.text(Text::Legend),
+    }
+}
+
+fn column_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    selected: &mut String,
+    dataset: &DataSet,
+) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(format!("{label}: {selected}"))
+        .show_ui(ui, |ui| {
+            for column in &dataset.columns {
+                ui.selectable_value(selected, column.name.clone(), &column.name);
+            }
+        });
 }
 
 fn describe_selection(ui: &mut egui::Ui, series: Option<&SeriesDescriptor>, language: UiLanguage) {

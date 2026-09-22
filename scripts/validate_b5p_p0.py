@@ -22,6 +22,7 @@ EXPECTED_CASES = {
     "multi-source": (2, 2, 3, 8, 8),
     "disabled-row": (1, 1, 2, 5, 4),
 }
+EXPECTED_PROJECT_SCHEMA = 2
 FIXTURE_NAMES = [
     "smoke.csv",
     "lite-source-fit.txt",
@@ -102,6 +103,18 @@ def main() -> int:
             ],
         ),
         run(
+            "build-binary",
+            [
+                "cargo",
+                "build",
+                "--locked",
+                "--package",
+                "instplot-studio",
+                "--bin",
+                "instplot-studio",
+            ],
+        ),
+        run(
             "generate-baseline",
             [
                 "cargo",
@@ -172,7 +185,7 @@ def main() -> int:
         checks.append(
             fact(
                 f"{case_id}-artifacts",
-                project.get("schema_version") == 1
+                project.get("schema_version") == EXPECTED_PROJECT_SCHEMA
                 and embedded
                 and checksum_ok
                 and pdf_bytes.startswith(b"%PDF-1.7")

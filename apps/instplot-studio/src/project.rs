@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 1;
+pub const PROJECT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +85,8 @@ pub struct ArtistRecord {
     pub id: String,
     pub kind: ArtistKind,
     pub role: ArtistRole,
+    #[serde(default = "default_true")]
+    pub visible: bool,
     pub properties: ArtistProperties,
 }
 
@@ -109,6 +111,10 @@ pub enum ArtistRole {
     Baseline,
     Annotation,
     Legend,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -499,6 +505,7 @@ impl ProjectDocument {
                         id: artist_ids[0].clone(),
                         kind: ArtistKind::ReferenceLine,
                         role: ArtistRole::Baseline,
+                        visible: true,
                         properties: ArtistProperties::ReferenceLine {
                             orientation: ReferenceOrientation::Horizontal,
                             value: 0.0,
@@ -513,6 +520,7 @@ impl ProjectDocument {
                         id: artist_ids[1].clone(),
                         kind: ArtistKind::Line,
                         role: ArtistRole::Fit,
+                        visible: true,
                         properties: ArtistProperties::Line {
                             binding: binding("fixture-data", "line_x", "line_y"),
                             stroke: blue_stroke(),
@@ -522,6 +530,7 @@ impl ProjectDocument {
                         id: artist_ids[2].clone(),
                         kind: ArtistKind::ErrorBar,
                         role: ArtistRole::Data,
+                        visible: true,
                         properties: ArtistProperties::ErrorBar {
                             binding: binding("fixture-data", "scatter_x", "scatter_y"),
                             y_error_column: "error".to_owned(),
@@ -536,6 +545,7 @@ impl ProjectDocument {
                         id: artist_ids[3].clone(),
                         kind: ArtistKind::Scatter,
                         role: ArtistRole::Data,
+                        visible: true,
                         properties: ArtistProperties::Scatter {
                             binding: binding("fixture-data", "scatter_x", "scatter_y"),
                             marker: MarkerStyle {
@@ -549,6 +559,7 @@ impl ProjectDocument {
                         id: artist_ids[4].clone(),
                         kind: ArtistKind::Annotation,
                         role: ArtistRole::Annotation,
+                        visible: true,
                         properties: ArtistProperties::Annotation {
                             label_id: "label-temperature".to_owned(),
                             x_pt: 48.0,
@@ -559,6 +570,7 @@ impl ProjectDocument {
                         id: artist_ids[5].clone(),
                         kind: ArtistKind::Legend,
                         role: ArtistRole::Legend,
+                        visible: true,
                         properties: ArtistProperties::Legend {
                             entries: vec![
                                 LegendEntry {
@@ -1001,6 +1013,7 @@ pub fn decode_project(bytes: &[u8]) -> Result<ProjectDocument, ProjectError> {
     let document = match version {
         PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
             .map_err(|error| ProjectError::Decode(error.to_string()))?,
+        1 => migrate_v1(value)?,
         0 => migrate_v0(value)?,
         future => return Err(ProjectError::UnsupportedSchema(future)),
     };
@@ -1448,8 +1461,30 @@ fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> {
     axes.y.maximum = legacy.y_max;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v0".to_owned(),
-        operation: "migrate_schema_0_to_1".to_owned(),
+        operation: "migrate_schema_0_to_2".to_owned(),
         input_ids: vec![legacy.producer_version],
+        parameters: BTreeMap::new(),
+    });
+    Ok(document)
+}
+
+fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectError> {
+    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    let artists = value["figure"]["artists"]
+        .as_array_mut()
+        .ok_or_else(|| ProjectError::Decode("schema 1 artists are missing".to_owned()))?;
+    for artist in artists {
+        artist
+            .as_object_mut()
+            .ok_or_else(|| ProjectError::Decode("schema 1 artist is invalid".to_owned()))?
+            .insert("visible".to_owned(), Value::Bool(true));
+    }
+    let mut document: ProjectDocument = serde_json::from_value(value)
+        .map_err(|error| ProjectError::Decode(format!("schema 1 migration: {error}")))?;
+    document.provenance.push(ProvenanceRecord {
+        id: "provenance-migrate-v1".to_owned(),
+        operation: "migrate_schema_1_to_2".to_owned(),
+        input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
     Ok(document)
@@ -1593,7 +1628,23 @@ mod tests {
         assert_eq!(migrated.figure.axes[0].x.minimum, -4.0);
         assert_eq!(
             migrated.provenance.last().unwrap().operation,
-            "migrate_schema_0_to_1"
+            "migrate_schema_0_to_2"
+        );
+    }
+
+    #[test]
+    fn schema_one_migrates_artist_visibility_to_visible() {
+        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+        value["schema_version"] = Value::from(1);
+        for artist in value["figure"]["artists"].as_array_mut().unwrap() {
+            artist.as_object_mut().unwrap().remove("visible");
+        }
+        let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+        assert!(migrated.figure.artists.iter().all(|artist| artist.visible));
+        assert_eq!(
+            migrated.provenance.last().unwrap().operation,
+            "migrate_schema_1_to_2"
         );
     }
 
@@ -1690,7 +1741,7 @@ mod tests {
         value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION + 1);
         assert!(matches!(
             decode_project(&serde_json::to_vec(&value).unwrap()),
-            Err(ProjectError::UnsupportedSchema(2))
+            Err(ProjectError::UnsupportedSchema(version)) if version == PROJECT_SCHEMA_VERSION + 1
         ));
     }
 }
