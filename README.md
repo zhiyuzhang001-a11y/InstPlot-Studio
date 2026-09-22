@@ -53,6 +53,8 @@ deferred while B5P improves the actual editing workflow and product details. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 The detailed polish sequence is in
 [`docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md).
+The reproducible P0 workflow baseline and prioritized usability gaps are in
+[`reports/B5P_P0_WORKFLOW_BASELINE.md`](reports/B5P_P0_WORKFLOW_BASELINE.md).
 
 Build and check the production Studio shell with:
 

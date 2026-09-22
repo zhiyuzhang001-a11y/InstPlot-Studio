@@ -1,0 +1,21 @@
+# -----BEGIN INSTPLOT DATA-----
+# Name: Cooling sweep
+# Type: source
+# Dataset-ID: source-cooling
+temperature,resistance
+280,12.4
+290,13.1
+300,13.9
+310,14.8
+# -----END INSTPLOT DATA-----
+
+# -----BEGIN INSTPLOT DATA-----
+# Name: Warming sweep
+# Type: source
+# Dataset-ID: source-warming
+temperature,resistance
+280,12.7
+290,13.4
+300,14.2
+310,15.0
+# -----END INSTPLOT DATA-----

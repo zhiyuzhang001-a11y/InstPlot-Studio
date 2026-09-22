@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE  
+> 状态：ACTIVE（P0 DONE；P1 next）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  
@@ -270,5 +270,6 @@ P8 稳定化与人工验收
 补完 Lite 集成 → B6 发布准备
 ```
 
-当前第一个任务是 **P0：固定真实样例并形成基线问题清单**。P0 只做审计和验收基线，
-不趁机修改零散 UI；从 P1 开始按依赖顺序实施。
+P0 已完成，真实样例、结构化验证和分级问题清单见
+[`../reports/B5P_P0_WORKFLOW_BASELINE.md`](../reports/B5P_P0_WORKFLOW_BASELINE.md)。当前任务是
+**P1：编辑事务、dirty 状态、Undo/Redo 和 schema 演进基础**。
