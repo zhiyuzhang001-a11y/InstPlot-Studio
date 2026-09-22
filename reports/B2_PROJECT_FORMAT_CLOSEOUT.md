@@ -1,7 +1,7 @@
 # B2 — Formal Figure Document and project format closeout
 
 Date: 2026-09-22  
-Status: **DONE locally; cross-platform CI pending implementation push**
+Status: **DONE**
 
 ## Scope delivered
 
@@ -80,6 +80,12 @@ The final local release executable is **6,088,256 bytes** (5.81 MiB), below the
 locked packages. The existing `RUSTSEC-2026-0192` maintenance warning for
 `ttf-parser 0.25.1` remains the already recorded B2/B3 watch item; it is not a
 security vulnerability and was not introduced by the project-format work.
+
+GitHub Actions run
+[`35699993731`](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/actions/runs/35699993731)
+passed on macOS 15, Ubuntu 22.04 and Windows. Every platform completed workspace
+tests, Clippy with warnings denied, the stripped release build, product identity,
+headless PDF export and headless project create/open checks.
 
 ## B2 acceptance result
 
