@@ -1032,7 +1032,7 @@ impl StudioApp {
         let (mut width, mut height) = self.document.figure_size_mm();
         let mut changed_group = None;
         let mut finish = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let response = ui.add(
                 egui::DragValue::new(&mut width)
                     .range(20.0..=500.0)
@@ -1054,7 +1054,7 @@ impl StudioApp {
             }
             finish |= response.drag_stopped() || response.lost_focus();
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("85 × 65 mm").clicked() {
                 width = 85.0;
                 height = 65.0;
@@ -2599,23 +2599,25 @@ impl eframe::App for StudioApp {
                 .default_size(90.0)
                 .show(ui, |ui| {
                     ui.heading(self.language.text(Text::WarningsAndErrors));
-                    for message in &self.messages {
-                        let (label, color) = match message.level {
-                            MessageLevel::Warning => {
-                                (self.language.text(Text::Warning), egui::Color32::YELLOW)
-                            }
-                            MessageLevel::Error => {
-                                (self.language.text(Text::Error), egui::Color32::LIGHT_RED)
-                            }
-                        };
-                        ui.colored_label(color, format!("{label}: {}", message.text));
-                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for message in &self.messages {
+                            let (label, color) = match message.level {
+                                MessageLevel::Warning => {
+                                    (self.language.text(Text::Warning), egui::Color32::YELLOW)
+                                }
+                                MessageLevel::Error => {
+                                    (self.language.text(Text::Error), egui::Color32::LIGHT_RED)
+                                }
+                            };
+                            ui.colored_label(color, format!("{label}: {}", message.text));
+                        }
+                    });
                 });
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
             let canvas_available = ui.available_size();
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button(self.language.text(Text::FitToWindow)).clicked() {
                     let available = canvas_available - egui::vec2(48.0, 72.0);
                     self.canvas_zoom = (available.x / self.resolved.display.width)
