@@ -47,10 +47,12 @@ reference/baseline lines, semantic annotations and the explicit legend now use
 the formal layout. B3.6 is complete: Preview, PDF and PNG now consume one
 formal layout result and resolved Display List. B4 is complete: versioned
 palette and semantic registries now drive a node-specific Publication Check in
-both the live Inspector and headless JSON report. B5 is active: the Studio-side
-Lite import and versioned handoff consumer are implemented; the separate Lite
-application still needs its producer/launcher integration. See
+both the live Inspector and headless JSON report. The Studio side of the B5
+handoff is implemented; Lite producer/launcher integration is deliberately
+deferred while B5P improves the actual editing workflow and product details. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
+The detailed polish sequence is in
+[`docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
 

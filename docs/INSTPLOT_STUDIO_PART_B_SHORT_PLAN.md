@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0–B4 DONE；B5 Studio side DONE，Lite integration pending）
+> 状态：ACTIVE（B0–B4 DONE；B5 Studio side DONE；B5P product polish ACTIVE；Lite integration deferred）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -35,7 +35,11 @@ B3 V1 出版绘图能力（从 single axes 开始）
  ↓
 B4 颜色、语义与 Publication Check
  ↓
-B5 Lite → Studio 交接
+B5a Studio 交接协议与接收端（DONE）
+ ↓
+B5P Studio 产品细节完善
+ ↓
+B5b Lite producer/launcher 最终联调
  ↓
 B6 打包、验收与预览发布
 ```
@@ -160,7 +164,10 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 [`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)，
 容器决策见
 [`../adr/022-versioned-project-container.md`](../adr/022-versioned-project-container.md)。
-当前任务为 **B5 完成独立 InstPlot-Lite 仓库中的 producer/launcher 集成**。
+当前任务调整为 **B5P Studio 产品细节完善**。独立 InstPlot-Lite 仓库中的
+producer/launcher 集成推迟到 B5P 关闭后、B6 发布验收前完成。B5P 的完整范围、
+顺序和验收条件见
+[`INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md)。
 B3.1 的正式模块提升与兼容回归证据见
 [`../reports/B3_1_LAYOUT_PROMOTION.md`](../reports/B3_1_LAYOUT_PROMOTION.md)，B3.2
 正式坐标轴与裁切证据见
@@ -181,3 +188,4 @@ B5 Studio 侧交接协议、消费者与审计证据见
 
 B5 剩余工作必须在 Lite 仓库生成相同 versioned package 并以 `--open-handoff`
 启动 Studio；不得以文件名猜测 fit 关联，也不得让 Studio 样式回写 Lite 源文件。
+该工作只是调整顺序，不从 Part B 完成条件中删除。
