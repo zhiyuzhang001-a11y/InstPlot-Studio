@@ -42,8 +42,9 @@ clip with reversible stable identities. B3.3 is complete: the GUI preview now
 starts from the formal layout and paints resolved bundled-font runs, including
 scientific baseline shifts and the rotated Y label. B3.4 is complete: embedded
 linear line, scatter and composed line-plus-marker artists now flow through the
-same formal layout and preview. B3.5 is next: add the remaining single-axes
-artist roles and log-axis coverage. See
+same formal layout and preview. B3.5 is complete: log axes, error bars,
+reference/baseline lines, semantic annotations and the explicit legend now use
+the formal layout. B3.6 is next: close the shared Preview/PDF/PNG path. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
 
 Build and check the production Studio shell with:
@@ -88,6 +89,12 @@ Validate the B3.4 line/scatter artist slice with:
 
 ```sh
 python3 scripts/validate_b3_4.py
+```
+
+Validate the B3.5 complete artist framework with:
+
+```sh
+python3 scripts/validate_b3_5.py
 ```
 
 The release binary also exposes window-independent project checks:

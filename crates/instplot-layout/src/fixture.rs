@@ -2,8 +2,9 @@ use studio_render_spike::{Color, NodeId};
 use text_shaping_spike::Label;
 
 use crate::{
-    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, Formatter, GridSpec, LineStyle,
-    Locator, MarkerShape, MarkerStyle, Scale, Series,
+    Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
+    Formatter, GridSpec, LegendPosition, LegendSpec, LineStyle, Locator, MarkerShape, MarkerStyle,
+    Scale, Series,
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
@@ -103,6 +104,7 @@ pub fn publication_fixture() -> Chart {
                 }),
                 marker: None,
                 errors: Vec::new(),
+                error_style: None,
                 color: Color(150, 150, 150, 255),
             },
             Series {
@@ -115,6 +117,7 @@ pub fn publication_fixture() -> Chart {
                 }),
                 marker: None,
                 errors: Vec::new(),
+                error_style: None,
                 color: Color(70, 70, 70, 255),
             },
             Series {
@@ -127,6 +130,7 @@ pub fn publication_fixture() -> Chart {
                 }),
                 marker: None,
                 errors: Vec::new(),
+                error_style: None,
                 color: blue,
             },
             Series {
@@ -140,6 +144,11 @@ pub fn publication_fixture() -> Chart {
                     filled: false,
                 }),
                 errors: y_errors(2),
+                error_style: Some(ErrorStyle {
+                    width: 0.65,
+                    cap_width: 4.0,
+                    dash: DashStyle::Solid,
+                }),
                 color: blue,
             },
             Series {
@@ -153,15 +162,24 @@ pub fn publication_fixture() -> Chart {
                     filled: true,
                 }),
                 errors: y_errors(4),
+                error_style: Some(ErrorStyle {
+                    width: 0.65,
+                    cap_width: 4.0,
+                    dash: DashStyle::Solid,
+                }),
                 color: orange,
             },
         ],
         annotations: vec![Annotation {
             id: NodeId(20),
-            text: "T ≤ 300 K".into(),
-            point: DataPoint { x: -2.8, y: 2.1 },
+            label: Label::Text("T ≤ 300 K".into()),
+            position: AnnotationPosition::Data(DataPoint { x: -2.8, y: 2.1 }),
             offset_pt: (2.0, 0.0),
         }],
+        legend: Some(LegendSpec {
+            id: NodeId(1),
+            position: LegendPosition::Auto,
+        }),
     }
 }
 
@@ -220,6 +238,11 @@ pub fn marker_gallery_fixture() -> Chart {
             } else {
                 Vec::new()
             },
+            error_style: (index == 0).then_some(ErrorStyle {
+                width: 0.65,
+                cap_width: 4.0,
+                dash: DashStyle::Solid,
+            }),
             color: Color(40, 80, 160, 255),
         })
         .collect();

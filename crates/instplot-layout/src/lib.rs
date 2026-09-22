@@ -12,8 +12,8 @@ pub use layout::{
     TickLayout, layout, layout_with_measurer,
 };
 pub use model::{
-    Annotation, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, GridSpec, LineStyle, MarkerShape,
-    MarkerStyle, Series,
+    Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
+    GridSpec, LegendPosition, LegendSpec, LineStyle, MarkerShape, MarkerStyle, Series,
 };
 pub use scale::{
     FormattedTicks, Formatter, Locator, Scale, collision_stride, format_ticks, format_ticks_with,

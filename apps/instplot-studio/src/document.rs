@@ -4,7 +4,8 @@ use std::path::Path;
 
 use instplot_core::{DataSet, DataSetKind};
 use instplot_layout::{
-    AxisSpec, Bounds, Chart, DashStyle, DataPoint, Formatter, GridSpec, LayoutError, LayoutResult,
+    Annotation, AnnotationPosition, AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar,
+    ErrorStyle, Formatter, GridSpec, LayoutError, LayoutResult, LegendPosition, LegendSpec,
     LineStyle, Locator, MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle, Scale,
     Series, layout,
 };
@@ -14,8 +15,8 @@ use text_shaping_spike::Label;
 use crate::{
     ArtistProperties, AxisRecord, AxisScale, DataBinding, DataSourceKind, DataSourcePayload,
     FitIdentity, FormatterSpec, LabelNode, LocatorSpec, MarkerShape, OpenProjectReport,
-    PaletteRegistry, ProjectDocument, ProjectError, SemanticLabel, StrokeStyle, open_project,
-    save_project,
+    PaletteRegistry, ProjectDocument, ProjectError, ReferenceOrientation, SemanticLabel,
+    StrokeStyle, open_project, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -163,7 +164,7 @@ impl FigureDocument {
 
     fn layout_document(
         &self,
-        include_basic_artists: bool,
+        include_artists: bool,
     ) -> Result<DocumentLayout, DocumentLayoutError> {
         let stored = self
             .project
@@ -187,8 +188,18 @@ impl FigureDocument {
             &self.project.semantic_registry,
             &mut project_ids,
         )?;
-        let series = if include_basic_artists {
-            basic_series(stored, &self.project, &mut project_ids)?
+        let (legend, legend_labels) = if include_artists {
+            legend_spec(stored, &self.project, &mut project_ids)?
+        } else {
+            (None, BTreeMap::new())
+        };
+        let series = if include_artists {
+            formal_series(stored, &self.project, &legend_labels, &mut project_ids)?
+        } else {
+            Vec::new()
+        };
+        let annotations = if include_artists {
+            formal_annotations(stored, &self.project, &mut project_ids)?
         } else {
             Vec::new()
         };
@@ -199,7 +210,8 @@ impl FigureDocument {
             x,
             y,
             series,
-            annotations: Vec::new(),
+            annotations,
+            legend,
         })
         .map_err(DocumentLayoutError::Layout)?;
         Ok(DocumentLayout {
@@ -327,9 +339,10 @@ impl FigureDocument {
     }
 }
 
-fn basic_series(
+fn formal_series(
     axes: &crate::AxesRecord,
     project: &ProjectDocument,
+    legend_labels: &BTreeMap<String, String>,
     project_ids: &mut BTreeMap<NodeId, String>,
 ) -> Result<Vec<Series>, DocumentLayoutError> {
     let mut output = Vec::new();
@@ -340,39 +353,190 @@ fn basic_series(
             .iter()
             .find(|artist| artist.id == *artist_id)
             .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
-        let (binding, line, marker, color_id) = match &artist.properties {
+        let (points, line, marker, errors, error_style, color_id) = match &artist.properties {
             ArtistProperties::Line { binding, stroke } => (
-                binding,
+                bound_points(binding, project)?,
                 Some(LineStyle {
                     width: stroke.width_pt,
                     dash: dash_style(stroke),
                 }),
                 None,
+                Vec::new(),
+                None,
                 stroke.color_id.as_str(),
             ),
             ArtistProperties::Scatter { binding, marker } => (
-                binding,
+                bound_points(binding, project)?,
                 None,
                 Some(LayoutMarkerStyle {
                     shape: marker_shape(marker.shape),
                     size: marker.size_pt,
                     filled: true,
                 }),
+                Vec::new(),
+                None,
                 marker.color_id.as_str(),
             ),
-            _ => continue,
+            ArtistProperties::ErrorBar {
+                binding,
+                y_error_column,
+                cap_width_pt,
+                stroke,
+            } => {
+                let points = bound_points(binding, project)?;
+                let values = bound_column(&binding.data_source_id, y_error_column, project)?;
+                if points.len() != values.len() {
+                    return Err(DocumentLayoutError::ColumnLengthMismatch {
+                        source: binding.data_source_id.clone(),
+                        x: points.len(),
+                        y: values.len(),
+                    });
+                }
+                (
+                    points,
+                    None,
+                    None,
+                    values
+                        .into_iter()
+                        .map(|value| ErrorBar {
+                            x_minus: 0.0,
+                            x_plus: 0.0,
+                            y_minus: value,
+                            y_plus: value,
+                        })
+                        .collect(),
+                    Some(ErrorStyle {
+                        width: stroke.width_pt,
+                        cap_width: *cap_width_pt,
+                        dash: dash_style(stroke),
+                    }),
+                    stroke.color_id.as_str(),
+                )
+            }
+            ArtistProperties::ReferenceLine {
+                orientation,
+                value,
+                stroke,
+            } => {
+                let points = match orientation {
+                    ReferenceOrientation::Horizontal => vec![
+                        DataPoint {
+                            x: axes.x.minimum,
+                            y: *value,
+                        },
+                        DataPoint {
+                            x: axes.x.maximum,
+                            y: *value,
+                        },
+                    ],
+                    ReferenceOrientation::Vertical => vec![
+                        DataPoint {
+                            x: *value,
+                            y: axes.y.minimum,
+                        },
+                        DataPoint {
+                            x: *value,
+                            y: axes.y.maximum,
+                        },
+                    ],
+                };
+                (
+                    points,
+                    Some(LineStyle {
+                        width: stroke.width_pt,
+                        dash: dash_style(stroke),
+                    }),
+                    None,
+                    Vec::new(),
+                    None,
+                    stroke.color_id.as_str(),
+                )
+            }
+            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
         };
         output.push(Series {
             id: register_node_id(&artist.id, project_ids)?,
-            label: artist.id.clone(),
-            points: bound_points(binding, project)?,
+            label: legend_labels.get(&artist.id).cloned().unwrap_or_default(),
+            points,
             line,
             marker,
-            errors: Vec::new(),
+            errors,
+            error_style,
             color: palette_color(color_id, &project.palette)?,
         });
     }
     Ok(output)
+}
+
+fn formal_annotations(
+    axes: &crate::AxesRecord,
+    project: &ProjectDocument,
+    project_ids: &mut BTreeMap<NodeId, String>,
+) -> Result<Vec<Annotation>, DocumentLayoutError> {
+    let mut output = Vec::new();
+    for artist_id in &axes.artist_ids {
+        let artist = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == *artist_id)
+            .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
+        let ArtistProperties::Annotation {
+            label_id,
+            x_pt,
+            y_pt,
+        } = &artist.properties
+        else {
+            continue;
+        };
+        output.push(Annotation {
+            id: register_node_id(&artist.id, project_ids)?,
+            label: semantic_label(label_id, &project.semantic_registry)?,
+            position: AnnotationPosition::FigurePoints { x: *x_pt, y: *y_pt },
+            offset_pt: (0.0, 0.0),
+        });
+    }
+    Ok(output)
+}
+
+fn legend_spec(
+    axes: &crate::AxesRecord,
+    project: &ProjectDocument,
+    project_ids: &mut BTreeMap<NodeId, String>,
+) -> Result<(Option<LegendSpec>, BTreeMap<String, String>), DocumentLayoutError> {
+    for artist_id in &axes.artist_ids {
+        let artist = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == *artist_id)
+            .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
+        let ArtistProperties::Legend {
+            entries,
+            x_pt,
+            y_pt,
+        } = &artist.properties
+        else {
+            continue;
+        };
+        let labels = entries
+            .iter()
+            .map(|entry| {
+                Ok((
+                    entry.artist_id.clone(),
+                    semantic_label(&entry.label_id, &project.semantic_registry)?.normalized_text(),
+                ))
+            })
+            .collect::<Result<_, DocumentLayoutError>>()?;
+        return Ok((
+            Some(LegendSpec {
+                id: register_node_id(&artist.id, project_ids)?,
+                position: LegendPosition::FigurePoints { x: *x_pt, y: *y_pt },
+            }),
+            labels,
+        ));
+    }
+    Ok((None, BTreeMap::new()))
 }
 
 fn bound_points(
@@ -412,6 +576,39 @@ fn bound_points(
         .zip(y)
         .map(|(x, y)| DataPoint { x: *x, y: *y })
         .collect())
+}
+
+fn bound_column(
+    source_id: &str,
+    column_name: &str,
+    project: &ProjectDocument,
+) -> Result<Vec<f64>, DocumentLayoutError> {
+    let source = project
+        .data_sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| DocumentLayoutError::MissingDataSource(source_id.to_owned()))?;
+    let DataSourcePayload::Embedded { columns, .. } = &source.payload else {
+        return Err(DocumentLayoutError::ExternalDataUnavailable(
+            source.id.clone(),
+        ));
+    };
+    columns
+        .iter()
+        .find(|column| column.name == column_name)
+        .map(|column| column.values.clone())
+        .ok_or_else(|| DocumentLayoutError::MissingColumn {
+            source: source.id.clone(),
+            column: column_name.to_owned(),
+        })
+}
+
+fn semantic_label(label_id: &str, labels: &[SemanticLabel]) -> Result<Label, DocumentLayoutError> {
+    labels
+        .iter()
+        .find(|label| label.id == label_id)
+        .map(|label| Label::Group(label.nodes.iter().map(label_node).collect()))
+        .ok_or_else(|| DocumentLayoutError::MissingLabel(label_id.to_owned()))
 }
 
 fn palette_color(color_id: &str, palette: &PaletteRegistry) -> Result<Color, DocumentLayoutError> {
@@ -694,7 +891,7 @@ mod tests {
 
         assert_eq!(output.project_ids.get(&NodeId(11)).unwrap(), "node-11");
         assert_eq!(output.project_ids.get(&NodeId(13)).unwrap(), "node-13");
-        assert!(!output.project_ids.contains_key(&NodeId(12)));
+        assert_eq!(output.project_ids.get(&NodeId(12)).unwrap(), "node-12");
         assert!(
             output
                 .result
@@ -755,5 +952,103 @@ mod tests {
             .flat_map(|item| item.path_proximity.iter().copied())
             .collect();
         assert_eq!(line_points, marker_points);
+    }
+
+    #[test]
+    fn formal_figure_layout_includes_remaining_single_axes_artists() {
+        let output = FigureDocument::fixed().layout_figure().unwrap();
+
+        assert!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .any(|item| { item.node == NodeId(10) && item.role == SelectableRole::Series })
+        );
+        assert_eq!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .filter(|item| item.node == NodeId(12) && item.role == SelectableRole::ErrorBar)
+                .count(),
+            3
+        );
+        assert!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .any(|item| { item.node == NodeId(14) && item.role == SelectableRole::Annotation })
+        );
+        assert!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .any(|item| { item.node == NodeId(15) && item.role == SelectableRole::Legend })
+        );
+        assert_eq!(output.project_ids.get(&NodeId(14)).unwrap(), "node-14");
+        assert_eq!(output.project_ids.get(&NodeId(15)).unwrap(), "node-15");
+
+        let labels: Vec<_> = output
+            .result
+            .display_list
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::GlyphRun(run) => Some((run.source, run.label.normalized_text())),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.contains(&(NodeId(14), "T ≤ 300 K".to_owned())));
+        assert!(labels.contains(&(NodeId(13), "Experiment".to_owned())));
+        assert!(labels.contains(&(NodeId(11), "Fit".to_owned())));
+    }
+
+    #[test]
+    fn formal_figure_layout_supports_positive_log_data() {
+        let mut document = FigureDocument::fixed();
+        let axes = &mut document.project.figure.axes[0];
+        axes.x.minimum = 0.1;
+        axes.x.maximum = 10.0;
+        axes.x.scale = AxisScale::Log10;
+        axes.y.minimum = 0.1;
+        axes.y.maximum = 10.0;
+        axes.y.scale = AxisScale::Log10;
+        if let ArtistProperties::ReferenceLine { value, .. } =
+            &mut document.project.figure.artists[0].properties
+        {
+            *value = 1.0;
+        }
+        let DataSourcePayload::Embedded { columns, .. } =
+            &mut document.project.data_sources[0].payload
+        else {
+            unreachable!()
+        };
+        for column in columns {
+            match column.name.as_str() {
+                "line_x" | "scatter_x" => column.values = vec![0.1, 1.0, 10.0],
+                "line_y" | "scatter_y" => column.values = vec![0.2, 2.0, 8.0],
+                _ => {}
+            }
+        }
+
+        let output = document.layout_figure().unwrap();
+        assert_eq!(
+            output
+                .result
+                .x_axis
+                .major
+                .iter()
+                .map(|tick| tick.value)
+                .collect::<Vec<_>>(),
+            vec![0.1, 1.0, 10.0]
+        );
+        assert!(output.result.display_list.validation_errors().is_empty());
     }
 }

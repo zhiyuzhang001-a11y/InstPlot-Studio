@@ -6,7 +6,10 @@ use studio_render_spike::{
 };
 use text_shaping_spike::Label;
 
-use crate::model::{Chart, DashStyle, DataPoint, MarkerShape, MarkerStyle, Series};
+use crate::model::{
+    Annotation, AnnotationPosition, Chart, DashStyle, DataPoint, LegendPosition, MarkerShape,
+    MarkerStyle, Series,
+};
 use crate::scale::{Scale, collision_stride, minor_ticks};
 use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
 
@@ -356,6 +359,34 @@ fn validate(chart: &Chart) -> Result<(), LayoutError> {
         }) {
             return Err(LayoutError::InvalidData(series.id));
         }
+        if let Some(style) = series.error_style
+            && (!style.width.is_finite()
+                || style.width <= 0.0
+                || !style.cap_width.is_finite()
+                || style.cap_width < 0.0)
+        {
+            return Err(LayoutError::InvalidData(series.id));
+        }
+    }
+    for annotation in &chart.annotations {
+        let valid = match annotation.position {
+            AnnotationPosition::Data(point) => {
+                point.x.is_finite()
+                    && point.y.is_finite()
+                    && (chart.x.scale != Scale::Log10 || point.x > 0.0)
+                    && (chart.y.scale != Scale::Log10 || point.y > 0.0)
+            }
+            AnnotationPosition::FigurePoints { x, y } => x.is_finite() && y.is_finite(),
+        };
+        if !valid {
+            return Err(LayoutError::InvalidData(annotation.id));
+        }
+    }
+    if let Some(legend) = chart.legend
+        && let LegendPosition::FigurePoints { x, y } = legend.position
+        && (!x.is_finite() || !y.is_finite())
+    {
+        return Err(LayoutError::InvalidData(legend.id));
     }
     Ok(())
 }
@@ -459,6 +490,18 @@ struct LegendChoice {
 }
 
 fn choose_legend(chart: &Chart, axes: Bounds, measurer: &mut dyn TextMeasurer) -> LegendChoice {
+    let Some(legend) = chart.legend else {
+        return LegendChoice {
+            bounds: Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            outside: false,
+            visible: false,
+        };
+    };
     let labels: Vec<&str> = chart
         .series
         .iter()
@@ -483,6 +526,18 @@ fn choose_legend(chart: &Chart, axes: Bounds, measurer: &mut dyn TextMeasurer) -
         .fold(0.0, f64::max)
         + 31.0;
     let height = labels.len() as f64 * 12.0 + 8.0;
+    if let LegendPosition::FigurePoints { x, y } = legend.position {
+        return LegendChoice {
+            bounds: Bounds {
+                x,
+                y,
+                width,
+                height,
+            },
+            outside: false,
+            visible: true,
+        };
+    }
     let inset = 6.0;
     let candidates = [
         Bounds {
@@ -626,7 +681,7 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
         }
     }
     for annotation in &chart.annotations {
-        if let Some((x, y)) = map_point(chart, axes, annotation.point) {
+        if let Some((x, y)) = annotation_position(chart, axes, annotation) {
             output.push(Bounds {
                 x: x + annotation.offset_pt.0,
                 y: y + annotation.offset_pt.1 - 10.0,
@@ -1000,7 +1055,12 @@ fn draw_error_bar(
     else {
         return Err(LayoutError::InvalidData(series.id));
     };
-    let cap = 2.0;
+    let style = series.error_style.unwrap_or(crate::model::ErrorStyle {
+        width: 0.65,
+        cap_width: 4.0,
+        dash: DashStyle::Solid,
+    });
+    let cap = style.cap_width / 2.0;
     let path = Path {
         verbs: vec![
             PathVerb::MoveTo(pt(left.0), pt(left.1)),
@@ -1021,7 +1081,7 @@ fn draw_error_bar(
         source: series.id,
         path,
         fill: None,
-        stroke: Some(stroke(series.color, 0.65, DashStyle::Solid)),
+        stroke: Some(stroke(series.color, style.width, style.dash)),
     });
     hit_map.items.push(HitItem {
         node: series.id,
@@ -1048,16 +1108,16 @@ fn draw_annotations(
     hit_map: &mut HitMap,
 ) -> Result<(), LayoutError> {
     for (index, annotation) in chart.annotations.iter().enumerate() {
-        let Some((x, y)) = map_point(chart, axes, annotation.point) else {
+        let Some((x, y)) = annotation_position(chart, axes, annotation) else {
             return Err(LayoutError::InvalidData(annotation.id));
         };
         let x = x + annotation.offset_pt.0;
         let y = y + annotation.offset_pt.1;
-        let size = measurer.measure(&annotation.text, TICK_FONT);
-        text(
+        let size = measurer.measure_label(&annotation.label, TICK_FONT);
+        label_text(
             list,
             annotation.id,
-            &annotation.text,
+            &annotation.label,
             (x, y),
             TICK_FONT,
             TextAnchor::Start,
@@ -1074,7 +1134,7 @@ fn draw_annotations(
             z_order: 500 + index as u32,
             role: SelectableRole::Annotation,
             data_index: None,
-            tooltip: Some(annotation.text.clone()),
+            tooltip: Some(annotation.label.normalized_text()),
             path_proximity: vec![(x, y)],
         });
     }
@@ -1088,8 +1148,9 @@ fn draw_legend(
     list: &mut DisplayList,
     hit_map: &mut HitMap,
 ) {
+    let legend_id = chart.legend.map_or(chart.id, |legend| legend.id);
     list.items.push(DisplayItem::Path {
-        source: chart.id,
+        source: legend_id,
         path: rectangle(bounds),
         fill: Some(Fill {
             color: Color(255, 255, 255, 230),
@@ -1139,7 +1200,7 @@ fn draw_legend(
         );
     }
     hit_map.items.push(HitItem {
-        node: chart.id,
+        node: legend_id,
         bounds,
         z_order: 1000,
         role: SelectableRole::Legend,
@@ -1147,6 +1208,14 @@ fn draw_legend(
         tooltip: Some("Legend".into()),
         path_proximity: Vec::new(),
     });
+}
+
+fn annotation_position(chart: &Chart, axes: Bounds, annotation: &Annotation) -> Option<(f64, f64)> {
+    match annotation.position {
+        AnnotationPosition::Data(point) => map_point(chart, axes, point),
+        AnnotationPosition::FigurePoints { x, y } if x.is_finite() && y.is_finite() => Some((x, y)),
+        AnnotationPosition::FigurePoints { .. } => None,
+    }
 }
 
 fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, dx: f64, dy: f64) {

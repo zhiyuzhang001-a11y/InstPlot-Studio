@@ -12,6 +12,7 @@ pub struct Chart {
     pub y: AxisSpec,
     pub series: Vec<Series>,
     pub annotations: Vec<Annotation>,
+    pub legend: Option<LegendSpec>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,7 +41,15 @@ pub struct Series {
     pub line: Option<LineStyle>,
     pub marker: Option<MarkerStyle>,
     pub errors: Vec<ErrorBar>,
+    pub error_style: Option<ErrorStyle>,
     pub color: Color,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ErrorStyle {
+    pub width: f64,
+    pub cap_width: f64,
+    pub dash: DashStyle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,7 +101,25 @@ pub struct MarkerStyle {
 #[derive(Clone, Debug)]
 pub struct Annotation {
     pub id: NodeId,
-    pub text: String,
-    pub point: DataPoint,
+    pub label: Label,
+    pub position: AnnotationPosition,
     pub offset_pt: (f64, f64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AnnotationPosition {
+    Data(DataPoint),
+    FigurePoints { x: f64, y: f64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegendSpec {
+    pub id: NodeId,
+    pub position: LegendPosition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LegendPosition {
+    Auto,
+    FigurePoints { x: f64, y: f64 },
 }
