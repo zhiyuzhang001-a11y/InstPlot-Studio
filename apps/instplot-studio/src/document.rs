@@ -4,14 +4,18 @@ use std::path::Path;
 
 use instplot_core::{DataSet, DataSetKind};
 use instplot_layout::{
-    AxisSpec, Bounds, Chart, Formatter, GridSpec, LayoutError, LayoutResult, Locator, Scale, layout,
+    AxisSpec, Bounds, Chart, DashStyle, DataPoint, Formatter, GridSpec, LayoutError, LayoutResult,
+    LineStyle, Locator, MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle, Scale,
+    Series, layout,
 };
-use studio_render_spike::{CompileError, DisplayList, NodeId, compile, fixed_figure};
+use studio_render_spike::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
 use text_shaping_spike::Label;
 
 use crate::{
-    AxisRecord, AxisScale, DataSourceKind, FitIdentity, FormatterSpec, LabelNode, LocatorSpec,
-    OpenProjectReport, ProjectDocument, ProjectError, SemanticLabel, open_project, save_project,
+    ArtistProperties, AxisRecord, AxisScale, DataBinding, DataSourceKind, DataSourcePayload,
+    FitIdentity, FormatterSpec, LabelNode, LocatorSpec, MarkerShape, OpenProjectReport,
+    PaletteRegistry, ProjectDocument, ProjectError, SemanticLabel, StrokeStyle, open_project,
+    save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -40,6 +44,19 @@ pub struct DocumentLayout {
 pub enum DocumentLayoutError {
     MissingAxes,
     MissingLabel(String),
+    MissingArtist(String),
+    MissingDataSource(String),
+    ExternalDataUnavailable(String),
+    MissingColumn {
+        source: String,
+        column: String,
+    },
+    ColumnLengthMismatch {
+        source: String,
+        x: usize,
+        y: usize,
+    },
+    MissingColor(String),
     DuplicateNodeId {
         numeric: u64,
         first: String,
@@ -53,6 +70,22 @@ impl fmt::Display for DocumentLayoutError {
         match self {
             Self::MissingAxes => formatter.write_str("figure has no axes to lay out"),
             Self::MissingLabel(id) => write!(formatter, "semantic label {id} is missing"),
+            Self::MissingArtist(id) => write!(formatter, "axes references missing artist {id}"),
+            Self::MissingDataSource(id) => {
+                write!(formatter, "artist references missing data source {id}")
+            }
+            Self::ExternalDataUnavailable(id) => write!(
+                formatter,
+                "data source {id} is external and has not been loaded into the layout"
+            ),
+            Self::MissingColumn { source, column } => {
+                write!(formatter, "data source {source} is missing column {column}")
+            }
+            Self::ColumnLengthMismatch { source, x, y } => write!(
+                formatter,
+                "data source {source} has mismatched X/Y lengths ({x} and {y})"
+            ),
+            Self::MissingColor(id) => write!(formatter, "palette color {id} is missing"),
             Self::DuplicateNodeId {
                 numeric,
                 first,
@@ -118,9 +151,20 @@ impl FigureDocument {
 
     /// Resolve the first project axes through the formal B3 layout engine.
     ///
-    /// Artists remain on the existing preview path until B3.3; this method is the
-    /// production axes, tick, grid, semantic-label and clipping-boundary contract.
+    /// This axes-only entry point preserves the focused B3.2 contract.
     pub fn layout_axes(&self) -> Result<DocumentLayout, DocumentLayoutError> {
+        self.layout_document(false)
+    }
+
+    /// Resolve the formal axes plus the B3.4 linear line/scatter artist slice.
+    pub fn layout_figure(&self) -> Result<DocumentLayout, DocumentLayoutError> {
+        self.layout_document(true)
+    }
+
+    fn layout_document(
+        &self,
+        include_basic_artists: bool,
+    ) -> Result<DocumentLayout, DocumentLayoutError> {
         let stored = self
             .project
             .figure
@@ -143,13 +187,18 @@ impl FigureDocument {
             &self.project.semantic_registry,
             &mut project_ids,
         )?;
+        let series = if include_basic_artists {
+            basic_series(stored, &self.project, &mut project_ids)?
+        } else {
+            Vec::new()
+        };
         let result = layout(&Chart {
             id: axes_id,
             width_pt,
             height_pt,
             x,
             y,
-            series: Vec::new(),
+            series,
             annotations: Vec::new(),
         })
         .map_err(DocumentLayoutError::Layout)?;
@@ -278,6 +327,120 @@ impl FigureDocument {
     }
 }
 
+fn basic_series(
+    axes: &crate::AxesRecord,
+    project: &ProjectDocument,
+    project_ids: &mut BTreeMap<NodeId, String>,
+) -> Result<Vec<Series>, DocumentLayoutError> {
+    let mut output = Vec::new();
+    for artist_id in &axes.artist_ids {
+        let artist = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == *artist_id)
+            .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
+        let (binding, line, marker, color_id) = match &artist.properties {
+            ArtistProperties::Line { binding, stroke } => (
+                binding,
+                Some(LineStyle {
+                    width: stroke.width_pt,
+                    dash: dash_style(stroke),
+                }),
+                None,
+                stroke.color_id.as_str(),
+            ),
+            ArtistProperties::Scatter { binding, marker } => (
+                binding,
+                None,
+                Some(LayoutMarkerStyle {
+                    shape: marker_shape(marker.shape),
+                    size: marker.size_pt,
+                    filled: true,
+                }),
+                marker.color_id.as_str(),
+            ),
+            _ => continue,
+        };
+        output.push(Series {
+            id: register_node_id(&artist.id, project_ids)?,
+            label: artist.id.clone(),
+            points: bound_points(binding, project)?,
+            line,
+            marker,
+            errors: Vec::new(),
+            color: palette_color(color_id, &project.palette)?,
+        });
+    }
+    Ok(output)
+}
+
+fn bound_points(
+    binding: &DataBinding,
+    project: &ProjectDocument,
+) -> Result<Vec<DataPoint>, DocumentLayoutError> {
+    let source = project
+        .data_sources
+        .iter()
+        .find(|source| source.id == binding.data_source_id)
+        .ok_or_else(|| DocumentLayoutError::MissingDataSource(binding.data_source_id.clone()))?;
+    let DataSourcePayload::Embedded { columns, .. } = &source.payload else {
+        return Err(DocumentLayoutError::ExternalDataUnavailable(
+            source.id.clone(),
+        ));
+    };
+    let column = |name: &str| {
+        columns
+            .iter()
+            .find(|column| column.name == name)
+            .map(|column| column.values.as_slice())
+            .ok_or_else(|| DocumentLayoutError::MissingColumn {
+                source: source.id.clone(),
+                column: name.to_owned(),
+            })
+    };
+    let x = column(&binding.x_column)?;
+    let y = column(&binding.y_column)?;
+    if x.len() != y.len() {
+        return Err(DocumentLayoutError::ColumnLengthMismatch {
+            source: source.id.clone(),
+            x: x.len(),
+            y: y.len(),
+        });
+    }
+    Ok(x.iter()
+        .zip(y)
+        .map(|(x, y)| DataPoint { x: *x, y: *y })
+        .collect())
+}
+
+fn palette_color(color_id: &str, palette: &PaletteRegistry) -> Result<Color, DocumentLayoutError> {
+    palette
+        .colors
+        .iter()
+        .find(|color| color.id == color_id)
+        .map(|color| Color(color.rgba[0], color.rgba[1], color.rgba[2], color.rgba[3]))
+        .ok_or_else(|| DocumentLayoutError::MissingColor(color_id.to_owned()))
+}
+
+fn dash_style(stroke: &StrokeStyle) -> DashStyle {
+    match stroke.dash_pt.as_slice() {
+        [] => DashStyle::Solid,
+        [dash, gap] if *dash <= stroke.width_pt * 2.0 && *gap > 0.0 => DashStyle::Dotted,
+        [_, _] => DashStyle::Dashed,
+        _ => DashStyle::DashDot,
+    }
+}
+
+fn marker_shape(shape: MarkerShape) -> LayoutMarkerShape {
+    match shape {
+        MarkerShape::Circle => LayoutMarkerShape::Circle,
+        MarkerShape::Square => LayoutMarkerShape::Square,
+        MarkerShape::Triangle => LayoutMarkerShape::TriangleUp,
+        MarkerShape::Diamond => LayoutMarkerShape::Diamond,
+    }
+}
+
 fn axis_spec(
     axis: &AxisRecord,
     available_pt: f64,
@@ -377,6 +540,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use instplot_layout::SelectableRole;
     use studio_render_spike::{Color, DisplayItem};
 
     #[test]
@@ -522,5 +686,74 @@ mod tests {
         assert!(first.project_ids.values().any(|id| id == "axes-primary"));
         assert!(first.project_ids.values().any(|id| id == "axis-horizontal"));
         assert!(first.project_ids.values().any(|id| id == "axis-vertical"));
+    }
+
+    #[test]
+    fn formal_figure_layout_resolves_basic_line_and_scatter_artists() {
+        let output = FigureDocument::fixed().layout_figure().unwrap();
+
+        assert_eq!(output.project_ids.get(&NodeId(11)).unwrap(), "node-11");
+        assert_eq!(output.project_ids.get(&NodeId(13)).unwrap(), "node-13");
+        assert!(!output.project_ids.contains_key(&NodeId(12)));
+        assert!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .any(|item| { item.node == NodeId(11) && item.role == SelectableRole::Series })
+        );
+        assert_eq!(
+            output
+                .result
+                .hit_map
+                .items
+                .iter()
+                .filter(|item| {
+                    item.node == NodeId(13) && item.role == SelectableRole::DataPoint
+                })
+                .count(),
+            3
+        );
+        assert!(output.result.display_list.validation_errors().is_empty());
+    }
+
+    #[test]
+    fn matching_line_and_scatter_bindings_form_a_combined_visual_series() {
+        let mut project = ProjectDocument::fixed_fixture();
+        let scatter = project
+            .figure
+            .artists
+            .iter_mut()
+            .find(|artist| artist.id == "node-13")
+            .unwrap();
+        let ArtistProperties::Scatter { binding, .. } = &mut scatter.properties else {
+            panic!("fixed node-13 must remain a scatter artist")
+        };
+        binding.x_column = "line_x".to_owned();
+        binding.y_column = "line_y".to_owned();
+
+        let output = FigureDocument::from_project(project)
+            .unwrap()
+            .layout_figure()
+            .unwrap();
+        let line_points = output
+            .result
+            .hit_map
+            .items
+            .iter()
+            .find(|item| item.node == NodeId(11) && item.role == SelectableRole::Series)
+            .unwrap()
+            .path_proximity
+            .clone();
+        let marker_points: Vec<_> = output
+            .result
+            .hit_map
+            .items
+            .iter()
+            .filter(|item| item.node == NodeId(13) && item.role == SelectableRole::DataPoint)
+            .flat_map(|item| item.path_proximity.iter().copied())
+            .collect();
+        assert_eq!(line_points, marker_points);
     }
 }

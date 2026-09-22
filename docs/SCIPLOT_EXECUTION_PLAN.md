@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1–B3.3 DONE；B3.4 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0–B2、B3.1–B3.4 DONE；B3.5 READY）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,7 +1533,7 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B3.4 — 在正式布局中实现 linear line、scatter 与 line + marker。**
+> **B3.5 — 加入 log axis、error bar、fit/theory/reference/baseline、annotation 与 legend。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
@@ -1549,6 +1549,8 @@ B3.2 正式坐标轴、网格与裁切证据见
 [`../reports/B3_2_FORMAL_AXES.md`](../reports/B3_2_FORMAL_AXES.md)。
 B3.3 resolved preview 证据见
 [`../reports/B3_3_RESOLVED_PREVIEW.md`](../reports/B3_3_RESOLVED_PREVIEW.md)。
+B3.4 正式 line/scatter 证据见
+[`../reports/B3_4_BASIC_ARTISTS.md`](../reports/B3_4_BASIC_ARTISTS.md)。
 后续按 B3 → B4 → B5 → B6 顺序执行。
 
 ---

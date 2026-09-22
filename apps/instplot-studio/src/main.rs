@@ -454,7 +454,7 @@ fn resolved_preview(
     document: &FigureDocument,
 ) -> Result<ResolvedDisplayList, instplot_studio::DocumentLayoutError> {
     document
-        .layout_axes()
+        .layout_figure()
         .map(|layout| resolve(&layout.result.display_list))
 }
 
@@ -522,6 +522,16 @@ mod tests {
             item,
             ResolvedItem::Text(text)
                 if text.source == NodeId(4) && text.rotation_degrees == -90.0
+        )));
+        assert!(display.items.iter().any(|item| matches!(
+            item,
+            ResolvedItem::Graphics(DisplayItem::Path { source, .. })
+                if *source == NodeId(11)
+        )));
+        assert!(display.items.iter().any(|item| matches!(
+            item,
+            ResolvedItem::Graphics(DisplayItem::Path { source, .. })
+                if *source == NodeId(13)
         )));
         assert!(
             !display

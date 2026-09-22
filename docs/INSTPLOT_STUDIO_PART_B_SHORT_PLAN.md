@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0–B2、B3.1–B3.3 DONE；B3.4 READY）
+> 状态：ACTIVE（B0–B2、B3.1–B3.4 DONE；B3.5 READY）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -160,13 +160,16 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 [`../reports/B2_PROJECT_FORMAT_CLOSEOUT.md`](../reports/B2_PROJECT_FORMAT_CLOSEOUT.md)，
 容器决策见
 [`../adr/022-versioned-project-container.md`](../adr/022-versioned-project-container.md)。
-当前任务切换为 **B3.4 在正式布局中实现 linear line、scatter 与 line + marker**。
+当前任务切换为 **B3.5 加入 log axis、error bar、fit/theory/reference/baseline、
+annotation 与 legend**。
 B3.1 的正式模块提升与兼容回归证据见
 [`../reports/B3_1_LAYOUT_PROMOTION.md`](../reports/B3_1_LAYOUT_PROMOTION.md)，B3.2
 正式坐标轴与裁切证据见
 [`../reports/B3_2_FORMAL_AXES.md`](../reports/B3_2_FORMAL_AXES.md)，B3.3 resolved
 preview 证据见
 [`../reports/B3_3_RESOLVED_PREVIEW.md`](../reports/B3_3_RESOLVED_PREVIEW.md)。
+B3.4 正式 line/scatter 证据见
+[`../reports/B3_4_BASIC_ARTISTS.md`](../reports/B3_4_BASIC_ARTISTS.md)。
 
 B3 按本计划第 6 节顺序实施；Preview、PDF 和 PNG 必须继续只消费同一个 layout
 result 与 Display List，不得在 UI 内建立第二套布局状态。
