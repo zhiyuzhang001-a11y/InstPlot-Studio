@@ -1,0 +1,11 @@
+[package]
+name = "instplot-studio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+eframe.workspace = true
+instplot-core.workspace = true

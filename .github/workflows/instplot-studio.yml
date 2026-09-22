@@ -1,0 +1,68 @@
+name: InstPlot Studio
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "apps/**"
+      - ".github/workflows/instplot-studio.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "apps/**"
+      - ".github/workflows/instplot-studio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libwayland-dev
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+
+      - name: Build release binary
+        run: cargo build --release --locked --package instplot-studio
+
+      - name: Check product identity
+        if: runner.os != 'Windows'
+        run: test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.0'
+
+      - name: Check Windows product identity
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $actual = & target/release/instplot-studio.exe --product-info
+          $expected = "InstPlot Studio`tinstplot-studio`t0.1.0"
+          if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }

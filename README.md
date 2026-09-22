@@ -28,9 +28,19 @@ not represented as passed.
 Part B is active. B0 is complete: Lite now consumes the shared core, I/O,
 processing, fitting, and expression crates from one Cargo workspace, while an
 independent Studio-side consumer proves that the shared data model can be used
-through a pinned Git revision. B1 is next: establish the independent Studio
-application before the formal Figure Document and single-axes production slice. See
+through a pinned Git revision. B1.1 is complete: the independent
+`instplot-studio` package, product identity and minimal window are established.
+B1 next connects shared data import before the formal Figure Document and
+single-axes production slice. See
 [`docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](docs/INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md).
+
+Build and check the production Studio shell with:
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+cargo run --release --locked --package instplot-studio -- --product-info
+```
 
 Validate the A1 contract with:
 

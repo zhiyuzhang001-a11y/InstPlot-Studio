@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0 DONE；B1 READY）
+> 状态：Part A DONE；Part B ACTIVE（B0 DONE；B1.1 DONE）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -1533,13 +1533,15 @@ Next dependency:
 
 Part A 与 Gate A 已按当前范围完成。下一项工作是：
 
-> **B1.1 — 固定独立 Studio 应用边界并建立最小 binary。**
+> **B1.2 — 接入共享数据导入并写入非 UI 的 Studio session。**
 
 具体范围和验收条件见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
 B0 已完成，完整证据见
 [`../reports/B0_SHARED_CORE_CLOSEOUT.md`](../reports/B0_SHARED_CORE_CLOSEOUT.md)；早期盘点和
-分步证据仍保留在各 B0 报告中。后续按 B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
+分步证据仍保留在各 B0 报告中。B1.1 证据见
+[`../reports/B1_APPLICATION_BOOTSTRAP.md`](../reports/B1_APPLICATION_BOOTSTRAP.md)。后续按
+B1 → B2 → B3 → B4 → B5 → B6 顺序执行。
 
 ---
 

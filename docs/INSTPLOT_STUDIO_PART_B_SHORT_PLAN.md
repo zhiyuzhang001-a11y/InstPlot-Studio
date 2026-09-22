@@ -1,6 +1,6 @@
 # InstPlot Studio Part B 短执行计划
 
-> 状态：ACTIVE（B0 DONE；B1 READY）
+> 状态：ACTIVE（B0 DONE；B1.1 DONE）
 > 制定日期：2026-09-22
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)
 > 适用范围：Gate A 关闭后的正式产品开发（B0–B6）
@@ -155,8 +155,11 @@ axes 是 B3 的第一条功能切片，但不能绕过 B0–B2。B3 图元与 B4
 
 ## 10. 当前可执行任务
 
-**B0 已完成。** 当前任务切换为 **B1.1 独立 Studio 应用边界与最小 binary
-bootstrap**：先固定产品 package/binary、依赖方向和最小窗口边界，再接入共享数据读取。
+**B0 与 B1.1 已完成。** 独立 Studio package/binary、产品身份、最小窗口和共享 core
+边界的证据见
+[`../reports/B1_APPLICATION_BOOTSTRAP.md`](../reports/B1_APPLICATION_BOOTSTRAP.md)。
+当前任务是 **B1.2 共享数据导入接线**：接入 `instplot-io`，将一个 Lite 支持的数据文件
+导入非 UI 的 `StudioSession`，再由应用壳提供原生打开入口。
 
-本步不得复制 Lite `app.rs`，不得提前实现 B2 的正式项目格式，也不得把 Studio
-字体、渲染或 GUI 依赖带回 Lite workspace。
+本步不得提前实现 B2 的正式项目格式，也不得把 Studio 字体、渲染或 GUI 依赖带回
+Lite workspace。
