@@ -195,6 +195,7 @@ struct StudioApp {
     publication_report: PublicationReport,
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
+    selected_canvas_node: Option<String>,
     selected_dataset: Option<String>,
     binding_x: String,
     binding_y: String,
@@ -210,6 +211,7 @@ struct StudioApp {
     pending_action: Option<PendingAction>,
     allow_close: bool,
     canvas_zoom: f32,
+    canvas_scroll: egui::Vec2,
     messages: Vec<AppMessage>,
     status: Option<(String, Instant)>,
     language: UiLanguage,
@@ -415,6 +417,7 @@ impl StudioApp {
             publication_report,
             preview: EguiPreviewAdapter,
             selected_series: None,
+            selected_canvas_node: None,
             selected_dataset: None,
             binding_x: String::new(),
             binding_y: String::new(),
@@ -430,6 +433,7 @@ impl StudioApp {
             pending_action: None,
             allow_close: false,
             canvas_zoom: 1.5,
+            canvas_scroll: egui::Vec2::ZERO,
             messages: Vec::new(),
             status: Some((status, Instant::now())),
             language,
@@ -526,6 +530,7 @@ impl StudioApp {
                     self.resolved = resolved;
                     self.workspace = WorkspaceState::from_lite(self.language.text(Text::Untitled));
                     self.selected_series = None;
+                    self.selected_canvas_node = None;
                     self.selected_dataset = None;
                     self.sync_axis_editors();
                     self.messages.clear();
@@ -568,6 +573,7 @@ impl StudioApp {
                     self.edit_history.reset(&self.document, opened_primary);
                     self.resolved = resolved;
                     self.selected_series = None;
+                    self.selected_canvas_node = None;
                     self.selected_dataset = None;
                     self.sync_axis_editors();
                     self.workspace = WorkspaceState::from_project(&path, !opened_primary);
@@ -610,6 +616,7 @@ impl StudioApp {
         self.resolved = resolved;
         (self.session, _) = StudioSession::from_project(self.document.project());
         self.selected_series = None;
+        self.selected_canvas_node = None;
         self.selected_dataset = None;
         self.sync_axis_editors();
         self.workspace = WorkspaceState::new(self.language.text(Text::Untitled));
@@ -1290,6 +1297,7 @@ impl StudioApp {
 
     fn select_series_for_editing(&mut self, series: &SeriesDescriptor) {
         self.selected_series = Some(series.id.clone());
+        self.selected_canvas_node = Some(series.id.clone());
         if let Some(binding) = &series.binding {
             self.select_dataset(&binding.data_source_id);
             self.binding_x.clone_from(&binding.x_column);
@@ -1333,6 +1341,7 @@ impl StudioApp {
                 .into_iter()
                 .find(|series| !before.contains(&series.id) && series.kind != SeriesKind::Legend)
                 .map(|series| series.id);
+            self.selected_canvas_node.clone_from(&self.selected_series);
         }
     }
 
@@ -1375,6 +1384,7 @@ impl StudioApp {
                                 StudioSession::from_project(self.document.project());
                             self.selected_dataset = None;
                             self.selected_series = None;
+                            self.selected_canvas_node = None;
                         }
                         self.pending_delete_source = None;
                     }
@@ -1388,6 +1398,23 @@ impl StudioApp {
     fn series_tree(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.language.text(Text::Series));
         ui.collapsing(self.language.text(Text::FixedFigure), |ui| {
+            let axes = &self.document.project().figure.axes[0];
+            for (id, label) in [
+                (axes.id.clone(), self.language.text(Text::AxesObject)),
+                (axes.x.id.clone(), self.language.text(Text::XAxis)),
+                (axes.y.id.clone(), self.language.text(Text::YAxis)),
+            ] {
+                if ui
+                    .selectable_label(
+                        self.selected_canvas_node.as_deref() == Some(id.as_str()),
+                        label,
+                    )
+                    .clicked()
+                {
+                    self.selected_canvas_node = Some(id);
+                    self.selected_series = None;
+                }
+            }
             for series in self.document.series() {
                 let selected = self.selected_series.as_deref() == Some(series.id.as_str());
                 ui.horizontal(|ui| {
@@ -1443,6 +1470,7 @@ impl StudioApp {
                             .into_iter()
                             .find(|series| !before.contains(&series.id))
                             .map(|series| series.id);
+                        self.selected_canvas_node.clone_from(&self.selected_series);
                     }
                 }
                 if ui.button(self.language.text(Text::Delete)).clicked()
@@ -1454,6 +1482,7 @@ impl StudioApp {
                     )
                 {
                     self.selected_series = None;
+                    self.selected_canvas_node = None;
                 }
                 if ui.button(self.language.text(Text::MoveEarlier)).clicked() {
                     self.execute_document_edit(
@@ -2318,42 +2347,146 @@ impl eframe::App for StudioApp {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            let available = ui.available_size();
-            let figure_size = egui::vec2(self.resolved.display.width, self.resolved.display.height)
-                * self.canvas_zoom;
-            let origin = ui.min_rect().min
-                + egui::vec2(
-                    ((available.x - figure_size.x) * 0.5).max(16.0),
-                    ((available.y - figure_size.y) * 0.5).max(16.0),
-                );
-            let figure_rect = egui::Rect::from_min_size(origin, figure_size);
-            ui.painter()
-                .rect_filled(figure_rect, 0.0, egui::Color32::WHITE);
-            ui.painter().rect_stroke(
-                figure_rect,
-                0.0,
-                egui::Stroke::new(1.0, egui::Color32::GRAY),
-                egui::StrokeKind::Outside,
-            );
-            let metrics = self.preview.paint(
-                ui.painter(),
-                &self.resolved.display,
-                origin,
-                self.canvas_zoom,
-                context.pixels_per_point(),
-            );
-            ui.painter().text(
-                figure_rect.left_bottom() + egui::vec2(0.0, 18.0),
-                egui::Align2::LEFT_TOP,
-                format!(
-                    "{}: {} × {} px",
-                    self.language.text(Text::PreviewFramebuffer),
-                    metrics.framebuffer_width,
-                    metrics.framebuffer_height
-                ),
-                egui::FontId::monospace(12.0),
-                ui.visuals().text_color(),
-            );
+            let canvas_available = ui.available_size();
+            ui.horizontal(|ui| {
+                if ui.button(self.language.text(Text::FitToWindow)).clicked() {
+                    let available = canvas_available - egui::vec2(48.0, 72.0);
+                    self.canvas_zoom = (available.x / self.resolved.display.width)
+                        .min(available.y / self.resolved.display.height)
+                        .clamp(0.1, 8.0);
+                    self.canvas_scroll = egui::Vec2::ZERO;
+                }
+                if ui.button(self.language.text(Text::ActualSize)).clicked() {
+                    self.canvas_zoom = 1.0;
+                    self.canvas_scroll = egui::Vec2::ZERO;
+                }
+                if ui.small_button("−").clicked() {
+                    self.canvas_zoom = (self.canvas_zoom / 1.2).clamp(0.1, 8.0);
+                }
+                if ui.small_button("+").clicked() {
+                    self.canvas_zoom = (self.canvas_zoom * 1.2).clamp(0.1, 8.0);
+                }
+                ui.label(format!("{:.0}%", self.canvas_zoom * 100.0));
+                ui.weak(self.language.text(Text::WheelZoomHint));
+            });
+            ui.separator();
+
+            let viewport = ui.available_size();
+            let old_zoom = self.canvas_zoom;
+            let output = egui::ScrollArea::both()
+                .id_salt("figure-canvas-scroll")
+                .scroll_offset(self.canvas_scroll)
+                .scroll_source(
+                    egui::scroll_area::ScrollSource::SCROLL_BAR
+                        | egui::scroll_area::ScrollSource::DRAG,
+                )
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let figure_size =
+                        egui::vec2(self.resolved.display.width, self.resolved.display.height)
+                            * old_zoom;
+                    let content_size = egui::vec2(
+                        (figure_size.x + 64.0).max(viewport.x),
+                        (figure_size.y + 84.0).max(viewport.y),
+                    );
+                    let (content_rect, _) =
+                        ui.allocate_exact_size(content_size, egui::Sense::hover());
+                    let origin = content_rect.min
+                        + egui::vec2(
+                            ((content_size.x - figure_size.x) * 0.5).max(32.0),
+                            ((content_size.y - figure_size.y) * 0.5).max(32.0),
+                        );
+                    let figure_rect = egui::Rect::from_min_size(origin, figure_size);
+                    let response = ui.interact(
+                        figure_rect,
+                        ui.id().with("figure-canvas"),
+                        egui::Sense::click(),
+                    );
+                    ui.painter()
+                        .rect_filled(figure_rect, 0.0, egui::Color32::WHITE);
+                    ui.painter().rect_stroke(
+                        figure_rect,
+                        0.0,
+                        egui::Stroke::new(1.0, egui::Color32::GRAY),
+                        egui::StrokeKind::Outside,
+                    );
+                    let metrics = self.preview.paint(
+                        ui.painter(),
+                        &self.resolved.display,
+                        origin,
+                        old_zoom,
+                        context.pixels_per_point(),
+                    );
+
+                    if let Some(selected) = self.selected_canvas_node.as_deref()
+                        && let Some(bounds) = selected_hit_bounds(&self.resolved, selected)
+                    {
+                        let overlay = egui::Rect::from_min_max(
+                            origin + egui::vec2(bounds.0 as f32, bounds.1 as f32) * old_zoom,
+                            origin + egui::vec2(bounds.2 as f32, bounds.3 as f32) * old_zoom,
+                        )
+                        .expand(4.0);
+                        ui.painter().rect_stroke(
+                            overlay,
+                            3.0,
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(230, 126, 34)),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+
+                    ui.painter().text(
+                        figure_rect.left_bottom() + egui::vec2(0.0, 18.0),
+                        egui::Align2::LEFT_TOP,
+                        format!(
+                            "{}: {} × {} px",
+                            self.language.text(Text::PreviewFramebuffer),
+                            metrics.framebuffer_width,
+                            metrics.framebuffer_height
+                        ),
+                        egui::FontId::monospace(12.0),
+                        ui.visuals().text_color(),
+                    );
+
+                    let pointer = response.interact_pointer_pos();
+                    let clicked = response.clicked().then(|| {
+                        pointer.and_then(|point| {
+                            hit_project_id(&self.resolved, point, origin, old_zoom)
+                        })
+                    });
+                    let wheel = if response.hovered() {
+                        context.input(|input| input.smooth_scroll_delta.y)
+                    } else {
+                        0.0
+                    };
+                    let zoom_anchor = (wheel.abs() > f32::EPSILON)
+                        .then(|| pointer.map(|point| (point, origin, wheel)))
+                        .flatten();
+                    (clicked, zoom_anchor)
+                });
+            self.canvas_scroll = output.state.offset;
+            if let Some(clicked) = output.inner.0 {
+                self.selected_canvas_node = clicked.clone();
+                self.selected_series = clicked.as_ref().and_then(|id| {
+                    self.document
+                        .series()
+                        .into_iter()
+                        .find(|series| series.id == *id)
+                        .map(|series| series.id)
+                });
+                if let Some(selected) = self.selected_series.clone()
+                    && let Some(series) = self
+                        .document
+                        .series()
+                        .into_iter()
+                        .find(|series| series.id == selected)
+                {
+                    self.select_series_for_editing(&series);
+                }
+            }
+            if let Some((pointer, origin, wheel)) = output.inner.1 {
+                (self.canvas_scroll, self.canvas_zoom) =
+                    zoom_about_pointer(self.canvas_scroll, pointer, origin, old_zoom, wheel);
+            }
         });
 
         if self.first_frame {
@@ -2373,6 +2506,72 @@ fn resolved_preview(
     document: &FigureDocument,
 ) -> Result<ResolvedFigure, instplot_studio::DocumentLayoutError> {
     resolve_document(document)
+}
+
+fn hit_project_id(
+    resolved: &ResolvedFigure,
+    point: egui::Pos2,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<String> {
+    let local = (point - origin) / zoom;
+    resolved
+        .layout
+        .result
+        .hit_map
+        .hit_test(
+            f64::from(local.x),
+            f64::from(local.y),
+            f64::from(6.0 / zoom),
+        )
+        .and_then(|hit| resolved.layout.project_ids.get(&hit.node))
+        .cloned()
+}
+
+fn selected_hit_bounds(
+    resolved: &ResolvedFigure,
+    project_id: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    let mut bounds = resolved
+        .layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            resolved
+                .layout
+                .project_ids
+                .get(&item.node)
+                .map(String::as_str)
+                == Some(project_id)
+        })
+        .map(|item| item.bounds);
+    let first = bounds.next()?;
+    Some(bounds.fold(
+        (first.x, first.y, first.right(), first.bottom()),
+        |(left, top, right, bottom), next| {
+            (
+                left.min(next.x),
+                top.min(next.y),
+                right.max(next.right()),
+                bottom.max(next.bottom()),
+            )
+        },
+    ))
+}
+
+fn zoom_about_pointer(
+    scroll: egui::Vec2,
+    pointer: egui::Pos2,
+    origin: egui::Pos2,
+    old_zoom: f32,
+    wheel: f32,
+) -> (egui::Vec2, f32) {
+    let factor = (wheel * 0.002).exp();
+    let next_zoom = (old_zoom * factor).clamp(0.1, 8.0);
+    let document_point = (pointer - origin) / old_zoom;
+    (scroll + document_point * (next_zoom - old_zoom), next_zoom)
 }
 
 fn series_style_name(language: UiLanguage, style: SeriesCreationStyle) -> &'static str {
@@ -2615,5 +2814,39 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, ResolvedItem::Graphics(DisplayItem::GlyphRun(_))))
         );
+    }
+
+    #[test]
+    fn p6_hit_testing_and_selection_bounds_use_formal_hit_map() {
+        let resolved = resolved_preview(&FigureDocument::fixed()).unwrap();
+        let bounds = selected_hit_bounds(&resolved, "node-15").unwrap();
+        let local = egui::pos2(
+            ((bounds.0 + bounds.2) / 2.0) as f32,
+            ((bounds.1 + bounds.3) / 2.0) as f32,
+        );
+        let origin = egui::pos2(120.0, 80.0);
+        let zoom = 1.75;
+        let screen = origin + local.to_vec2() * zoom;
+        assert_eq!(
+            hit_project_id(&resolved, screen, origin, zoom).as_deref(),
+            Some("node-15")
+        );
+    }
+
+    #[test]
+    fn p6_pointer_centered_zoom_keeps_the_document_anchor_stable() {
+        let origin = egui::pos2(40.0, 30.0);
+        let pointer = egui::pos2(160.0, 120.0);
+        let old_zoom = 1.0;
+        let old_scroll = egui::vec2(12.0, 8.0);
+        let document_point = (pointer - origin) / old_zoom;
+        let (new_scroll, new_zoom) =
+            zoom_about_pointer(old_scroll, pointer, origin, old_zoom, 120.0);
+        let old_content = old_scroll + document_point * old_zoom;
+        let new_content = new_scroll + document_point * old_zoom;
+        assert!(
+            (new_content - old_content - document_point * (new_zoom - old_zoom)).length() < 1e-4
+        );
+        assert!(new_zoom > old_zoom);
     }
 }

@@ -172,6 +172,10 @@ pub enum Text {
     YPosition,
     LegendEntries,
     SemanticLabel,
+    FitToWindow,
+    ActualSize,
+    WheelZoomHint,
+    AxesObject,
 }
 
 impl UiLanguage {
@@ -343,6 +347,10 @@ impl UiLanguage {
             (Self::Chinese, YPosition) => "Y 位置 (pt)",
             (Self::Chinese, LegendEntries) => "图例条目",
             (Self::Chinese, SemanticLabel) => "语义标签",
+            (Self::Chinese, FitToWindow) => "适合窗口",
+            (Self::Chinese, ActualSize) => "100%",
+            (Self::Chinese, WheelZoomHint) => "滚轮缩放；拖动画布或滚动条平移",
+            (Self::Chinese, AxesObject) => "坐标区",
             (Self::English, File) => "File",
             (Self::English, Edit) => "Edit",
             (Self::English, View) => "View",
@@ -508,6 +516,10 @@ impl UiLanguage {
             (Self::English, YPosition) => "Y position (pt)",
             (Self::English, LegendEntries) => "Legend entries",
             (Self::English, SemanticLabel) => "Semantic label",
+            (Self::English, FitToWindow) => "Fit to window",
+            (Self::English, ActualSize) => "100%",
+            (Self::English, WheelZoomHint) => "Wheel to zoom; drag canvas or scroll bars to pan",
+            (Self::English, AxesObject) => "Axes",
         }
     }
 
