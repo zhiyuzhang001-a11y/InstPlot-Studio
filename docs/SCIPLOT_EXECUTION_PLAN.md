@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B4 DONE；B5 Studio side DONE；B5P product polish ACTIVE；Lite integration deferred）
+> 状态：Part A DONE；Part B ACTIVE（B0–B4、B5 Studio side、B5P DONE；B5Q canvas-first UI ACTIVE；Lite integration deferred）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -129,7 +129,9 @@ B4  Palette、语义系统与 Publication Check
  ↓
 B5a Studio 交接协议与接收端（DONE）
  ↓
-B5P Studio 产品细节完善
+B5P Studio 产品细节完善（DONE）
+ ↓
+B5Q Studio 画布优先交互简化（ACTIVE）
  ↓
 B5b Lite producer/launcher 最终联调
  ↓
@@ -1536,12 +1538,13 @@ Next dependency:
 
 ## 25. 当前第一个可执行任务
 
-Part A 与 Gate A 已按当前范围完成。下一项工作是：
+Part A、Gate A 与 B5P 已按当前范围完成。当前工作是：
 
-> **B5P — 在发布和 Lite 最终联调前完善 Studio 的真实产品工作流。**
+> **B5Q — 把 Studio 重组为画布优先、点击对象即可编辑的简洁界面。**
 
 具体范围和验收条件见
-[`INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md)，
+[`INSTPLOT_STUDIO_CANVAS_FIRST_SHORT_PLAN.md`](INSTPLOT_STUDIO_CANVAS_FIRST_SHORT_PLAN.md)；已关闭的
+B5P 证据见 [`INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md)，
 其与 Part B 的关系见
 [`INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md`](INSTPLOT_STUDIO_PART_B_SHORT_PLAN.md)。
 B0 已完成，完整证据见

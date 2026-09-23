@@ -12,4 +12,4 @@ Y exponent=None
   2.000000 "2" pos=26.382 bounds=22.756,23.546,4.448,5.672
   minor=16
 LEGEND 161.267 12.000 79.016 68.000
-DISPLAY items=171 HIT items=90 WARNINGS [LegendMovedOutside { node: NodeId(1) }]
+DISPLAY items=171 HIT items=96 WARNINGS [LegendMovedOutside { node: NodeId(1) }]

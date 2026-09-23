@@ -8,6 +8,7 @@ mod workspace;
 
 use eframe::egui;
 use instplot_core::{DataSet, DataSetKind};
+use instplot_layout::SelectableRole;
 use instplot_studio::{
     ArtistProperties, ArtistRole, AxisDimension, AxisRanges, AxisRecord, AxisScale, CheckSeverity,
     EditCommand, EditGroup, EditHistory, EguiPreviewAdapter, FigureDocument, FormatterSpec,
@@ -201,6 +202,7 @@ struct StudioApp {
     preview: EguiPreviewAdapter,
     selected_series: Option<String>,
     selected_canvas_node: Option<String>,
+    selected_canvas_role: Option<SelectableRole>,
     selected_dataset: Option<String>,
     binding_x: String,
     binding_y: String,
@@ -218,6 +220,11 @@ struct StudioApp {
     allow_close: bool,
     canvas_zoom: f32,
     canvas_scroll: egui::Vec2,
+    show_layers: bool,
+    show_inspector: bool,
+    show_messages: bool,
+    context_editor_open: bool,
+    context_editor_position: egui::Pos2,
     messages: Vec<AppMessage>,
     status: Option<(String, Instant)>,
     language: UiLanguage,
@@ -434,6 +441,7 @@ impl StudioApp {
             preview: EguiPreviewAdapter,
             selected_series: None,
             selected_canvas_node: None,
+            selected_canvas_role: None,
             selected_dataset: None,
             binding_x: String::new(),
             binding_y: String::new(),
@@ -451,6 +459,11 @@ impl StudioApp {
             allow_close: false,
             canvas_zoom: 1.5,
             canvas_scroll: egui::Vec2::ZERO,
+            show_layers: false,
+            show_inspector: false,
+            show_messages: false,
+            context_editor_open: false,
+            context_editor_position: egui::pos2(420.0, 180.0),
             messages: Vec::new(),
             status: Some((status, Instant::now())),
             language,
@@ -556,6 +569,7 @@ impl StudioApp {
                     self.workspace = WorkspaceState::from_lite(self.language.text(Text::Untitled));
                     self.selected_series = None;
                     self.selected_canvas_node = None;
+                    self.selected_canvas_role = None;
                     self.selected_dataset = None;
                     self.sync_axis_editors();
                     self.messages.clear();
@@ -603,6 +617,7 @@ impl StudioApp {
                     self.resolved = resolved;
                     self.selected_series = None;
                     self.selected_canvas_node = None;
+                    self.selected_canvas_role = None;
                     self.selected_dataset = None;
                     self.sync_axis_editors();
                     self.workspace = WorkspaceState::from_project(&path, !opened_primary);
@@ -650,6 +665,7 @@ impl StudioApp {
         (self.session, _) = StudioSession::from_project(self.document.project());
         self.selected_series = None;
         self.selected_canvas_node = None;
+        self.selected_canvas_role = None;
         self.selected_dataset = None;
         self.sync_axis_editors();
         self.workspace = WorkspaceState::new(self.language.text(Text::Untitled));
@@ -1083,6 +1099,60 @@ impl StudioApp {
         }
     }
 
+    fn fit_canvas(&mut self, available: egui::Vec2) {
+        let padding = egui::vec2(64.0, 96.0);
+        let available = (available - padding).max(egui::vec2(1.0, 1.0));
+        self.canvas_zoom = (available.x / self.resolved.display.width)
+            .min(available.y / self.resolved.display.height)
+            .clamp(0.1, 3.0);
+        self.canvas_scroll = egui::Vec2::ZERO;
+    }
+
+    fn axis_ranges_editor(&mut self, ui: &mut egui::Ui) {
+        ui.label(self.language.text(Text::AxesRanges));
+        let mut ranges = self.document.axis_ranges();
+        let mut changed_group = None;
+        let mut finish_coalescing = false;
+        egui::Grid::new("axis_ranges")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label(self.language.text(Text::XMin));
+                let response = ui.add(egui::DragValue::new(&mut ranges.x_min));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisXMinimum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
+                ui.end_row();
+                ui.label(self.language.text(Text::XMax));
+                let response = ui.add(egui::DragValue::new(&mut ranges.x_max));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisXMaximum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
+                ui.end_row();
+                ui.label(self.language.text(Text::YMin));
+                let response = ui.add(egui::DragValue::new(&mut ranges.y_min));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisYMinimum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
+                ui.end_row();
+                ui.label(self.language.text(Text::YMax));
+                let response = ui.add(egui::DragValue::new(&mut ranges.y_max));
+                if response.changed() {
+                    changed_group = Some(EditGroup::AxisYMaximum);
+                }
+                finish_coalescing |= response.drag_stopped() || response.lost_focus();
+                ui.end_row();
+            });
+        if let Some(group) = changed_group {
+            self.apply_ranges(ranges, group);
+        }
+        if finish_coalescing {
+            self.edit_history.finish_coalescing();
+        }
+    }
+
     fn axis_editor(&mut self, ui: &mut egui::Ui, dimension: AxisDimension) {
         let title = match dimension {
             AxisDimension::X => self.language.text(Text::XAxis),
@@ -1097,235 +1167,244 @@ impl StudioApp {
             AxisDimension::Y => self.y_fixed_ticks.clone(),
         };
         let mut fixed_tick_error = None;
-        ui.collapsing(title, |ui| {
-            changed |= ui
-                .checkbox(&mut record.autoscale, self.language.text(Text::Autoscale))
-                .changed();
-            ui.label(self.language.text(Text::Scale));
-            egui::ComboBox::from_id_salt(("scale", dimension))
-                .selected_text(match record.scale {
-                    AxisScale::Linear => self.language.text(Text::Linear),
-                    AxisScale::Log10 => self.language.text(Text::Log10),
-                })
-                .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(
-                            &mut record.scale,
-                            AxisScale::Linear,
-                            self.language.text(Text::Linear),
-                        )
-                        .changed();
-                    changed |= ui
-                        .selectable_value(
-                            &mut record.scale,
-                            AxisScale::Log10,
-                            self.language.text(Text::Log10),
-                        )
-                        .changed();
-                });
+        egui::CollapsingHeader::new(title)
+            .default_open(true)
+            .show(ui, |ui| {
+                changed |= ui
+                    .checkbox(&mut record.autoscale, self.language.text(Text::Autoscale))
+                    .changed();
+                ui.label(self.language.text(Text::Scale));
+                egui::ComboBox::from_id_salt(("scale", dimension))
+                    .selected_text(match record.scale {
+                        AxisScale::Linear => self.language.text(Text::Linear),
+                        AxisScale::Log10 => self.language.text(Text::Log10),
+                    })
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut record.scale,
+                                AxisScale::Linear,
+                                self.language.text(Text::Linear),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut record.scale,
+                                AxisScale::Log10,
+                                self.language.text(Text::Log10),
+                            )
+                            .changed();
+                    });
 
-            let locator_is_fixed = matches!(record.locator, LocatorSpec::Fixed { .. });
-            ui.label(self.language.text(Text::Locator));
-            egui::ComboBox::from_id_salt(("locator", dimension))
-                .selected_text(if locator_is_fixed {
-                    self.language.text(Text::Fixed)
-                } else {
-                    self.language.text(Text::Auto)
-                })
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(!locator_is_fixed, self.language.text(Text::Auto))
-                        .clicked()
-                    {
-                        record.locator = LocatorSpec::Auto { target_count: 6 };
-                        changed = true;
+                let locator_is_fixed = matches!(record.locator, LocatorSpec::Fixed { .. });
+                ui.label(self.language.text(Text::Locator));
+                egui::ComboBox::from_id_salt(("locator", dimension))
+                    .selected_text(if locator_is_fixed {
+                        self.language.text(Text::Fixed)
+                    } else {
+                        self.language.text(Text::Auto)
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(!locator_is_fixed, self.language.text(Text::Auto))
+                            .clicked()
+                        {
+                            record.locator = LocatorSpec::Auto { target_count: 6 };
+                            changed = true;
+                        }
+                        if ui
+                            .selectable_label(locator_is_fixed, self.language.text(Text::Fixed))
+                            .clicked()
+                        {
+                            let values = parse_fixed_ticks(&fixed_ticks)
+                                .unwrap_or_else(|_| vec![record.minimum, record.maximum]);
+                            record.locator = LocatorSpec::Fixed { values };
+                            changed = true;
+                        }
+                    });
+                match &mut record.locator {
+                    LocatorSpec::Auto { target_count } => {
+                        let response =
+                            ui.add(egui::DragValue::new(target_count).range(2..=20).prefix(
+                                format!("{}: ", self.language.text(Text::TargetTickCount)),
+                            ));
+                        changed |= response.changed();
+                        continuous_change |= response.changed();
+                        finish_coalescing |= response.drag_stopped() || response.lost_focus();
                     }
-                    if ui
-                        .selectable_label(locator_is_fixed, self.language.text(Text::Fixed))
-                        .clicked()
-                    {
-                        let values = parse_fixed_ticks(&fixed_ticks)
-                            .unwrap_or_else(|_| vec![record.minimum, record.maximum]);
-                        record.locator = LocatorSpec::Fixed { values };
-                        changed = true;
+                    LocatorSpec::Fixed { values } => {
+                        ui.label(self.language.text(Text::FixedTickValues));
+                        ui.text_edit_singleline(&mut fixed_ticks);
+                        if ui.button(self.language.text(Text::Apply)).clicked() {
+                            match parse_fixed_ticks(&fixed_ticks) {
+                                Ok(parsed) => {
+                                    *values = parsed;
+                                    changed = true;
+                                }
+                                Err(error) => fixed_tick_error = Some(error),
+                            }
+                        }
                     }
-                });
-            match &mut record.locator {
-                LocatorSpec::Auto { target_count } => {
+                }
+
+                let formatter_kind = match record.formatter {
+                    FormatterSpec::Auto => 0,
+                    FormatterSpec::Decimal { .. } => 1,
+                    FormatterSpec::Scientific { .. } => 2,
+                };
+                ui.label(self.language.text(Text::Formatter));
+                egui::ComboBox::from_id_salt(("formatter", dimension))
+                    .selected_text(match formatter_kind {
+                        0 => self.language.text(Text::Auto),
+                        1 => self.language.text(Text::Decimal),
+                        _ => self.language.text(Text::Scientific),
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(formatter_kind == 0, self.language.text(Text::Auto))
+                            .clicked()
+                        {
+                            record.formatter = FormatterSpec::Auto;
+                            changed = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                formatter_kind == 1,
+                                self.language.text(Text::Decimal),
+                            )
+                            .clicked()
+                        {
+                            record.formatter = FormatterSpec::Decimal { precision: 2 };
+                            changed = true;
+                        }
+                        if ui
+                            .selectable_label(
+                                formatter_kind == 2,
+                                self.language.text(Text::Scientific),
+                            )
+                            .clicked()
+                        {
+                            record.formatter = FormatterSpec::Scientific { precision: 2 };
+                            changed = true;
+                        }
+                    });
+                if let FormatterSpec::Decimal { precision }
+                | FormatterSpec::Scientific { precision } = &mut record.formatter
+                {
                     let response = ui.add(
-                        egui::DragValue::new(target_count)
-                            .range(2..=20)
-                            .prefix(format!("{}: ", self.language.text(Text::TargetTickCount))),
+                        egui::DragValue::new(precision)
+                            .range(0..=15)
+                            .prefix(format!("{}: ", self.language.text(Text::Precision))),
                     );
                     changed |= response.changed();
                     continuous_change |= response.changed();
                     finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 }
-                LocatorSpec::Fixed { values } => {
-                    ui.label(self.language.text(Text::FixedTickValues));
-                    ui.text_edit_singleline(&mut fixed_ticks);
-                    if ui.button(self.language.text(Text::Apply)).clicked() {
-                        match parse_fixed_ticks(&fixed_ticks) {
-                            Ok(parsed) => {
-                                *values = parsed;
-                                changed = true;
-                            }
-                            Err(error) => fixed_tick_error = Some(error),
+
+                ui.separator();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.near_spine,
+                        self.language.text(Text::NearSpine),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.far_spine,
+                        self.language.text(Text::FarSpine),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.near_ticks,
+                        self.language.text(Text::NearTicks),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.far_ticks,
+                        self.language.text(Text::FarTicks),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.near_tick_labels,
+                        self.language.text(Text::NearTickLabels),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.far_tick_labels,
+                        self.language.text(Text::FarTickLabels),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.major_ticks,
+                        self.language.text(Text::MajorTicks),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.minor_ticks,
+                        self.language.text(Text::MinorTicks),
+                    )
+                    .changed();
+                ui.label(self.language.text(Text::TickDirection));
+                egui::ComboBox::from_id_salt(("tick-direction", dimension))
+                    .selected_text(tick_direction_name(
+                        self.language,
+                        record.appearance.tick_direction,
+                    ))
+                    .show_ui(ui, |ui| {
+                        for direction in
+                            [TickDirection::In, TickDirection::Out, TickDirection::InOut]
+                        {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut record.appearance.tick_direction,
+                                    direction,
+                                    tick_direction_name(self.language, direction),
+                                )
+                                .changed();
                         }
-                    }
+                    });
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.grid_major,
+                        self.language.text(Text::MajorGrid),
+                    )
+                    .changed();
+                changed |= ui
+                    .checkbox(
+                        &mut record.appearance.grid_minor,
+                        self.language.text(Text::MinorGrid),
+                    )
+                    .changed();
+                for (value, label) in [
+                    (
+                        &mut record.appearance.tick_label_pad_pt,
+                        self.language.text(Text::TickLabelPad),
+                    ),
+                    (
+                        &mut record.appearance.label_edge_pad_pt,
+                        self.language.text(Text::LabelEdgePad),
+                    ),
+                    (
+                        &mut record.appearance.label_tick_pad_pt,
+                        self.language.text(Text::LabelTickPad),
+                    ),
+                ] {
+                    let response = ui.add(
+                        egui::DragValue::new(value)
+                            .range(0.0..=72.0)
+                            .prefix(format!("{label}: ")),
+                    );
+                    changed |= response.changed();
+                    continuous_change |= response.changed();
+                    finish_coalescing |= response.drag_stopped() || response.lost_focus();
                 }
-            }
-
-            let formatter_kind = match record.formatter {
-                FormatterSpec::Auto => 0,
-                FormatterSpec::Decimal { .. } => 1,
-                FormatterSpec::Scientific { .. } => 2,
-            };
-            ui.label(self.language.text(Text::Formatter));
-            egui::ComboBox::from_id_salt(("formatter", dimension))
-                .selected_text(match formatter_kind {
-                    0 => self.language.text(Text::Auto),
-                    1 => self.language.text(Text::Decimal),
-                    _ => self.language.text(Text::Scientific),
-                })
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(formatter_kind == 0, self.language.text(Text::Auto))
-                        .clicked()
-                    {
-                        record.formatter = FormatterSpec::Auto;
-                        changed = true;
-                    }
-                    if ui
-                        .selectable_label(formatter_kind == 1, self.language.text(Text::Decimal))
-                        .clicked()
-                    {
-                        record.formatter = FormatterSpec::Decimal { precision: 2 };
-                        changed = true;
-                    }
-                    if ui
-                        .selectable_label(formatter_kind == 2, self.language.text(Text::Scientific))
-                        .clicked()
-                    {
-                        record.formatter = FormatterSpec::Scientific { precision: 2 };
-                        changed = true;
-                    }
-                });
-            if let FormatterSpec::Decimal { precision } | FormatterSpec::Scientific { precision } =
-                &mut record.formatter
-            {
-                let response = ui.add(
-                    egui::DragValue::new(precision)
-                        .range(0..=15)
-                        .prefix(format!("{}: ", self.language.text(Text::Precision))),
-                );
-                changed |= response.changed();
-                continuous_change |= response.changed();
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-            }
-
-            ui.separator();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.near_spine,
-                    self.language.text(Text::NearSpine),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.far_spine,
-                    self.language.text(Text::FarSpine),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.near_ticks,
-                    self.language.text(Text::NearTicks),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.far_ticks,
-                    self.language.text(Text::FarTicks),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.near_tick_labels,
-                    self.language.text(Text::NearTickLabels),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.far_tick_labels,
-                    self.language.text(Text::FarTickLabels),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.major_ticks,
-                    self.language.text(Text::MajorTicks),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.minor_ticks,
-                    self.language.text(Text::MinorTicks),
-                )
-                .changed();
-            ui.label(self.language.text(Text::TickDirection));
-            egui::ComboBox::from_id_salt(("tick-direction", dimension))
-                .selected_text(tick_direction_name(
-                    self.language,
-                    record.appearance.tick_direction,
-                ))
-                .show_ui(ui, |ui| {
-                    for direction in [TickDirection::In, TickDirection::Out, TickDirection::InOut] {
-                        changed |= ui
-                            .selectable_value(
-                                &mut record.appearance.tick_direction,
-                                direction,
-                                tick_direction_name(self.language, direction),
-                            )
-                            .changed();
-                    }
-                });
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.grid_major,
-                    self.language.text(Text::MajorGrid),
-                )
-                .changed();
-            changed |= ui
-                .checkbox(
-                    &mut record.appearance.grid_minor,
-                    self.language.text(Text::MinorGrid),
-                )
-                .changed();
-            for (value, label) in [
-                (
-                    &mut record.appearance.tick_label_pad_pt,
-                    self.language.text(Text::TickLabelPad),
-                ),
-                (
-                    &mut record.appearance.label_edge_pad_pt,
-                    self.language.text(Text::LabelEdgePad),
-                ),
-                (
-                    &mut record.appearance.label_tick_pad_pt,
-                    self.language.text(Text::LabelTickPad),
-                ),
-            ] {
-                let response = ui.add(
-                    egui::DragValue::new(value)
-                        .range(0.0..=72.0)
-                        .prefix(format!("{label}: ")),
-                );
-                changed |= response.changed();
-                continuous_change |= response.changed();
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-            }
-        });
+            });
         match dimension {
             AxisDimension::X => self.x_fixed_ticks = fixed_ticks,
             AxisDimension::Y => self.y_fixed_ticks = fixed_ticks,
@@ -1357,43 +1436,45 @@ impl StudioApp {
         };
         let mut remove = None;
         let mut apply = false;
-        ui.collapsing(self.language.text(Text::AxisLabel), |ui| {
-            ui.weak(self.language.text(Text::SemanticPart));
-            for (index, part) in draft.parts.iter_mut().enumerate() {
-                ui.push_id(("label-part", dimension, index), |ui| {
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("kind")
-                            .selected_text(label_part_kind_name(self.language, part.kind))
-                            .show_ui(ui, |ui| {
-                                for kind in label_part_kinds() {
-                                    ui.selectable_value(
-                                        &mut part.kind,
-                                        kind,
-                                        label_part_kind_name(self.language, kind),
-                                    );
-                                }
-                            });
-                        if part.kind != LabelPartKind::UnitSeparator {
-                            ui.text_edit_singleline(&mut part.value);
-                        }
-                        if ui
-                            .small_button("−")
-                            .on_hover_text(self.language.text(Text::Remove))
-                            .clicked()
-                        {
-                            remove = Some(index);
-                        }
+        egui::CollapsingHeader::new(self.language.text(Text::AxisLabel))
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.weak(self.language.text(Text::SemanticPart));
+                for (index, part) in draft.parts.iter_mut().enumerate() {
+                    ui.push_id(("label-part", dimension, index), |ui| {
+                        ui.horizontal(|ui| {
+                            egui::ComboBox::from_id_salt("kind")
+                                .selected_text(label_part_kind_name(self.language, part.kind))
+                                .show_ui(ui, |ui| {
+                                    for kind in label_part_kinds() {
+                                        ui.selectable_value(
+                                            &mut part.kind,
+                                            kind,
+                                            label_part_kind_name(self.language, kind),
+                                        );
+                                    }
+                                });
+                            if part.kind != LabelPartKind::UnitSeparator {
+                                ui.text_edit_singleline(&mut part.value);
+                            }
+                            if ui
+                                .small_button("−")
+                                .on_hover_text(self.language.text(Text::Remove))
+                                .clicked()
+                            {
+                                remove = Some(index);
+                            }
+                        });
                     });
-                });
-            }
-            if ui.button(self.language.text(Text::AddPart)).clicked() {
-                draft.parts.push(LabelPartDraft {
-                    kind: LabelPartKind::Text,
-                    value: String::new(),
-                });
-            }
-            apply = ui.button(self.language.text(Text::ApplyLabel)).clicked();
-        });
+                }
+                if ui.button(self.language.text(Text::AddPart)).clicked() {
+                    draft.parts.push(LabelPartDraft {
+                        kind: LabelPartKind::Text,
+                        value: String::new(),
+                    });
+                }
+                apply = ui.button(self.language.text(Text::ApplyLabel)).clicked();
+            });
         if let Some(index) = remove {
             draft.parts.remove(index);
         }
@@ -1500,6 +1581,7 @@ impl StudioApp {
                 .find(|series| !before.contains(&series.id) && series.kind != SeriesKind::Legend)
                 .map(|series| series.id);
             self.selected_canvas_node.clone_from(&self.selected_series);
+            self.selected_canvas_role = None;
         }
     }
 
@@ -1543,6 +1625,7 @@ impl StudioApp {
                             self.selected_dataset = None;
                             self.selected_series = None;
                             self.selected_canvas_node = None;
+                            self.selected_canvas_role = None;
                         }
                         self.pending_delete_source = None;
                     }
@@ -1572,6 +1655,7 @@ impl StudioApp {
                         .clicked()
                     {
                         self.selected_canvas_node = Some(id);
+                        self.selected_canvas_role = None;
                         self.selected_series = None;
                     }
                 }
@@ -1594,6 +1678,7 @@ impl StudioApp {
                             series_kind_name(self.language, series.kind)
                         );
                         if ui.selectable_label(selected, label).clicked() {
+                            self.selected_canvas_role = None;
                             self.select_series_for_editing(&series);
                         }
                     });
@@ -1631,6 +1716,7 @@ impl StudioApp {
                             .find(|series| !before.contains(&series.id))
                             .map(|series| series.id);
                         self.selected_canvas_node.clone_from(&self.selected_series);
+                        self.selected_canvas_role = None;
                     }
                 }
                 if ui.button(self.language.text(Text::Delete)).clicked()
@@ -1643,6 +1729,7 @@ impl StudioApp {
                 {
                     self.selected_series = None;
                     self.selected_canvas_node = None;
+                    self.selected_canvas_role = None;
                 }
                 if ui.button(self.language.text(Text::MoveEarlier)).clicked() {
                     self.execute_document_edit(
@@ -1854,48 +1941,7 @@ impl StudioApp {
         self.figure_size_editor(ui);
 
         ui.separator();
-        ui.label(self.language.text(Text::AxesRanges));
-        let mut ranges = self.document.axis_ranges();
-        let mut changed_group = None;
-        let mut finish_coalescing = false;
-        egui::Grid::new("axis_ranges")
-            .num_columns(2)
-            .show(ui, |ui| {
-                ui.label(self.language.text(Text::XMin));
-                let response = ui.add(egui::DragValue::new(&mut ranges.x_min));
-                if response.changed() {
-                    changed_group = Some(EditGroup::AxisXMinimum);
-                }
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-                ui.end_row();
-                ui.label(self.language.text(Text::XMax));
-                let response = ui.add(egui::DragValue::new(&mut ranges.x_max));
-                if response.changed() {
-                    changed_group = Some(EditGroup::AxisXMaximum);
-                }
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-                ui.end_row();
-                ui.label(self.language.text(Text::YMin));
-                let response = ui.add(egui::DragValue::new(&mut ranges.y_min));
-                if response.changed() {
-                    changed_group = Some(EditGroup::AxisYMinimum);
-                }
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-                ui.end_row();
-                ui.label(self.language.text(Text::YMax));
-                let response = ui.add(egui::DragValue::new(&mut ranges.y_max));
-                if response.changed() {
-                    changed_group = Some(EditGroup::AxisYMaximum);
-                }
-                finish_coalescing |= response.drag_stopped() || response.lost_focus();
-                ui.end_row();
-            });
-        if let Some(group) = changed_group {
-            self.apply_ranges(ranges, group);
-        }
-        if finish_coalescing {
-            self.edit_history.finish_coalescing();
-        }
+        self.axis_ranges_editor(ui);
 
         self.axis_editor(ui, AxisDimension::X);
         self.axis_editor(ui, AxisDimension::Y);
@@ -1954,6 +2000,7 @@ impl StudioApp {
                         if let Some(node) = &finding.node_id {
                             if ui.button(title).clicked() {
                                 self.selected_canvas_node = Some(node.clone());
+                                self.selected_canvas_role = None;
                                 let series = self
                                     .document
                                     .series()
@@ -1988,6 +2035,84 @@ impl StudioApp {
         }
     }
 
+    fn context_editor(&mut self, context: &egui::Context) {
+        if !self.context_editor_open {
+            return;
+        }
+        let Some(selected_id) = self.selected_canvas_node.clone() else {
+            self.context_editor_open = false;
+            return;
+        };
+        let selected_role = self.selected_canvas_role;
+        if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.context_editor_open = false;
+            return;
+        }
+
+        let series = self
+            .document
+            .series()
+            .into_iter()
+            .find(|series| series.id == selected_id);
+        let axes = &self.document.project().figure.axes[0];
+        let axes_id = axes.id.clone();
+        let x_axis_id = axes.x.id.clone();
+        let y_axis_id = axes.y.id.clone();
+        let title = series.as_ref().map_or_else(
+            || self.language.text(Text::EditSelected).to_owned(),
+            |series| {
+                format!(
+                    "{} · {}",
+                    series_kind_name(self.language, series.kind),
+                    series.label
+                )
+            },
+        );
+        let mut open = true;
+        egui::Window::new(title)
+            .id(egui::Id::new((
+                "context-object-editor",
+                selected_id.clone(),
+                selected_role,
+            )))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(300.0)
+            .max_width(380.0)
+            .default_pos(self.context_editor_position)
+            .show(context, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(380.0)
+                    .show(ui, |ui| {
+                        if let Some(series) = &series {
+                            self.artist_editor(ui, &series.id);
+                        } else if selected_id == x_axis_id {
+                            if selected_role == Some(SelectableRole::AxisLabel) {
+                                self.axis_label_editor(ui, AxisDimension::X);
+                            } else {
+                                self.axis_editor(ui, AxisDimension::X);
+                            }
+                        } else if selected_id == y_axis_id {
+                            if selected_role == Some(SelectableRole::AxisLabel) {
+                                self.axis_label_editor(ui, AxisDimension::Y);
+                            } else {
+                                self.axis_editor(ui, AxisDimension::Y);
+                            }
+                        } else if selected_id == axes_id {
+                            self.figure_size_editor(ui);
+                            ui.separator();
+                            self.axis_ranges_editor(ui);
+                        } else if self.document.semantic_label_nodes(&selected_id).is_some() {
+                            self.semantic_label_editor(ui, &selected_id);
+                        } else {
+                            ui.weak(self.language.text(Text::ClickToEdit));
+                        }
+                    });
+            });
+        self.context_editor_open = open;
+    }
+
     fn artist_editor(&mut self, ui: &mut egui::Ui, artist_id: &str) {
         let Some(mut record) = self.document.artist_record(artist_id) else {
             return;
@@ -1998,145 +2123,147 @@ impl StudioApp {
         let mut finish_coalescing = false;
         let mut semantic_labels = Vec::new();
         ui.separator();
-        ui.collapsing(self.language.text(Text::ArtistProperties), |ui| {
-            if !matches!(record.role, ArtistRole::Annotation | ArtistRole::Legend) {
-                changed |= role_editor(ui, self.language, &mut record.role);
-            }
-            match &mut record.properties {
-                ArtistProperties::Line { stroke, .. } => {
-                    let edit = stroke_editor(ui, self.language, stroke, &palette);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
+        egui::CollapsingHeader::new(self.language.text(Text::ArtistProperties))
+            .default_open(true)
+            .show(ui, |ui| {
+                if !matches!(record.role, ArtistRole::Annotation | ArtistRole::Legend) {
+                    changed |= role_editor(ui, self.language, &mut record.role);
                 }
-                ArtistProperties::Scatter { marker, .. } => {
-                    changed |= color_editor(ui, self.language, &mut marker.color_id, &palette);
-                    ui.label(self.language.text(Text::MarkerShape));
-                    egui::ComboBox::from_id_salt(("marker-shape", artist_id))
-                        .selected_text(marker_shape_name(self.language, marker.shape))
-                        .show_ui(ui, |ui| {
-                            for shape in [
-                                MarkerShape::Circle,
-                                MarkerShape::Square,
-                                MarkerShape::Triangle,
-                                MarkerShape::Diamond,
-                            ] {
-                                changed |= ui
-                                    .selectable_value(
-                                        &mut marker.shape,
-                                        shape,
-                                        marker_shape_name(self.language, shape),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    let response = ui.add(
-                        egui::DragValue::new(&mut marker.size_pt)
-                            .range(0.1..=72.0)
-                            .prefix(format!("{}: ", self.language.text(Text::MarkerSize))),
-                    );
-                    let edit = continuous_edit(&response);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                }
-                ArtistProperties::ErrorBar {
-                    cap_width_pt,
-                    stroke,
-                    ..
-                } => {
-                    let response = ui.add(
-                        egui::DragValue::new(cap_width_pt)
-                            .range(0.1..=72.0)
-                            .prefix(format!("{}: ", self.language.text(Text::CapWidth))),
-                    );
-                    let edit = continuous_edit(&response);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                    let edit = stroke_editor(ui, self.language, stroke, &palette);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                }
-                ArtistProperties::ReferenceLine {
-                    orientation,
-                    value,
-                    stroke,
-                } => {
-                    ui.label(self.language.text(Text::Orientation));
-                    egui::ComboBox::from_id_salt(("reference-orientation", artist_id))
-                        .selected_text(reference_orientation_name(self.language, *orientation))
-                        .show_ui(ui, |ui| {
-                            for candidate in [
-                                ReferenceOrientation::Horizontal,
-                                ReferenceOrientation::Vertical,
-                            ] {
-                                changed |= ui
-                                    .selectable_value(
-                                        orientation,
-                                        candidate,
-                                        reference_orientation_name(self.language, candidate),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    let response = ui.add(
-                        egui::DragValue::new(value)
-                            .prefix(format!("{}: ", self.language.text(Text::Value))),
-                    );
-                    let edit = continuous_edit(&response);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                    let edit = stroke_editor(ui, self.language, stroke, &palette);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                }
-                ArtistProperties::Annotation {
-                    label_id,
-                    x_pt,
-                    y_pt,
-                } => {
-                    let edit = position_editor(ui, self.language, x_pt, y_pt);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                    semantic_labels.push(label_id.clone());
-                }
-                ArtistProperties::Legend {
-                    entries,
-                    x_pt,
-                    y_pt,
-                } => {
-                    let edit = position_editor(ui, self.language, x_pt, y_pt);
-                    changed |= edit.changed;
-                    continuous_change |= edit.continuous;
-                    finish_coalescing |= edit.finish;
-                    ui.label(self.language.text(Text::LegendEntries));
-                    let mut move_entry = None;
-                    let entry_count = entries.len();
-                    for (index, entry) in entries.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            changed |= ui.checkbox(&mut entry.visible, "").changed();
-                            ui.label(&entry.artist_id);
-                            if ui.small_button("↑").clicked() && index > 0 {
-                                move_entry = Some((index, index - 1));
-                            }
-                            if ui.small_button("↓").clicked() && index + 1 < entry_count {
-                                move_entry = Some((index, index + 1));
-                            }
-                        });
-                        semantic_labels.push(entry.label_id.clone());
+                match &mut record.properties {
+                    ArtistProperties::Line { stroke, .. } => {
+                        let edit = stroke_editor(ui, self.language, stroke, &palette);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
                     }
-                    if let Some((from, to)) = move_entry {
-                        entries.swap(from, to);
-                        changed = true;
+                    ArtistProperties::Scatter { marker, .. } => {
+                        changed |= color_editor(ui, self.language, &mut marker.color_id, &palette);
+                        ui.label(self.language.text(Text::MarkerShape));
+                        egui::ComboBox::from_id_salt(("marker-shape", artist_id))
+                            .selected_text(marker_shape_name(self.language, marker.shape))
+                            .show_ui(ui, |ui| {
+                                for shape in [
+                                    MarkerShape::Circle,
+                                    MarkerShape::Square,
+                                    MarkerShape::Triangle,
+                                    MarkerShape::Diamond,
+                                ] {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut marker.shape,
+                                            shape,
+                                            marker_shape_name(self.language, shape),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        let response = ui.add(
+                            egui::DragValue::new(&mut marker.size_pt)
+                                .range(0.1..=72.0)
+                                .prefix(format!("{}: ", self.language.text(Text::MarkerSize))),
+                        );
+                        let edit = continuous_edit(&response);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                    }
+                    ArtistProperties::ErrorBar {
+                        cap_width_pt,
+                        stroke,
+                        ..
+                    } => {
+                        let response = ui.add(
+                            egui::DragValue::new(cap_width_pt)
+                                .range(0.1..=72.0)
+                                .prefix(format!("{}: ", self.language.text(Text::CapWidth))),
+                        );
+                        let edit = continuous_edit(&response);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                        let edit = stroke_editor(ui, self.language, stroke, &palette);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                    }
+                    ArtistProperties::ReferenceLine {
+                        orientation,
+                        value,
+                        stroke,
+                    } => {
+                        ui.label(self.language.text(Text::Orientation));
+                        egui::ComboBox::from_id_salt(("reference-orientation", artist_id))
+                            .selected_text(reference_orientation_name(self.language, *orientation))
+                            .show_ui(ui, |ui| {
+                                for candidate in [
+                                    ReferenceOrientation::Horizontal,
+                                    ReferenceOrientation::Vertical,
+                                ] {
+                                    changed |= ui
+                                        .selectable_value(
+                                            orientation,
+                                            candidate,
+                                            reference_orientation_name(self.language, candidate),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        let response = ui.add(
+                            egui::DragValue::new(value)
+                                .prefix(format!("{}: ", self.language.text(Text::Value))),
+                        );
+                        let edit = continuous_edit(&response);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                        let edit = stroke_editor(ui, self.language, stroke, &palette);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                    }
+                    ArtistProperties::Annotation {
+                        label_id,
+                        x_pt,
+                        y_pt,
+                    } => {
+                        let edit = position_editor(ui, self.language, x_pt, y_pt);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                        semantic_labels.push(label_id.clone());
+                    }
+                    ArtistProperties::Legend {
+                        entries,
+                        x_pt,
+                        y_pt,
+                    } => {
+                        let edit = position_editor(ui, self.language, x_pt, y_pt);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                        ui.label(self.language.text(Text::LegendEntries));
+                        let mut move_entry = None;
+                        let entry_count = entries.len();
+                        for (index, entry) in entries.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                changed |= ui.checkbox(&mut entry.visible, "").changed();
+                                ui.label(&entry.artist_id);
+                                if ui.small_button("↑").clicked() && index > 0 {
+                                    move_entry = Some((index, index - 1));
+                                }
+                                if ui.small_button("↓").clicked() && index + 1 < entry_count {
+                                    move_entry = Some((index, index + 1));
+                                }
+                            });
+                            semantic_labels.push(entry.label_id.clone());
+                        }
+                        if let Some((from, to)) = move_entry {
+                            entries.swap(from, to);
+                            changed = true;
+                        }
                     }
                 }
-            }
-        });
+            });
         if changed {
             self.execute_document_edit_with_group(
                 EditCommand::SetArtistRecord(record),
@@ -2161,44 +2288,46 @@ impl StudioApp {
         let mut continuous_change = false;
         let mut finish_coalescing = false;
         let mut remove = None;
-        ui.collapsing(
-            format!("{} · {label_id}", self.language.text(Text::SemanticLabel)),
-            |ui| {
-                for (index, part) in draft.parts.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt(("semantic-kind", label_id, index))
-                            .selected_text(label_part_kind_name(self.language, part.kind))
-                            .show_ui(ui, |ui| {
-                                for kind in label_part_kinds() {
-                                    changed |= ui
-                                        .selectable_value(
-                                            &mut part.kind,
-                                            kind,
-                                            label_part_kind_name(self.language, kind),
-                                        )
-                                        .changed();
-                                }
-                            });
-                        if part.kind != LabelPartKind::UnitSeparator {
-                            let response = ui.text_edit_singleline(&mut part.value);
-                            changed |= response.changed();
-                            continuous_change |= response.changed();
-                            finish_coalescing |= response.lost_focus();
-                        }
-                        if ui.small_button("−").clicked() {
-                            remove = Some(index);
-                        }
-                    });
-                }
-                if ui.button(self.language.text(Text::AddPart)).clicked() {
-                    draft.parts.push(LabelPartDraft {
-                        kind: LabelPartKind::Text,
-                        value: String::new(),
-                    });
-                    changed = true;
-                }
-            },
-        );
+        egui::CollapsingHeader::new(format!(
+            "{} · {label_id}",
+            self.language.text(Text::SemanticLabel)
+        ))
+        .default_open(true)
+        .show(ui, |ui| {
+            for (index, part) in draft.parts.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt(("semantic-kind", label_id, index))
+                        .selected_text(label_part_kind_name(self.language, part.kind))
+                        .show_ui(ui, |ui| {
+                            for kind in label_part_kinds() {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut part.kind,
+                                        kind,
+                                        label_part_kind_name(self.language, kind),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    if part.kind != LabelPartKind::UnitSeparator {
+                        let response = ui.text_edit_singleline(&mut part.value);
+                        changed |= response.changed();
+                        continuous_change |= response.changed();
+                        finish_coalescing |= response.lost_focus();
+                    }
+                    if ui.small_button("−").clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if ui.button(self.language.text(Text::AddPart)).clicked() {
+                draft.parts.push(LabelPartDraft {
+                    kind: LabelPartKind::Text,
+                    value: String::new(),
+                });
+                changed = true;
+            }
+        });
         if let Some(index) = remove {
             draft.parts.remove(index);
             changed = true;
@@ -2540,6 +2669,25 @@ impl eframe::App for StudioApp {
                     }
                 });
                 ui.menu_button(self.language.text(Text::View), |ui| {
+                    ui.checkbox(
+                        &mut self.show_layers,
+                        self.language.text(Text::LayersAndData),
+                    );
+                    ui.checkbox(
+                        &mut self.show_inspector,
+                        self.language.text(Text::Inspector),
+                    );
+                    ui.separator();
+                    if ui.button(self.language.text(Text::FitToWindow)).clicked() {
+                        self.fit_canvas(context.content_rect().size());
+                        ui.close();
+                    }
+                    if ui.button(self.language.text(Text::ActualSize)).clicked() {
+                        self.canvas_zoom = 1.0;
+                        self.canvas_scroll = egui::Vec2::ZERO;
+                        ui.close();
+                    }
+                    ui.separator();
                     ui.menu_button(self.language.text(Text::Language), |ui| {
                         if ui
                             .selectable_label(
@@ -2575,6 +2723,34 @@ impl eframe::App for StudioApp {
                 });
                 ui.separator();
                 ui.strong(format!("{}{dirty_mark}", self.workspace.display_name()));
+                ui.separator();
+                if ui
+                    .selectable_label(self.show_layers, self.language.text(Text::LayersAndData))
+                    .clicked()
+                {
+                    self.show_layers = !self.show_layers;
+                }
+                let check_count =
+                    self.publication_report.error_count() + self.publication_report.warning_count();
+                let check_label = if check_count == 0 {
+                    format!("✓ {}", self.language.text(Text::PublicationCheck))
+                } else {
+                    format!("⚠ {check_count}")
+                };
+                if ui
+                    .selectable_label(self.show_inspector, check_label)
+                    .on_hover_text(self.language.text(Text::PublicationCheck))
+                    .clicked()
+                {
+                    self.show_inspector = !self.show_inspector;
+                }
+                if !self.messages.is_empty()
+                    && ui
+                        .selectable_label(self.show_messages, format!("⚠ {}", self.messages.len()))
+                        .clicked()
+                {
+                    self.show_messages = !self.show_messages;
+                }
                 if let Some((status, _)) = &self.status {
                     ui.separator();
                     ui.label(status);
@@ -2582,19 +2758,23 @@ impl eframe::App for StudioApp {
             });
         });
 
-        egui::Panel::left("series_tree")
-            .default_size(230.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.series_tree(ui));
-            });
+        if self.show_layers {
+            egui::Panel::left("series_tree")
+                .default_size(230.0)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.series_tree(ui));
+                });
+        }
 
-        egui::Panel::right("inspector")
-            .default_size(300.0)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
-            });
+        if self.show_inspector {
+            egui::Panel::right("inspector")
+                .default_size(300.0)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| self.inspector(ui));
+                });
+        }
 
-        if !self.messages.is_empty() {
+        if self.show_messages && !self.messages.is_empty() {
             egui::Panel::bottom("warning_panel")
                 .default_size(90.0)
                 .show(ui, |ui| {
@@ -2616,31 +2796,10 @@ impl eframe::App for StudioApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
-            let canvas_available = ui.available_size();
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(self.language.text(Text::FitToWindow)).clicked() {
-                    let available = canvas_available - egui::vec2(48.0, 72.0);
-                    self.canvas_zoom = (available.x / self.resolved.display.width)
-                        .min(available.y / self.resolved.display.height)
-                        .clamp(0.1, 8.0);
-                    self.canvas_scroll = egui::Vec2::ZERO;
-                }
-                if ui.button(self.language.text(Text::ActualSize)).clicked() {
-                    self.canvas_zoom = 1.0;
-                    self.canvas_scroll = egui::Vec2::ZERO;
-                }
-                if ui.small_button("−").clicked() {
-                    self.canvas_zoom = (self.canvas_zoom / 1.2).clamp(0.1, 8.0);
-                }
-                ui.label(format!("{:.0}%", self.canvas_zoom * 100.0));
-                if ui.small_button("+").clicked() {
-                    self.canvas_zoom = (self.canvas_zoom * 1.2).clamp(0.1, 8.0);
-                }
-                ui.weak(self.language.text(Text::WheelZoomHint));
-            });
-            ui.separator();
-
             let viewport = ui.available_size();
+            if self.first_frame {
+                self.fit_canvas(viewport);
+            }
             let old_zoom = self.canvas_zoom;
             let output = egui::ScrollArea::both()
                 .id_salt("figure-canvas-scroll")
@@ -2679,7 +2838,7 @@ impl eframe::App for StudioApp {
                         egui::Stroke::new(1.0, egui::Color32::GRAY),
                         egui::StrokeKind::Outside,
                     );
-                    let metrics = self.preview.paint(
+                    self.preview.paint(
                         ui.painter(),
                         &self.resolved.display,
                         origin,
@@ -2688,7 +2847,11 @@ impl eframe::App for StudioApp {
                     );
 
                     if let Some(selected) = self.selected_canvas_node.as_deref()
-                        && let Some(bounds) = selected_hit_bounds(&self.resolved, selected)
+                        && let Some(bounds) = selected_hit_bounds_for_role(
+                            &self.resolved,
+                            selected,
+                            self.selected_canvas_role,
+                        )
                     {
                         let overlay = egui::Rect::from_min_max(
                             origin + egui::vec2(bounds.0 as f32, bounds.1 as f32) * old_zoom,
@@ -2703,25 +2866,35 @@ impl eframe::App for StudioApp {
                         );
                     }
 
-                    ui.painter().text(
-                        figure_rect.left_bottom() + egui::vec2(0.0, 18.0),
-                        egui::Align2::LEFT_TOP,
-                        format!(
-                            "{}: {} × {} px",
-                            self.language.text(Text::PreviewFramebuffer),
-                            metrics.framebuffer_width,
-                            metrics.framebuffer_height
-                        ),
-                        egui::FontId::proportional(12.0),
-                        ui.visuals().text_color(),
-                    );
-
                     let pointer = response.interact_pointer_pos();
-                    let clicked = response.clicked().then(|| {
-                        pointer.and_then(|point| {
-                            hit_project_id(&self.resolved, point, origin, old_zoom)
-                        })
-                    });
+                    let hovered = pointer
+                        .and_then(|point| hit_project(&self.resolved, point, origin, old_zoom));
+                    if let Some(hovered) = hovered.as_ref() {
+                        ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::PointingHand);
+                        if (self.selected_canvas_node.as_deref()
+                            != Some(hovered.project_id.as_str())
+                            || self.selected_canvas_role != Some(hovered.role))
+                            && let Some(bounds) = selected_hit_bounds_for_role(
+                                &self.resolved,
+                                &hovered.project_id,
+                                Some(hovered.role),
+                            )
+                        {
+                            let overlay = egui::Rect::from_min_max(
+                                origin + egui::vec2(bounds.0 as f32, bounds.1 as f32) * old_zoom,
+                                origin + egui::vec2(bounds.2 as f32, bounds.3 as f32) * old_zoom,
+                            )
+                            .expand(3.0);
+                            ui.painter().rect_stroke(
+                                overlay,
+                                3.0,
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(76, 157, 255)),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                    }
+                    let clicked = response.clicked().then(|| hovered.clone());
+                    let fit_requested = response.double_clicked() && hovered.is_none();
                     let wheel = if response.hovered() {
                         context.input(|input| input.smooth_scroll_delta.y)
                     } else {
@@ -2730,16 +2903,21 @@ impl eframe::App for StudioApp {
                     let zoom_anchor = (wheel.abs() > f32::EPSILON)
                         .then(|| pointer.map(|point| (point, origin, wheel)))
                         .flatten();
-                    (clicked, zoom_anchor)
+                    (clicked, zoom_anchor, pointer, fit_requested)
                 });
             self.canvas_scroll = output.state.offset;
             if let Some(clicked) = output.inner.0 {
-                self.selected_canvas_node = clicked.clone();
-                self.selected_series = clicked.as_ref().and_then(|id| {
+                self.selected_canvas_node = clicked.as_ref().map(|hit| hit.project_id.clone());
+                self.selected_canvas_role = clicked.as_ref().map(|hit| hit.role);
+                self.context_editor_open = clicked.is_some();
+                if let Some(pointer) = output.inner.2 {
+                    self.context_editor_position = pointer + egui::vec2(14.0, 14.0);
+                }
+                self.selected_series = clicked.as_ref().and_then(|hit| {
                     self.document
                         .series()
                         .into_iter()
-                        .find(|series| series.id == *id)
+                        .find(|series| series.id == hit.project_id)
                         .map(|series| series.id)
                 });
                 if let Some(selected) = self.selected_series.clone()
@@ -2756,7 +2934,12 @@ impl eframe::App for StudioApp {
                 (self.canvas_scroll, self.canvas_zoom) =
                     zoom_about_pointer(self.canvas_scroll, pointer, origin, old_zoom, wheel);
             }
+            if output.inner.3 {
+                self.fit_canvas(viewport);
+            }
         });
+
+        self.context_editor(&context);
 
         if self.first_frame {
             self.first_frame = false;
@@ -2778,29 +2961,52 @@ fn resolved_preview(
     resolve_document(document)
 }
 
+#[cfg(test)]
 fn hit_project_id(
     resolved: &ResolvedFigure,
     point: egui::Pos2,
     origin: egui::Pos2,
     zoom: f32,
 ) -> Option<String> {
-    let local = (point - origin) / zoom;
-    resolved
-        .layout
-        .result
-        .hit_map
-        .hit_test(
-            f64::from(local.x),
-            f64::from(local.y),
-            f64::from(6.0 / zoom),
-        )
-        .and_then(|hit| resolved.layout.project_ids.get(&hit.node))
-        .cloned()
+    hit_project(resolved, point, origin, zoom).map(|hit| hit.project_id)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanvasHit {
+    project_id: String,
+    role: SelectableRole,
+}
+
+fn hit_project(
+    resolved: &ResolvedFigure,
+    point: egui::Pos2,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<CanvasHit> {
+    let local = (point - origin) / zoom;
+    let hit = resolved.layout.result.hit_map.hit_test(
+        f64::from(local.x),
+        f64::from(local.y),
+        f64::from(6.0 / zoom),
+    )?;
+    Some(CanvasHit {
+        project_id: resolved.layout.project_ids.get(&hit.node)?.clone(),
+        role: hit.role,
+    })
+}
+
+#[cfg(test)]
 fn selected_hit_bounds(
     resolved: &ResolvedFigure,
     project_id: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    selected_hit_bounds_for_role(resolved, project_id, None)
+}
+
+fn selected_hit_bounds_for_role(
+    resolved: &ResolvedFigure,
+    project_id: &str,
+    role: Option<SelectableRole>,
 ) -> Option<(f64, f64, f64, f64)> {
     let mut bounds = resolved
         .layout
@@ -2809,12 +3015,13 @@ fn selected_hit_bounds(
         .items
         .iter()
         .filter(|item| {
-            resolved
-                .layout
-                .project_ids
-                .get(&item.node)
-                .map(String::as_str)
-                == Some(project_id)
+            role.is_none_or(|role| item.role == role)
+                && resolved
+                    .layout
+                    .project_ids
+                    .get(&item.node)
+                    .map(String::as_str)
+                    == Some(project_id)
         })
         .map(|item| item.bounds);
     let first = bounds.next()?;

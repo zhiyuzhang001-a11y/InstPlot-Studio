@@ -159,6 +159,8 @@ fn publication_fixture_is_deterministic_and_unclipped() {
     }
     for role in [
         SelectableRole::Axes,
+        SelectableRole::Axis,
+        SelectableRole::AxisLabel,
         SelectableRole::Tick,
         SelectableRole::Series,
         SelectableRole::DataPoint,
@@ -177,6 +179,26 @@ fn publication_fixture_is_deterministic_and_unclipped() {
         )
         .unwrap();
     assert_eq!(legend_hit.role, SelectableRole::Legend);
+    let x_label_hit = first
+        .hit_map
+        .hit_test(
+            first.x_label_bounds.x + first.x_label_bounds.width / 2.0,
+            first.x_label_bounds.y + first.x_label_bounds.height / 2.0,
+            0.0,
+        )
+        .unwrap();
+    assert_eq!(x_label_hit.node, chart.x.id);
+    assert_eq!(x_label_hit.role, SelectableRole::AxisLabel);
+    let x_spine_hit = first
+        .hit_map
+        .hit_test(
+            first.axes.x + first.axes.width * 0.37,
+            first.axes.bottom(),
+            1.0,
+        )
+        .unwrap();
+    assert_eq!(x_spine_hit.node, chart.x.id);
+    assert_eq!(x_spine_hit.role, SelectableRole::Axis);
     let series = first
         .hit_map
         .items

@@ -49,9 +49,11 @@ impl Bounds {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SelectableRole {
     Axes,
+    Axis,
+    AxisLabel,
     Tick,
     Series,
     DataPoint,
@@ -1037,7 +1039,74 @@ fn draw_axes(
             });
         }
     }
+    for (node, bounds) in [(chart.x.id, x_bounds), (chart.y.id, y_bounds)] {
+        hit_map.items.push(HitItem {
+            node,
+            bounds,
+            z_order: 22,
+            role: SelectableRole::AxisLabel,
+            data_index: None,
+            tooltip: None,
+            path_proximity: Vec::new(),
+        });
+    }
+    if chart.x.appearance.near_spine {
+        hit_map.items.push(axis_hit_item(
+            chart.x.id,
+            Bounds {
+                x: axes.x,
+                y: axes.bottom(),
+                width: axes.width,
+                height: 0.0,
+            },
+        ));
+    }
+    if chart.x.appearance.far_spine {
+        hit_map.items.push(axis_hit_item(
+            chart.x.id,
+            Bounds {
+                x: axes.x,
+                y: axes.y,
+                width: axes.width,
+                height: 0.0,
+            },
+        ));
+    }
+    if chart.y.appearance.near_spine {
+        hit_map.items.push(axis_hit_item(
+            chart.y.id,
+            Bounds {
+                x: axes.x,
+                y: axes.y,
+                width: 0.0,
+                height: axes.height,
+            },
+        ));
+    }
+    if chart.y.appearance.far_spine {
+        hit_map.items.push(axis_hit_item(
+            chart.y.id,
+            Bounds {
+                x: axes.right(),
+                y: axes.y,
+                width: 0.0,
+                height: axes.height,
+            },
+        ));
+    }
     (x_bounds, y_bounds)
+}
+
+fn axis_hit_item(node: NodeId, bounds: Bounds) -> HitItem {
+    HitItem {
+        node,
+        bounds,
+        z_order: 18,
+        role: SelectableRole::Axis,
+        data_index: None,
+        tooltip: None,
+        path_proximity: Vec::new(),
+    }
 }
 
 fn draw_grid(
