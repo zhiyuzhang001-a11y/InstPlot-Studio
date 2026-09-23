@@ -1,6 +1,6 @@
 # InstPlot Studio 产品细节完善短计划
 
-> 状态：ACTIVE（P0–P7 DONE；P8 automated audit PASS，macOS final visual confirmation pending）
+> 状态：DONE（P0–P8 完成；Lite 集成与发布按用户要求继续暂停）
 > 阶段代号：B5P（位于 B5 Studio 接收端完成之后、Lite 最终联调与 B6 发布准备之前）  
 > 制定日期：2026-09-22  
 > 上位计划：[`SCIPLOT_EXECUTION_PLAN.md`](SCIPLOT_EXECUTION_PLAN.md)  
@@ -305,6 +305,7 @@ P5 的 artist、颜色、legend 和 annotation 编辑证据见
 和纯 view-state 缩放证据见
 [`../reports/B5P_P6_CANVAS_INTERACTION.md`](../reports/B5P_P6_CANVAS_INTERACTION.md)。
 P7 的 finding 分组/定位和导出设置闭环证据见
-[`../reports/B5P_P7_PUBLICATION_EXPORT.md`](../reports/B5P_P7_PUBLICATION_EXPORT.md)。当前任务是
-**P8：稳定化、人工验收与阶段关闭**；自动审计证据和当前唯一待确认项见
-[`../reports/B5P_P8_STABILIZATION.md`](../reports/B5P_P8_STABILIZATION.md)。
+[`../reports/B5P_P7_PUBLICATION_EXPORT.md`](../reports/B5P_P7_PUBLICATION_EXPORT.md)。P8 的稳定化、
+统一自动审计和 macOS 人工视觉交互均已完成，阶段关闭证据见
+[`../reports/B5P_P8_STABILIZATION.md`](../reports/B5P_P8_STABILIZATION.md)。Windows B5P 人工界面矩阵
+未冒充通过，留到安装包/发布前在真实 Windows 环境做最小复核；Lite 集成与发布继续暂停。
