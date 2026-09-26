@@ -138,10 +138,30 @@ def main() -> int:
             "CFBundleIdentifier": BUNDLE_ID,
             "CFBundleName": "InstPlot Studio",
             "CFBundlePackageType": "APPL",
+            "CFBundleDocumentTypes": [
+                {
+                    "CFBundleTypeExtensions": ["instplot"],
+                    "CFBundleTypeName": "InstPlot Studio Project",
+                    "CFBundleTypeRole": "Editor",
+                    "LSHandlerRank": "Owner",
+                    "LSItemContentTypes": ["com.instplot.studio.project"],
+                }
+            ],
             "CFBundleShortVersionString": version,
             "CFBundleVersion": build_id,
             "LSMinimumSystemVersion": "12.0",
             "NSHighResolutionCapable": True,
+            "UTExportedTypeDeclarations": [
+                {
+                    "UTTypeConformsTo": ["public.json", "public.data"],
+                    "UTTypeDescription": "InstPlot Studio Project",
+                    "UTTypeIdentifier": "com.instplot.studio.project",
+                    "UTTypeTagSpecification": {
+                        "public.filename-extension": ["instplot"],
+                        "public.mime-type": "application/vnd.instplot.project+json",
+                    },
+                }
+            ],
         }
         with (bundle / "Contents/Info.plist").open("wb") as stream:
             plistlib.dump(info, stream)

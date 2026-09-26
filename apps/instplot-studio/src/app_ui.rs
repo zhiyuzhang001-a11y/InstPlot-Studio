@@ -12,7 +12,18 @@ impl eframe::App for StudioApp {
                 .collect::<Vec<_>>()
         });
         if !dropped_paths.is_empty() {
-            self.load_data_paths(dropped_paths);
+            self.open_paths(dropped_paths);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let externally_opened_paths = self
+                .macos_open_files
+                .as_ref()
+                .map(crate::macos_open_files::MacOpenFiles::drain)
+                .unwrap_or_default();
+            if !externally_opened_paths.is_empty() {
+                self.open_paths(externally_opened_paths);
+            }
         }
         let dirty = self.edit_history.is_dirty(&self.document);
         context.send_viewport_cmd(egui::ViewportCommand::Title(
@@ -222,7 +233,7 @@ impl eframe::App for StudioApp {
                         .selectable_label(self.show_palette, self.language.text(Text::ColorScheme))
                         .clicked()
                     {
-                        self.show_palette = !self.show_palette;
+                        self.request_palette_window();
                     }
                     let check_count = self.publication_report.error_count()
                         + self.publication_report.warning_count();
@@ -239,7 +250,7 @@ impl eframe::App for StudioApp {
                             .selectable_label(self.show_inspector, check_label)
                             .clicked()
                     {
-                        self.show_inspector = !self.show_inspector;
+                        self.request_publication_window();
                     }
                     if !self.messages.is_empty()
                         && ui

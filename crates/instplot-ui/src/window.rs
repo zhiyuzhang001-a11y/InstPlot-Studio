@@ -20,6 +20,22 @@ impl ToolWindowPolicy {
             ToolWindowMode::Detached
         }
     }
+
+    /// Restore and raise an existing tool surface without changing whether it is open.
+    /// Detached viewports receive native focus; fullscreen/maximized fallback windows
+    /// are moved to the top of the application's embedded window stack.
+    pub fn raise(context: &egui::Context, viewport_id: egui::ViewportId, embedded_id: egui::Id) {
+        match Self::mode(context) {
+            ToolWindowMode::Embedded => {
+                context.move_to_top(egui::LayerId::new(egui::Order::Middle, embedded_id));
+            }
+            ToolWindowMode::Detached => {
+                context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Minimized(false));
+                context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Visible(true));
+                context.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Focus);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,7 +52,7 @@ impl ToolWindowSpec {
             default_size,
             min_size,
             resizable: true,
-            always_on_top: true,
+            always_on_top: false,
         }
     }
 
@@ -92,7 +108,8 @@ mod tests {
     #[test]
     fn tool_windows_have_one_cross_platform_size_policy() {
         let spec = ToolWindowSpec::new([460.0, 360.0], [360.0, 140.0]);
-        assert!(spec.resizable && spec.always_on_top);
+        assert!(spec.resizable);
+        assert!(!spec.always_on_top);
         assert!(spec.default_size[0] >= spec.min_size[0]);
         assert!(spec.default_size[1] >= spec.min_size[1]);
     }

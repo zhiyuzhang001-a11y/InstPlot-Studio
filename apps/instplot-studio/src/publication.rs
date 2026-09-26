@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use instplot_export::ResolvedItem;
 use instplot_layout::SelectableRole;
@@ -6,8 +6,8 @@ use instplot_render::DisplayItem;
 use serde::{Deserialize, Serialize};
 
 use crate::palette::{PaletteKind, builtin_palette, registry_matches_metadata};
-use crate::semantic::{color_id, non_color_signature, policy_for};
-use crate::{FigureDocument, ProjectDocument, ResolvedFigure};
+use crate::semantic::color_id;
+use crate::{ArtistProperties, DataBinding, FigureDocument, ProjectDocument, ResolvedFigure};
 
 pub const PUBLICATION_RULES_VERSION: &str = "instplot-publication-rules-v1";
 pub const CVD_SIMULATION_VERSION: &str = "machado-2009-deuteranopia-severity-1-linear-srgb-v1";
@@ -608,34 +608,138 @@ fn project_id(resolved: &ResolvedFigure, node: instplot_render::NodeId) -> Optio
     resolved.layout.project_ids.get(&node).cloned()
 }
 
-fn artist_colors(project: &ProjectDocument) -> Vec<(&crate::ArtistRecord, [u8; 4])> {
+#[derive(Clone, Debug)]
+struct VisualSeriesEncoding {
+    id: String,
+    color: [u8; 4],
+    non_color_signature: String,
+}
+
+#[derive(Clone, Debug)]
+struct VisualSeriesBuilder {
+    id: String,
+    color: [u8; 4],
+    representative_rank: usize,
+    line_signatures: BTreeSet<String>,
+    marker_signatures: BTreeSet<String>,
+}
+
+fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncoding> {
     let colors = project
         .palette
         .colors
         .iter()
         .map(|color| (color.id.as_str(), color.rgba))
         .collect::<BTreeMap<_, _>>();
-    project
+    let legend_ranks = project
         .figure
         .artists
         .iter()
-        .filter_map(|artist| {
-            color_id(artist).and_then(|id| colors.get(id).copied().map(|rgba| (artist, rgba)))
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Legend { entries, .. } if artist.visible => Some(entries),
+            _ => None,
+        })
+        .flat_map(|entries| entries.iter().filter(|entry| entry.visible))
+        .enumerate()
+        .map(|(rank, entry)| (entry.artist_id.clone(), rank))
+        .collect::<BTreeMap<_, _>>();
+    let mut builders = BTreeMap::<String, VisualSeriesBuilder>::new();
+    for artist in project
+        .figure
+        .artists
+        .iter()
+        .filter(|artist| artist.visible)
+    {
+        let Some(color) = color_id(artist).and_then(|id| colors.get(id).copied()) else {
+            continue;
+        };
+        let key = match &artist.properties {
+            ArtistProperties::Line { binding, .. }
+            | ArtistProperties::Scatter { binding, .. }
+            | ArtistProperties::ErrorBar { binding, .. } => binding_series_key(project, binding),
+            ArtistProperties::ReferenceLine { .. } => format!("reference:{}", artist.id),
+            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
+        };
+        let rank = legend_ranks.get(&artist.id).copied().unwrap_or(usize::MAX);
+        let builder = builders.entry(key).or_insert_with(|| VisualSeriesBuilder {
+            id: artist.id.clone(),
+            color,
+            representative_rank: rank,
+            line_signatures: BTreeSet::new(),
+            marker_signatures: BTreeSet::new(),
+        });
+        if rank < builder.representative_rank {
+            builder.id.clone_from(&artist.id);
+            builder.color = color;
+            builder.representative_rank = rank;
+        }
+        match &artist.properties {
+            ArtistProperties::Line { stroke, .. }
+            | ArtistProperties::ReferenceLine { stroke, .. } => {
+                builder
+                    .line_signatures
+                    .insert(format!("{:?}", stroke.dash_pt));
+            }
+            ArtistProperties::Scatter { marker, .. } => {
+                builder
+                    .marker_signatures
+                    .insert(format!("{:?}:{}", marker.shape, marker.filled));
+            }
+            ArtistProperties::ErrorBar { .. }
+            | ArtistProperties::Annotation { .. }
+            | ArtistProperties::Legend { .. } => {}
+        }
+    }
+    builders
+        .into_values()
+        .map(|builder| VisualSeriesEncoding {
+            id: builder.id,
+            color: builder.color,
+            non_color_signature: format!(
+                "line={:?};marker={:?}",
+                builder.line_signatures, builder.marker_signatures
+            ),
         })
         .collect()
+}
+
+fn binding_series_key(project: &ProjectDocument, binding: &DataBinding) -> String {
+    let Some(source) = project
+        .data_sources
+        .iter()
+        .find(|source| source.id == binding.data_source_id)
+    else {
+        return format!(
+            "binding:{}\u{0}{}\u{0}{}",
+            binding.data_source_id, binding.x_column, binding.y_column
+        );
+    };
+    source.fit.as_ref().map_or_else(
+        || {
+            format!(
+                "binding:{}\u{0}{}\u{0}{}",
+                binding.data_source_id, binding.x_column, binding.y_column
+            )
+        },
+        |fit| {
+            format!(
+                "binding:{}\u{0}{}\u{0}{}",
+                fit.parent_data_source_id, fit.source_x_column, fit.source_y_column
+            )
+        },
+    )
 }
 
 fn risky_color_pair(
     project: &ProjectDocument,
     color_is_risky: impl Fn([u8; 4], [u8; 4]) -> bool,
 ) -> Option<(String, String)> {
-    let artists = artist_colors(project);
-    for (index, (left, left_color)) in artists.iter().enumerate() {
-        for (right, right_color) in artists.iter().skip(index + 1) {
-            if left_color != right_color
-                && color_is_risky(*left_color, *right_color)
-                && non_color_signature(left) == non_color_signature(right)
-                && policy_for(left.role).non_color == policy_for(right.role).non_color
+    let series = visual_series_encodings(project);
+    for (index, left) in series.iter().enumerate() {
+        for right in series.iter().skip(index + 1) {
+            if left.color != right.color
+                && color_is_risky(left.color, right.color)
+                && left.non_color_signature == right.non_color_signature
             {
                 return Some((left.id.clone(), right.id.clone()));
             }
@@ -723,7 +827,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ArtistKind, ArtistProperties, FigureDocument, OverrideRecord, PaletteColor,
+        ArtistKind, ArtistProperties, FigureDocument, MarkerShape, OverrideRecord, PaletteColor,
         resolve_document,
     };
 
@@ -947,18 +1051,140 @@ mod tests {
     }
 
     #[test]
+    fn color_rule_accepts_either_marker_or_dash_as_redundant_encoding() {
+        let mut project = FigureDocument::showcase().project().clone();
+        let families = project
+            .figure
+            .artists
+            .iter()
+            .filter_map(|artist| match &artist.properties {
+                ArtistProperties::Scatter { binding, .. } => Some(binding.data_source_id.clone()),
+                _ => None,
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        assert_eq!(families.len(), 2);
+        let family_by_source = project
+            .data_sources
+            .iter()
+            .map(|source| {
+                (
+                    source.id.clone(),
+                    source.fit.as_ref().map_or_else(
+                        || source.id.clone(),
+                        |fit| fit.parent_data_source_id.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let palette_ids = project
+            .palette
+            .colors
+            .iter()
+            .take(2)
+            .map(|color| color.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(palette_ids.len(), 2);
+        for artist in &mut project.figure.artists {
+            let binding = match &artist.properties {
+                ArtistProperties::Line { binding, .. }
+                | ArtistProperties::Scatter { binding, .. }
+                | ArtistProperties::ErrorBar { binding, .. } => Some(binding),
+                _ => None,
+            };
+            let family_index = binding.and_then(|binding| {
+                family_by_source
+                    .get(&binding.data_source_id)
+                    .and_then(|family| families.iter().position(|candidate| candidate == family))
+            });
+            artist.visible = family_index.is_some();
+            let Some(index) = family_index else {
+                continue;
+            };
+            match &mut artist.properties {
+                ArtistProperties::Line { stroke, .. } => {
+                    stroke.color_id.clone_from(&palette_ids[index]);
+                    stroke.dash_pt.clear();
+                }
+                ArtistProperties::Scatter { marker, .. } => {
+                    marker.color_id.clone_from(&palette_ids[index]);
+                    marker.shape = if index == 0 {
+                        MarkerShape::Circle
+                    } else {
+                        MarkerShape::Square
+                    };
+                }
+                ArtistProperties::ErrorBar { stroke, .. } => {
+                    stroke.color_id.clone_from(&palette_ids[index]);
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(
+            color_only_encoding(&project).severity,
+            CheckSeverity::Information,
+            "different markers must be sufficient even when line styles match"
+        );
+
+        for artist in &mut project.figure.artists {
+            match &mut artist.properties {
+                ArtistProperties::Scatter { marker, .. } if artist.visible => {
+                    marker.shape = MarkerShape::Circle;
+                }
+                ArtistProperties::Line { binding, stroke } if artist.visible => {
+                    let family = &family_by_source[&binding.data_source_id];
+                    let index = families
+                        .iter()
+                        .position(|candidate| candidate == family)
+                        .unwrap();
+                    stroke.dash_pt = if index == 0 {
+                        Vec::new()
+                    } else {
+                        vec![4.0, 2.0]
+                    };
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            color_only_encoding(&project).severity,
+            CheckSeverity::Information,
+            "different dash patterns must be sufficient even when markers match"
+        );
+
+        for artist in &mut project.figure.artists {
+            if artist.visible
+                && let ArtistProperties::Line { stroke, .. } = &mut artist.properties
+            {
+                stroke.dash_pt.clear();
+            }
+        }
+        assert_eq!(
+            color_only_encoding(&project).severity,
+            CheckSeverity::Warning,
+            "matching markers and dash patterns leave colour as the only distinction"
+        );
+    }
+
+    #[test]
     fn semantic_and_palette_rule_fixtures_detect_risks() {
         let mut project = ProjectDocument::fixed_fixture();
         project.palette.colors.push(PaletteColor {
             id: "near-blue".to_owned(),
             rgba: [69, 120, 171, 255],
         });
+        let mut duplicate_source = project.data_sources[0].clone();
+        duplicate_source.id = "fixture-risk-copy".to_owned();
+        duplicate_source.label = "Colour-only risk copy".to_owned();
+        project.data_sources.push(duplicate_source);
         let mut duplicate = project.figure.artists[1].clone();
         duplicate.id = "node-16".to_owned();
         duplicate.kind = ArtistKind::Line;
-        let ArtistProperties::Line { stroke, .. } = &mut duplicate.properties else {
+        let ArtistProperties::Line { binding, stroke } = &mut duplicate.properties else {
             panic!("fixed node-11 must remain a line");
         };
+        binding.data_source_id = "fixture-risk-copy".to_owned();
         stroke.color_id = "near-blue".to_owned();
         project.figure.axes[0].artist_ids.push(duplicate.id.clone());
         project.figure.artists.push(duplicate);

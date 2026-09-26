@@ -35,6 +35,8 @@ sha2 = "=0.10.9"
 instplot-render = { path = "crates/instplot-render" }
 instplot-text = { path = "crates/instplot-text" }
 instplot-ui = { path = "crates/instplot-ui", features = ["publication-stack"] }
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSArray", "NSObject", "NSURL"] }
 
 [profile.release]
 opt-level = "z"

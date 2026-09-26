@@ -169,11 +169,9 @@ pub fn dialog_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(6.0);
 }
 
-pub fn symbol_button(ui: &mut egui::Ui, symbol: &str, greek: bool) -> egui::Response {
+pub fn symbol_button(ui: &mut egui::Ui, symbol: &str, _greek: bool) -> egui::Response {
     let face = if matches!(symbol, "≤" | "≥") {
         "STIXTwoMath-Regular"
-    } else if greek {
-        "TeXGyreHeros-Italic"
     } else {
         "TeXGyreHeros-Regular"
     };

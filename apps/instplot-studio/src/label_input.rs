@@ -338,26 +338,31 @@ fn format_with_mode(nodes: &[LabelNode], minimal: bool) -> Option<String> {
     let mut math = false;
     let mut previous_is_unit = false;
     for node in nodes {
-        let wants_math = matches!(
-            node,
-            LabelNode::Variable(_)
-                | LabelNode::Upright(_)
-                | LabelNode::GreekVariable(_)
-                | LabelNode::Number(_)
-                | LabelNode::DescriptiveSubscript(_)
-                | LabelNode::VariableSubscript(_)
-                | LabelNode::Superscript(_)
-                | LabelNode::Operator(_)
-                | LabelNode::BoldVariable(_)
-        ) && !(previous_is_unit && matches!(node, LabelNode::Superscript(_)))
-            && (!minimal
-                || matches!(
+        let is_unit_exponent = previous_is_unit && matches!(node, LabelNode::Superscript(_));
+        let wants_math = !is_unit_exponent
+            && if minimal {
+                matches!(
                     node,
                     LabelNode::Variable(_)
                         | LabelNode::Upright(_)
+                        | LabelNode::GreekVariable(_)
                         | LabelNode::VariableSubscript(_)
                         | LabelNode::BoldVariable(_)
-                ));
+                ) || matches!(node, LabelNode::Superscript(inner) if script_has_variable(inner))
+            } else {
+                matches!(
+                    node,
+                    LabelNode::Variable(_)
+                        | LabelNode::Upright(_)
+                        | LabelNode::GreekVariable(_)
+                        | LabelNode::Number(_)
+                        | LabelNode::DescriptiveSubscript(_)
+                        | LabelNode::VariableSubscript(_)
+                        | LabelNode::Superscript(_)
+                        | LabelNode::Operator(_)
+                        | LabelNode::BoldVariable(_)
+                )
+            };
         if wants_math != math {
             out.push('$');
             math = wants_math;
@@ -382,7 +387,15 @@ fn format_with_mode(nodes: &[LabelNode], minimal: bool) -> Option<String> {
             }
             LabelNode::Superscript(inner) => {
                 out.push_str("^{");
-                out.push_str(&format_script(inner)?);
+                if math
+                    || inner
+                        .iter()
+                        .any(|node| matches!(node, LabelNode::Upright(_)))
+                {
+                    out.push_str(&format_script(inner)?);
+                } else {
+                    out.push_str(&escape(&display_text(inner)));
+                }
                 out.push('}');
             }
             LabelNode::Unit(s) => out.push_str(&escape(s)),
@@ -397,6 +410,15 @@ fn format_with_mode(nodes: &[LabelNode], minimal: bool) -> Option<String> {
         out.push('$');
     }
     Some(out)
+}
+
+fn script_has_variable(nodes: &[LabelNode]) -> bool {
+    nodes.iter().any(|node| {
+        matches!(
+            node,
+            LabelNode::Variable(_) | LabelNode::GreekVariable(_) | LabelNode::BoldVariable(_)
+        )
+    })
 }
 
 fn format_script(nodes: &[LabelNode]) -> Option<String> {
@@ -447,7 +469,6 @@ impl Parser {
 
     fn sequence(&mut self, mut math: bool, stop: Option<char>) -> Result<Vec<LabelNode>, String> {
         let mut nodes = Vec::new();
-        let mut parenthesized_text = 0_u32;
         while let Some(c) = self.peek() {
             if Some(c) == stop {
                 self.take();
@@ -462,10 +483,7 @@ impl Parser {
                 '*' => return Err("星号需要写成 \\*".to_owned()),
                 '_' | '^' => {
                     self.take();
-                    if !math && parenthesized_text == 0 {
-                        promote_previous_variable(&mut nodes);
-                    }
-                    let script = self.script()?;
+                    let script = self.script(math)?;
                     let inner = script.nodes;
                     if c == '^' {
                         nodes.push(LabelNode::Superscript(inner));
@@ -487,31 +505,24 @@ impl Parser {
                         // Latin and Greek script variables remain italic regardless
                         // of how many letters the script contains.
                         nodes.push(LabelNode::VariableSubscript(inner));
-                    } else if let [LabelNode::Variable(value)] = inner.as_slice()
-                        && value.chars().count() > 1
-                    {
-                        nodes.push(LabelNode::DescriptiveSubscript(vec![LabelNode::Text(
-                            value.clone(),
-                        )]));
                     } else {
-                        nodes.push(LabelNode::VariableSubscript(inner));
+                        nodes.push(LabelNode::DescriptiveSubscript(inner));
                     }
                 }
                 c if unicode_subscript(c).is_some() => {
-                    if !math && parenthesized_text == 0 {
-                        promote_previous_variable(&mut nodes);
-                    }
                     let mut value = String::new();
                     while let Some(mapped) = self.peek().and_then(unicode_subscript) {
                         self.take();
                         value.push(mapped);
                     }
-                    nodes.push(LabelNode::VariableSubscript(vec![LabelNode::Number(value)]));
+                    let inner = vec![LabelNode::Number(value)];
+                    nodes.push(if math {
+                        LabelNode::VariableSubscript(inner)
+                    } else {
+                        LabelNode::DescriptiveSubscript(inner)
+                    });
                 }
                 c if unicode_superscript(c).is_some() => {
-                    if !math && parenthesized_text == 0 {
-                        promote_previous_variable(&mut nodes);
-                    }
                     let mut value = String::new();
                     while let Some(mapped) = self.peek().and_then(unicode_superscript) {
                         self.take();
@@ -530,14 +541,6 @@ impl Parser {
                 '!' if self.chars.get(self.at + 1) == Some(&'=') => {
                     self.at += 2;
                     nodes.push(LabelNode::Operator("≠".to_owned()));
-                }
-                '(' if !math => {
-                    parenthesized_text += 1;
-                    nodes.push(self.atom(math));
-                }
-                ')' if !math => {
-                    parenthesized_text = parenthesized_text.saturating_sub(1);
-                    nodes.push(self.atom(math));
                 }
                 _ => nodes.push(self.atom(math)),
             }
@@ -560,9 +563,6 @@ impl Parser {
                     value.push(self.take().unwrap());
                 }
                 return LabelNode::Number(value);
-            }
-            if is_greek(first) {
-                return LabelNode::GreekVariable(first);
             }
             if is_operator(first) && first != '-' {
                 return LabelNode::Operator(first.to_string());
@@ -602,7 +602,7 @@ impl Parser {
         LabelNode::Text(first.to_string())
     }
 
-    fn command(&mut self, _math: bool) -> Result<LabelNode, String> {
+    fn command(&mut self, math: bool) -> Result<LabelNode, String> {
         self.take(); // backslash
         let Some(c) = self.peek() else {
             return Err("反斜杠后缺少命令".to_owned());
@@ -620,8 +620,10 @@ impl Parser {
             .find(|(_, command)| command.trim_start_matches('\\') == name)
         {
             let c = symbol.chars().next().unwrap();
-            return Ok(if is_greek(c) {
+            return Ok(if is_greek(c) && math {
                 LabelNode::GreekVariable(c)
+            } else if is_greek(c) {
+                LabelNode::Text(symbol.to_string())
             } else {
                 LabelNode::Operator(symbol.to_string())
             });
@@ -632,8 +634,10 @@ impl Parser {
             .map(|(_, symbol)| *symbol);
         if let Some(symbol) = alias {
             let c = symbol.chars().next().unwrap();
-            return Ok(if is_greek(c) {
+            return Ok(if is_greek(c) && math {
                 LabelNode::GreekVariable(c)
+            } else if is_greek(c) {
+                LabelNode::Text(symbol.to_owned())
             } else {
                 LabelNode::Operator(symbol.to_owned())
             });
@@ -696,19 +700,31 @@ impl Parser {
         Err("缺少右花括号 }".to_owned())
     }
 
-    fn script(&mut self) -> Result<ParsedScript, String> {
+    fn script(&mut self, math: bool) -> Result<ParsedScript, String> {
         let explicit_variable = self.script_starts_with_explicit_variable_command();
         let nodes = if self.peek() == Some('{') {
             self.take();
-            let nodes = self.sequence(true, Some('}'))?;
+            let nodes = self.sequence(math, Some('}'))?;
             if nodes.is_empty() {
                 return Err("上下标不能为空".to_owned());
             }
             nodes
         } else if self.peek() == Some('\\') {
-            vec![self.command(true)?]
+            vec![self.command(math)?]
+        } else if !math && self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+            let mut value = String::new();
+            while self.peek().is_some_and(|c| c.is_ascii_alphabetic()) {
+                value.push(self.take().unwrap());
+            }
+            vec![LabelNode::Text(value)]
+        } else if !math && self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            let mut value = String::new();
+            while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '.') {
+                value.push(self.take().unwrap());
+            }
+            vec![LabelNode::Number(value)]
         } else if self.peek().is_some() {
-            vec![self.atom(true)]
+            vec![self.atom(math)]
         } else {
             return Err("上下标缺少内容".to_owned());
         };
@@ -773,18 +789,6 @@ fn unicode_superscript(c: char) -> Option<char> {
         '⁻' => '−',
         _ => return None,
     })
-}
-fn promote_previous_variable(nodes: &mut [LabelNode]) {
-    if let Some(LabelNode::Text(value)) = nodes.last_mut()
-        && value.len() == 1
-        && value
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic())
-    {
-        let variable = std::mem::take(value);
-        *nodes.last_mut().unwrap() = LabelNode::Variable(variable);
-    }
 }
 fn merge_text(nodes: Vec<LabelNode>) -> Vec<LabelNode> {
     let mut merged = Vec::with_capacity(nodes.len());
@@ -896,7 +900,13 @@ mod tests {
         );
         assert_eq!(parse(r"$v_sk$").unwrap(), math);
         assert_eq!(parse(r"$v$_sk").unwrap(), descriptive);
-        assert_eq!(parse(r"v_{\mathit{sk}}").unwrap(), math);
+        assert_eq!(
+            parse(r"v_{\mathit{sk}}").unwrap(),
+            vec![
+                LabelNode::Text("v".into()),
+                LabelNode::VariableSubscript(vec![LabelNode::Variable("sk".into())]),
+            ]
+        );
         assert_eq!(format(&math).as_deref(), Some("$v_{sk}$"));
         assert_eq!(format(&descriptive).as_deref(), Some("$v$_{sk}"));
     }
@@ -906,17 +916,39 @@ mod tests {
         assert_eq!(
             parse("H_0").unwrap(),
             vec![
-                LabelNode::Variable("H".into()),
-                LabelNode::VariableSubscript(vec![LabelNode::Number("0".into())]),
+                LabelNode::Text("H".into()),
+                LabelNode::DescriptiveSubscript(vec![LabelNode::Number("0".into())]),
             ]
         );
         assert_eq!(
             parse(r"H_{\mathrm{DL}}").unwrap(),
             vec![
-                LabelNode::Variable("H".into()),
+                LabelNode::Text("H".into()),
                 LabelNode::DescriptiveSubscript(vec![LabelNode::Text("DL".into())]),
             ]
         );
+        let combined = parse("R_x^y").unwrap();
+        assert_eq!(
+            combined,
+            vec![
+                LabelNode::Text("R".into()),
+                LabelNode::DescriptiveSubscript(vec![LabelNode::Text("x".into())]),
+                LabelNode::Superscript(vec![LabelNode::Text("y".into())]),
+            ]
+        );
+        assert_eq!(format(&combined).as_deref(), Some("R_{x}^{y}"));
+        let math = parse("$R_x^y$").unwrap();
+        assert_eq!(
+            math,
+            vec![
+                LabelNode::Variable("R".into()),
+                LabelNode::VariableSubscript(vec![LabelNode::Variable("x".into())]),
+                LabelNode::Superscript(vec![LabelNode::Variable("y".into())]),
+            ]
+        );
+        assert_eq!(format(&math).as_deref(), Some("$R_{x}^{y}$"));
+        assert_eq!(parse("α").unwrap(), vec![LabelNode::Text("α".into())]);
+        assert_eq!(parse("$α$").unwrap(), vec![LabelNode::GreekVariable('α')]);
     }
 
     #[test]
@@ -937,10 +969,10 @@ mod tests {
             span.text.ends_with("m") && span.style == instplot_text::Style::Upright
         }));
         let pasted = parse("µ₀H (A m⁻²)").unwrap();
-        assert_eq!(pasted[0], LabelNode::GreekVariable('μ'));
+        assert_eq!(pasted[0], LabelNode::Text("μ".to_owned()));
         assert_eq!(
             pasted[1],
-            LabelNode::VariableSubscript(vec![LabelNode::Number("0".to_owned())])
+            LabelNode::DescriptiveSubscript(vec![LabelNode::Number("0".to_owned())])
         );
         assert!(pasted.iter().any(|node| {
             matches!(node, LabelNode::Superscript(inner) if inner == &vec![LabelNode::Number("−2".to_owned())])
@@ -1153,9 +1185,11 @@ mod tests {
         let cases = [
             (r"$H$", "H", Style::Italic, 1.0, 0),
             (r"\mathrm{H}", "H", Style::Upright, 1.0, 0),
-            (r"\sigma", "σ", Style::Italic, 1.0, 0),
+            (r"\sigma", "σ", Style::Upright, 1.0, 0),
+            (r"$\sigma$", "σ", Style::Italic, 1.0, 0),
             (r"H_0", "0", Style::Upright, 0.72, 1),
-            (r"H_z", "z", Style::Italic, 0.72, 1),
+            (r"H_z", "z", Style::Upright, 0.72, 1),
+            (r"$H_z$", "z", Style::Italic, 0.72, 1),
             (r"H_{\mathrm{DL}}", "DL", Style::Upright, 0.72, 1),
             (r"$v_sk$", "sk", Style::Italic, 0.72, 1),
             (r"$v$_sk", "sk", Style::Upright, 0.72, 1),

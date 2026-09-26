@@ -5,7 +5,10 @@ use instplot_io::ImportError;
 #[cfg(test)]
 use instplot_io::read_data_file;
 
-use crate::{DataImporter, DataSourceKind, DataSourcePayload, ImportOutcome, ProjectDocument};
+use crate::{
+    DataImporter, DataSourceKind, DataSourceOrigin, DataSourcePayload, ImportOutcome,
+    ProjectDocument,
+};
 
 #[derive(Clone, Default)]
 pub struct StudioSession {
@@ -70,10 +73,17 @@ fn dataset_from_record(source: &crate::DataSourceRecord) -> Result<DataSet, Stri
             alive,
             ..
         } => Ok(DataSet {
-            source: source.origin_path.as_ref().map_or_else(
-                || PathBuf::from(format!("embedded://{}", source.id)),
-                PathBuf::from,
-            ),
+            source: if matches!(
+                source.origin,
+                DataSourceOrigin::Manual | DataSourceOrigin::LegacyManual
+            ) {
+                PathBuf::from(format!("manual-data/{}", source.label))
+            } else {
+                source.origin_path.as_ref().map_or_else(
+                    || PathBuf::from(format!("embedded://{}", source.id)),
+                    PathBuf::from,
+                )
+            },
             label: Some(source.label.clone()),
             kind,
             plot_id: source.id.clone(),

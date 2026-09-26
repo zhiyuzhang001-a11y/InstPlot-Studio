@@ -97,9 +97,10 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
         }
         StartupCommand::OpenHandoff(path) => {
             let imported = import_handoff(&path, HandoffCleanup::DeleteAfterImport)?;
-            launch_gui(Some(imported)).map_err(Into::into)
+            launch_gui(Some(imported), None).map_err(Into::into)
         }
-        StartupCommand::Gui => launch_gui(None).map_err(Into::into),
+        StartupCommand::OpenProject(path) => launch_gui(None, Some(path)).map_err(Into::into),
+        StartupCommand::Gui => launch_gui(None, None).map_err(Into::into),
     }
 }
 
@@ -115,6 +116,7 @@ enum StartupCommand {
     CreateHandoff { source: PathBuf, output: PathBuf },
     ImportHandoff { source: PathBuf, project: PathBuf },
     OpenHandoff(PathBuf),
+    OpenProject(PathBuf),
 }
 
 impl StartupCommand {
@@ -141,6 +143,14 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--open-handoff" => {
                 Ok(Self::OpenHandoff(path.into()))
             }
+            (Some(path), None, None)
+                if PathBuf::from(&path)
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("instplot")) =>
+            {
+                Ok(Self::OpenProject(path.into()))
+            }
             (Some(flag), Some(source), Some(output)) if flag == "--create-handoff" => {
                 Ok(Self::CreateHandoff {
                     source: source.into(),
@@ -160,8 +170,10 @@ impl StartupCommand {
     }
 }
 
-fn launch_gui(startup: Option<HandoffImport>) -> eframe::Result {
+fn launch_gui(startup: Option<HandoffImport>, project_path: Option<PathBuf>) -> eframe::Result {
     let started = Instant::now();
+    #[cfg(target_os = "macos")]
+    let macos_open_files = crate::macos_open_files::MacOpenFiles::start();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(PRODUCT_NAME)
@@ -173,7 +185,18 @@ fn launch_gui(startup: Option<HandoffImport>) -> eframe::Result {
     eframe::run_native(
         "instplot-studio",
         options,
-        Box::new(move |creation| Ok(Box::new(StudioApp::new(creation, started, startup)))),
+        Box::new(move |creation| {
+            let mut app = StudioApp::new(creation, started, startup);
+            #[cfg(target_os = "macos")]
+            {
+                macos_open_files.finish_install(creation.egui_ctx.clone());
+                app.macos_open_files = Some(macos_open_files);
+            }
+            if let Some(path) = project_path {
+                app.open_project_path(path);
+            }
+            Ok(Box::new(app))
+        }),
     )
 }
 
@@ -235,6 +258,10 @@ mod tests {
             ])
             .unwrap(),
             StartupCommand::OpenHandoff(PathBuf::from("transfer.instplot-handoff"))
+        );
+        assert_eq!(
+            StartupCommand::parse([OsString::from("figure.instplot")]).unwrap(),
+            StartupCommand::OpenProject(PathBuf::from("figure.instplot"))
         );
         assert_eq!(
             StartupCommand::parse([

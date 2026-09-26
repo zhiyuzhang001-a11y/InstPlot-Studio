@@ -24,5 +24,9 @@ instplot-ui.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { workspace = true, features = ["xdg-portal"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation.workspace = true
+
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 rfd.workspace = true

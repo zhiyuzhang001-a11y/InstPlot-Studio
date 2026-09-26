@@ -81,6 +81,10 @@ impl StudioApp {
             show_inspector: false,
             show_palette: false,
             show_messages: false,
+            focus_inspector: false,
+            focus_palette: false,
+            focus_manual_data: false,
+            context_editor_focus_target: None,
             context_editor_targets: Vec::new(),
             active_artist_drag: None,
             messages: Vec::new(),
@@ -90,6 +94,8 @@ impl StudioApp {
             marker_interval_for_all: false,
             marker_fill_for_all: false,
             language,
+            #[cfg(target_os = "macos")]
+            macos_open_files: None,
             first_frame: true,
             started,
         }
@@ -195,6 +201,29 @@ impl StudioApp {
         }
         debug_assert!(!imported_paths.is_empty());
     }
+
+    pub(super) fn open_paths(&mut self, paths: Vec<PathBuf>) {
+        let mut project_paths = paths
+            .iter()
+            .filter(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("instplot"))
+            })
+            .cloned();
+        if let Some(project_path) = project_paths.next() {
+            if project_paths.next().is_some() {
+                self.push_warning(
+                    "open-project-multiple",
+                    "一次只能打开一个 InstPlot 项目，已打开第一个项目。".to_owned(),
+                );
+                self.show_messages = true;
+            }
+            self.request_replacement(PendingAction::OpenProjectPath(project_path));
+            return;
+        }
+        self.load_data_paths(paths);
+    }
     pub(super) fn open_lite_handoff(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .set_title(self.language.text(Text::OpenLiteDialog))
@@ -260,7 +289,7 @@ impl StudioApp {
         self.open_project_path(path);
     }
 
-    fn open_project_path(&mut self, path: PathBuf) {
+    pub(super) fn open_project_path(&mut self, path: PathBuf) {
         let state = AppTransactionState {
             document: &self.document,
             session: &self.session,
@@ -287,6 +316,8 @@ impl StudioApp {
                 self.selected_canvas_role = None;
                 self.context_editor_targets.clear();
                 self.selected_dataset = None;
+                self.show_layers = !self.session.datasets().is_empty();
+                self.first_frame = true;
                 self.sync_axis_editors();
                 self.messages.clear();
                 for (index, warning) in warnings.into_iter().enumerate() {
@@ -376,7 +407,7 @@ impl StudioApp {
                 .add_filter("文本数据", &["txt"])
                 .add_filter("DAT 数据", &["dat"])
                 .add_filter("Excel 工作簿", &["xlsx"])
-                .set_file_name("手动数据.csv")
+                .set_file_name("Data.csv")
                 .save_file();
             let Some(selection) = selection else {
                 return false;
@@ -486,7 +517,7 @@ impl StudioApp {
             .add_filter("文本数据", &["txt"])
             .add_filter("DAT 数据", &["dat"])
             .add_filter("Excel 工作簿", &["xlsx"])
-            .set_file_name("手动数据.csv")
+            .set_file_name("Data.csv")
             .save_file();
         let Some(selection) = selection else {
             return;
@@ -842,6 +873,7 @@ impl StudioApp {
             PendingAction::NewProject => self.new_project(),
             PendingAction::OpenLiteHandoff => self.open_lite_handoff(),
             PendingAction::OpenProject => self.open_project(),
+            PendingAction::OpenProjectPath(path) => self.open_project_path(path),
             PendingAction::Exit => {
                 // The close command is issued by the confirmation dialog, which has the context.
             }
@@ -849,7 +881,7 @@ impl StudioApp {
     }
 
     pub(super) fn unsaved_dialog(&mut self, context: &egui::Context) {
-        let Some(action) = self.pending_action else {
+        let Some(action) = self.pending_action.clone() else {
             return;
         };
         egui::Window::new(self.language.text(Text::UnsavedChanges))
@@ -871,7 +903,7 @@ impl StudioApp {
                             context.send_viewport_cmd(egui::ViewportCommand::Close);
                             self.pending_action = None;
                         } else {
-                            self.perform_action(action);
+                            self.perform_action(action.clone());
                         }
                     }
                     if ui.button(self.language.text(Text::Discard)).clicked() {
@@ -1587,8 +1619,19 @@ impl StudioApp {
 
     pub(super) fn open_context_editor(&mut self, target: CanvasHit) {
         if !self.context_editor_targets.contains(&target) {
-            self.context_editor_targets.push(target);
+            self.context_editor_targets.push(target.clone());
         }
+        self.context_editor_focus_target = Some(target);
+    }
+
+    pub(super) fn request_palette_window(&mut self) {
+        self.show_palette = true;
+        self.focus_palette = true;
+    }
+
+    pub(super) fn request_publication_window(&mut self) {
+        self.show_inspector = true;
+        self.focus_inspector = true;
     }
 
     pub(super) fn annotation_artist_for_label(&self, label_id: &str) -> Option<String> {
@@ -1670,11 +1713,16 @@ impl StudioApp {
         let mut submit = false;
         let mut cancel = false;
         let title = self.language.text(Text::EnterData);
+        let embedded_id = egui::Id::new("manual-data-window");
+        let viewport_id = egui::ViewportId::from_hash_of("manual-data-viewport");
+        if std::mem::take(&mut self.focus_manual_data) {
+            instplot_ui::ToolWindowPolicy::raise(context, viewport_id, embedded_id);
+        }
         let window_spec = instplot_ui::ToolWindowSpec::new([760.0, 640.0], [560.0, 420.0]);
         if instplot_ui::ToolWindowPolicy::mode(context) == instplot_ui::ToolWindowMode::Embedded {
             let mut open = true;
             window_spec
-                .embedded(title, egui::Id::new("manual-data-window"))
+                .embedded(title, embedded_id)
                 .open(&mut open)
                 .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
                 .show(context, |ui| {
@@ -1684,7 +1732,6 @@ impl StudioApp {
                 cancel = true;
             }
         } else {
-            let viewport_id = egui::ViewportId::from_hash_of("manual-data-viewport");
             let builder = window_spec.viewport(title);
             let close_requested =
                 context.show_viewport_immediate(viewport_id, builder, |ui, _class| {
@@ -1719,6 +1766,10 @@ impl StudioApp {
     }
 
     pub(super) fn prepare_manual_data_window(&mut self) {
+        if self.manual_data.open {
+            self.focus_manual_data = true;
+            return;
+        }
         let groups = self
             .document
             .project()
@@ -1735,6 +1786,7 @@ impl StudioApp {
         self.manual_data.editing_group_id = None;
         self.manual_data.error = None;
         self.manual_data.open = true;
+        self.focus_manual_data = true;
     }
 
     pub(super) fn manual_data_fields(
@@ -2457,11 +2509,16 @@ impl StudioApp {
         } else {
             360.0
         };
+        let embedded_id = egui::Id::new("publication-check-window");
+        let viewport_id = egui::ViewportId::from_hash_of("publication-check-viewport");
+        if std::mem::take(&mut self.focus_inspector) {
+            instplot_ui::ToolWindowPolicy::raise(context, viewport_id, embedded_id);
+        }
         let window_spec = instplot_ui::ToolWindowSpec::new([460.0, compact_height], [360.0, 140.0]);
         if instplot_ui::ToolWindowPolicy::mode(context) == instplot_ui::ToolWindowMode::Embedded {
             let mut open = self.show_inspector;
             window_spec
-                .embedded(title, egui::Id::new("publication-check-window"))
+                .embedded(title, embedded_id)
                 .open(&mut open)
                 .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
                 .show(context, |ui| {
@@ -2470,7 +2527,6 @@ impl StudioApp {
             self.show_inspector = open;
             return;
         }
-        let viewport_id = egui::ViewportId::from_hash_of("publication-check-viewport");
         let builder = window_spec.viewport(title);
         let close_requested =
             context.show_viewport_immediate(viewport_id, builder, |ui, _class| {
@@ -2497,12 +2553,17 @@ impl StudioApp {
             return;
         }
         let title = self.language.text(Text::ColorScheme);
+        let embedded_id = egui::Id::new("palette-window");
+        let viewport_id = egui::ViewportId::from_hash_of("palette-viewport");
+        if std::mem::take(&mut self.focus_palette) {
+            instplot_ui::ToolWindowPolicy::raise(context, viewport_id, embedded_id);
+        }
         let window_spec = instplot_ui::ToolWindowSpec::new([510.0, 430.0], [420.0, 300.0]);
         let mut requested_palette = None;
         if instplot_ui::ToolWindowPolicy::mode(context) == instplot_ui::ToolWindowMode::Embedded {
             let mut open = self.show_palette;
             window_spec
-                .embedded(title, egui::Id::new("palette-window"))
+                .embedded(title, embedded_id)
                 .open(&mut open)
                 .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
                 .show(context, |ui| {
@@ -2512,7 +2573,6 @@ impl StudioApp {
                 });
             self.show_palette = open;
         } else {
-            let viewport_id = egui::ViewportId::from_hash_of("palette-viewport");
             let builder = window_spec.viewport(title);
             let close_requested =
                 context.show_viewport_immediate(viewport_id, builder, |ui, _class| {
@@ -2674,10 +2734,12 @@ impl StudioApp {
         let targets = self.context_editor_targets.clone();
         let mut remaining = Vec::with_capacity(targets.len());
         for (index, target) in targets.into_iter().enumerate() {
-            if self.context_editor_window(context, &target, index) {
+            let focus_requested = self.context_editor_focus_target.as_ref() == Some(&target);
+            if self.context_editor_window(context, &target, index, focus_requested) {
                 remaining.push(target);
             }
         }
+        self.context_editor_focus_target = None;
         self.context_editor_targets = remaining;
     }
 
@@ -2686,6 +2748,7 @@ impl StudioApp {
         context: &egui::Context,
         target: &CanvasHit,
         index: usize,
+        focus_requested: bool,
     ) -> bool {
         let selected_id = target.project_id.clone();
         let selected_role = Some(target.role);
@@ -2729,6 +2792,10 @@ impl StudioApp {
         };
         let window_key = format!("context-object-editor-{selected_id}-{:?}", target.role);
         let viewport_id = egui::ViewportId::from_hash_of(&window_key);
+        let embedded_id = egui::Id::new(("fullscreen-context-object-editor", &window_key));
+        if focus_requested {
+            instplot_ui::ToolWindowPolicy::raise(context, viewport_id, embedded_id);
+        }
         let selected_record = self.document.artist_record(&selected_id);
         let editor_width = match &selected_record {
             Some(record) if matches!(record.properties, ArtistProperties::Legend { .. }) => 400.0,
@@ -2784,10 +2851,7 @@ impl StudioApp {
             let mut open = true;
             let available = context.content_rect();
             window_spec
-                .embedded(
-                    title.clone(),
-                    egui::Id::new(("fullscreen-context-object-editor", &window_key)),
-                )
+                .embedded(title.clone(), embedded_id)
                 .open(&mut open)
                 .default_pos(egui::pos2(
                     (available.right() - editor_width - 30.0).max(24.0),
@@ -3718,14 +3782,14 @@ impl StudioApp {
             let button_width = 64.0;
             let total_width = button_width * 4.0 + ui.spacing().item_spacing.x * 3.0;
             ui.add_space(((ui.available_width() - total_width) * 0.5).max(0.0));
-            for (caption, snippet, inside) in [
-                ("斜体", "$$", true),
-                ("下标", "_{}", true),
-                ("上标", "^{}", true),
-                ("正体", "\\mathrm{}", true),
+            for (caption, snippet, inside, help) in [
+                ("斜体", "$$", true, "用 $…$ 标记斜体变量"),
+                ("下标", "_{}", true, "插入下标 _{…}"),
+                ("上标", "^{}", true, "插入上标 ^{…}"),
+                ("正体", "\\mathrm{}", true, "在数学区域内强制使用正体"),
             ] {
                 if studio_label_format_button(ui, caption)
-                    .on_hover_text(snippet)
+                    .on_hover_text(help)
                     .clicked()
                 {
                     picked = Some((snippet.to_owned(), inside));
@@ -3738,7 +3802,7 @@ impl StudioApp {
             let total_width = symbol_width + help_width + ui.spacing().item_spacing.x;
             ui.add_space(((ui.available_width() - total_width) * 0.5).max(0.0));
             let symbol_button = egui::Button::new(
-                egui::RichText::new("数学符号与希腊变量")
+                egui::RichText::new("数学符号与希腊字母")
                     .size(16.0)
                     .line_height(Some(20.0)),
             )
@@ -3749,9 +3813,9 @@ impl StudioApp {
                     .max_height(390.0)
                     .show(ui, |ui| {
                         for (heading, range) in [
-                            ("希腊变量 · 小写与变体", 0..label_input::GREEK_LOWER_END),
+                            ("希腊字母 · 小写与变体", 0..label_input::GREEK_LOWER_END),
                             (
-                                "希腊变量 · 大写",
+                                "希腊字母 · 大写",
                                 label_input::GREEK_LOWER_END..label_input::GREEK_UPPER_END,
                             ),
                             (
@@ -3794,14 +3858,15 @@ impl StudioApp {
             )
             .min_size(egui::vec2(help_width, 40.0));
             egui::containers::menu::MenuButton::from_button(help_button).ui(ui, |ui| {
-                ui.label("普通文字、数字和单位直接输入，不加 $");
+                ui.label("普通区域一律正体；拉丁字母和希腊字母可直接输入");
+                ui.label("斜体变量写在一对 $...$ 内，例如 $R$、$α$、$R_x^y$");
                 ui.label("比较符号：<=、>=、!=，或直接输入 ≤、≥、≠");
-                ui.label("下标：H_0、H_z、H_{DL}；上标：10^{-3}");
-                ui.label("数学下标：$v_sk$（或 $v_{sk}$）中 v、s、k 均为斜体变量");
-                ui.label("描述下标：$v$_sk（或 $v_{\\mathrm{sk}}$）中 sk 为正体");
+                ui.label("正体上下标：R_x^y；组合上下标会排在同一基字符旁");
+                ui.label("数学上下标：$R_x^y$ 中 R、x、y 均为斜体变量");
+                ui.label("数学区内强制正体：$R_{\\mathrm{eff}}$ 或使用“正体”按钮");
                 ui.label("符号可点选、粘贴，或输入 \\sigma、\\sum、<=");
                 ui.label("星号必须转义：输入 \\* 可显示 *");
-                ui.label("斜体变量可用“斜体”按钮，也可直接输入 $T$ 这样的 LaTeX。");
+                ui.label("“斜体”按钮会给所选内容加上一对 $；普通文字不需要 $。");
             });
         });
         if let Some((snippet, inside)) = picked {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use instplot_render::TextAnchor;
 use instplot_render::{Color, DisplayItem, DisplayList, NodeId};
-use instplot_text::{FontMetadata, Style, font_metadata};
+use instplot_text::{FontMetadata, SpanFlow, Style, font_metadata};
 use parley::fontique::{Blob, FontInfoOverride};
 use parley::{FontContext, FontFamily, FontStyle, FontWeight, LayoutContext, StyleProperty};
 
@@ -213,6 +213,59 @@ pub fn resolve_with_resources(
     }
 }
 
+#[derive(Default)]
+struct FlowCursor {
+    cursor: f32,
+    script_group: Option<u32>,
+    subscript_advance: f32,
+    superscript_advance: f32,
+}
+
+impl FlowCursor {
+    fn place(&mut self, flow: SpanFlow, advance: f32) -> f32 {
+        match flow {
+            SpanFlow::Inline => {
+                self.finish_script_group();
+                let start = self.cursor;
+                self.cursor += advance;
+                start
+            }
+            SpanFlow::Subscript(group) => {
+                self.start_script_group(group);
+                let start = self.cursor + self.subscript_advance;
+                self.subscript_advance += advance;
+                start
+            }
+            SpanFlow::Superscript(group) => {
+                self.start_script_group(group);
+                let start = self.cursor + self.superscript_advance;
+                self.superscript_advance += advance;
+                start
+            }
+        }
+    }
+
+    fn start_script_group(&mut self, group: u32) {
+        if self.script_group != Some(group) {
+            self.finish_script_group();
+            self.script_group = Some(group);
+        }
+    }
+
+    fn finish_script_group(&mut self) {
+        if self.script_group.take().is_some() {
+            self.cursor += self.subscript_advance.max(self.superscript_advance);
+            self.subscript_advance = 0.0;
+            self.superscript_advance = 0.0;
+        }
+    }
+
+    fn finish(mut self) -> f32 {
+        self.finish_script_group();
+        self.cursor
+    }
+}
+
 fn shape_text(
     source: &instplot_render::GlyphRun,
     font_context: &mut FontContext,
@@ -221,7 +274,7 @@ fn shape_text(
     let size = source.size.get() as f32;
     let text = source.label.normalized_text();
     let mut runs = Vec::new();
-    let mut cursor_x = 0.0_f32;
+    let mut flow_cursor = FlowCursor::default();
     let mut byte_offset = 0_usize;
     for span in source.label.spans() {
         let font_size = size * span.scale;
@@ -230,12 +283,13 @@ fn shape_text(
             let face = ttf_parser::Face::parse(REGULAR, 0).expect("valid bundled regular face");
             let glyph_id = face.glyph_index(' ').expect("bundled space glyph").0.into();
             let advance = size * 0.2;
+            let start_x = flow_cursor.place(span.flow, advance);
             let data = Arc::new(REGULAR.to_vec());
             runs.push(ResolvedRun {
                 font_data: data.clone(),
                 font_index: 0,
                 font: font_metadata(data.as_slice(), 0),
-                start_x: cursor_x,
+                start_x,
                 baseline_shift: span.baseline_shift_em * size,
                 font_size,
                 glyphs: vec![ResolvedGlyph {
@@ -246,7 +300,6 @@ fn shape_text(
                     y_offset: 0.0,
                 }],
             });
-            cursor_x += advance;
             byte_offset += span.text.len();
             continue;
         }
@@ -297,20 +350,21 @@ fn shape_text(
                     }
                 }
                 let advance = glyphs.iter().map(|glyph| glyph.advance).sum::<f32>();
+                let start_x = flow_cursor.place(span.flow, advance);
                 runs.push(ResolvedRun {
                     font_data: data.clone(),
                     font_index: font.index,
                     font: font_metadata(data.as_slice(), font.index),
-                    start_x: cursor_x,
+                    start_x,
                     baseline_shift: span.baseline_shift_em * size,
                     font_size,
                     glyphs,
                 });
-                cursor_x += advance;
             }
         }
         byte_offset += span.text.len();
     }
+    let cursor_x = flow_cursor.finish();
     let anchor_offset = match source.anchor {
         TextAnchor::Start => 0.0,
         TextAnchor::Middle => -cursor_x / 2.0,
@@ -329,5 +383,20 @@ fn shape_text(
         color: source.color,
         rotation_degrees: source.rotation_degrees as f32,
         runs,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combined_scripts_share_a_start_and_advance_by_the_wider_branch() {
+        let mut cursor = FlowCursor::default();
+        assert_eq!(cursor.place(SpanFlow::Inline, 10.0), 0.0);
+        assert_eq!(cursor.place(SpanFlow::Subscript(0), 4.0), 10.0);
+        assert_eq!(cursor.place(SpanFlow::Superscript(0), 6.0), 10.0);
+        assert_eq!(cursor.place(SpanFlow::Inline, 3.0), 16.0);
+        assert_eq!(cursor.finish(), 19.0);
     }
 }

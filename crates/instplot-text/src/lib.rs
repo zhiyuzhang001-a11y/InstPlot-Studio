@@ -24,6 +24,13 @@ pub enum Style {
     BoldItalic,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpanFlow {
+    Inline,
+    Subscript(u32),
+    Superscript(u32),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub text: String,
@@ -31,6 +38,7 @@ pub struct Span {
     pub scale: f32,
     pub baseline_shift_em: f32,
     pub is_unit_separator: bool,
+    pub flow: SpanFlow,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,6 +179,7 @@ impl Label {
     pub fn spans(&self) -> Vec<Span> {
         let mut spans = Vec::new();
         self.push_spans(&mut spans, None, 1.0, 0.0);
+        mark_combined_scripts(&mut spans);
         spans
     }
 
@@ -217,6 +226,7 @@ impl Label {
                 scale,
                 baseline_shift_em: shift,
                 is_unit_separator: true,
+                flow: SpanFlow::Inline,
             }),
             Self::DescriptiveSubscript(body) => {
                 body.push_spans(spans, Some(Style::Upright), scale * 0.72, shift + 0.22)
@@ -278,6 +288,7 @@ fn push_run(spans: &mut Vec<Span>, text: &str, style: Style, scale: f32, baselin
         scale,
         baseline_shift_em,
         is_unit_separator: false,
+        flow: SpanFlow::Inline,
     };
     if let Some(previous) = spans.last_mut()
         && !previous.is_unit_separator
@@ -290,6 +301,34 @@ fn push_run(spans: &mut Vec<Span>, text: &str, style: Style, scale: f32, baselin
         previous.text.push_str(&next.text);
     } else {
         spans.push(next);
+    }
+}
+
+fn mark_combined_scripts(spans: &mut [Span]) {
+    let mut at = 0;
+    let mut group = 0_u32;
+    while at < spans.len() {
+        if spans[at].baseline_shift_em == 0.0 {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < spans.len() && spans[at].baseline_shift_em != 0.0 {
+            at += 1;
+        }
+        let block = &mut spans[start..at];
+        let has_subscript = block.iter().any(|span| span.baseline_shift_em > 0.0);
+        let has_superscript = block.iter().any(|span| span.baseline_shift_em < 0.0);
+        if has_subscript && has_superscript {
+            for span in block {
+                span.flow = if span.baseline_shift_em > 0.0 {
+                    SpanFlow::Subscript(group)
+                } else {
+                    SpanFlow::Superscript(group)
+                };
+            }
+            group += 1;
+        }
     }
 }
 
@@ -373,6 +412,21 @@ mod tests {
         assert!(spans[1].baseline_shift_em > 0.0);
         assert_eq!(spans[3].style, Style::Italic);
         assert!(spans[3].baseline_shift_em > 0.0);
+    }
+
+    #[test]
+    fn adjacent_subscript_and_superscript_share_one_horizontal_column() {
+        let label = Label::Group(vec![
+            Label::Variable("R".into()),
+            Label::VariableSubscript(Box::new(Label::Variable("x".into()))),
+            Label::Superscript(Box::new(Label::Variable("y".into()))),
+            Label::Text(" next".into()),
+        ]);
+        let spans = label.spans();
+        assert_eq!(spans[0].flow, SpanFlow::Inline);
+        assert_eq!(spans[1].flow, SpanFlow::Subscript(0));
+        assert_eq!(spans[2].flow, SpanFlow::Superscript(0));
+        assert_eq!(spans[3].flow, SpanFlow::Inline);
     }
 
     #[test]

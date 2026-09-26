@@ -279,7 +279,7 @@ impl ManualDataGroupInput {
     pub fn new(index: usize) -> Self {
         Self {
             group_id: format!("manual-group-{index}"),
-            source_name: format!("手动数据 {index}"),
+            source_name: format!("Data {index}"),
             x: ManualAxisInput::new("X"),
             y: ManualAxisInput::new("Y"),
             error_statistic: ErrorStatistic::StandardDeviation,
@@ -415,8 +415,10 @@ fn parse_manual_group(
             }
         }
     }
-    let source_name = nonempty(&input.source_name, &format!("手动数据 {index}"));
-    let source = PathBuf::from(format!("manual-data/{source_name}.txt"));
+    let source_name = nonempty(&input.source_name, &format!("Data {index}"));
+    // This is a stable virtual identity, not a claim about the eventual managed
+    // disk format. Keep the sidebar title equal to the data-group name.
+    let source = PathBuf::from(format!("manual-data/{source_name}"));
     let plot_id = input.group_id.clone();
     let mut series = ParsedManualSeries {
         label: source_name.clone(),
@@ -645,6 +647,22 @@ mod tests {
         for text in ["1\t2\n3", "1,2,3", "1;2;3", "1 2 3"] {
             assert_eq!(parse_numeric_column(text).unwrap(), vec![1.0, 2.0, 3.0]);
         }
+    }
+
+    #[test]
+    fn manual_groups_use_export_safe_english_default_names() {
+        assert_eq!(ManualDataGroupInput::new(3).source_name, "Data 3");
+        let parsed = parse_manual_data(&ManualDataInput {
+            groups: vec![group(
+                "manual-default-name",
+                "",
+                axis("X", &["1 2"]),
+                axis("Y", &["3 4"]),
+            )],
+        })
+        .unwrap();
+        assert_eq!(parsed.groups[0].series.label, "Data 1");
+        assert_eq!(parsed.groups[0].dataset.label.as_deref(), Some("Data 1"));
     }
 
     #[test]

@@ -49,6 +49,10 @@ pub(super) struct StudioApp {
     pub(super) show_inspector: bool,
     pub(super) show_palette: bool,
     pub(super) show_messages: bool,
+    pub(super) focus_inspector: bool,
+    pub(super) focus_palette: bool,
+    pub(super) focus_manual_data: bool,
+    pub(super) context_editor_focus_target: Option<CanvasHit>,
     pub(super) context_editor_targets: Vec<CanvasHit>,
     pub(super) active_artist_drag: Option<ArtistDrag>,
     pub(super) messages: Vec<AppMessage>,
@@ -58,15 +62,18 @@ pub(super) struct StudioApp {
     pub(super) marker_interval_for_all: bool,
     pub(super) marker_fill_for_all: bool,
     pub(super) language: UiLanguage,
+    #[cfg(target_os = "macos")]
+    pub(super) macos_open_files: Option<crate::macos_open_files::MacOpenFiles>,
     pub(super) first_frame: bool,
     pub(super) started: Instant,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PendingAction {
     NewProject,
     OpenLiteHandoff,
     OpenProject,
+    OpenProjectPath(PathBuf),
     Exit,
 }
 

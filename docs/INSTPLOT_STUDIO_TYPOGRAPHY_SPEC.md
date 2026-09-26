@@ -128,7 +128,7 @@ mT  T  K  A  V  s  Hz  Ω  μm  nm
 H_DL  K_eff  M_sat  θ_SH  R_AHE
 ```
 
-其中 `DL`、`eff`、`sat`、`SH`、`AHE` 均为描述性下标；例如 `H_DL` 的 `H` 为 Italic，`DL` 为 Regular subscript。
+其中 `DL`、`eff`、`sat`、`SH`、`AHE` 均为描述性下标。输入 `$H_{\mathrm{DL}}$` 时，`H` 为 Italic，`DL` 为 Regular subscript；输入 `H_DL` 时两者均为 Regular。
 
 ### 4.7 变量下标
 
@@ -140,17 +140,19 @@ H_x  H_y  M_z  J_c
 
 解析器不得只按下标长度猜测语义；Label AST 必须明确区分 `DescriptiveSubscript` 与 `VariableSubscript`。自动解析无法可靠判断时，应采用显式语义输入或给出可编辑的默认结果。
 
-输入层以数学分隔符作为明确的语义边界：`$v_sk$`（或 `$v_{sk}$`）中的
-`v`、`s`、`k` 均为数学变量并使用 Italic；`$v$_sk`（或 `$v$_{sk}`）将数学变量 `v` 与数学区外的描述性
-下标 `sk` 分开，后者使用 Regular。`$v_{\mathrm{sk}}$` 是在数学区内显式
-指定描述性正体的等价写法。数字下标在两种模式下都保持 Regular。
+输入层以数学分隔符作为唯一的默认样式边界：`$v_sk$`（或 `$v_{sk}$`）中的
+`v`、`s`、`k` 均为数学变量并使用 Italic；`v_sk` 中三者均使用 Regular；`$v$_sk`
+（或 `$v$_{sk}`）将数学变量 `v` 与数学区外的正体下标 `sk` 分开。
+`$v_{\mathrm{sk}}$` 是在数学区内显式指定描述性正体的等价写法。
+希腊字母遵守相同边界：普通区中的 `α`/`\alpha` 为 Regular，`$α$`/`$\alpha$` 为 Italic。
+数字下标在两种模式下都保持 Regular。
 
 ### 4.8 上标
 
 上标继承其内容的语义样式，并缩小字号、上移基线：
 
 - 数值指数及其负号使用 Regular：`m⁻²`、`10⁻³`；
-- 变量指数使用 Italic：`xⁿ` 中 `n` 为 Italic；
+- 变量指数只在数学区内使用 Italic：`$x^n$` 中 `n` 为 Italic，`x^n` 中两者均为 Regular；
 - 单位指数始终 upright。
 
 V1 必须使用布局信息实现上下标，不得要求用另一字体伪造完整标签。可以接受 Unicode 上下标输入，但内部应规范化为相同的语义布局模型。

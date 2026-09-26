@@ -773,7 +773,7 @@ fn manual_repeated_measurements_replace_demo_and_create_mean_error_series() {
 
     let groups = data_navigation_groups(app.session.datasets(), UiLanguage::Chinese);
     assert_eq!(groups.len(), 1);
-    assert!(groups[0].title.contains("Repeated trial"));
+    assert_eq!(groups[0].title, "Repeated trial");
     assert_eq!(groups[0].items.len(), 1);
 
     let ids = app
@@ -801,7 +801,7 @@ fn manual_repeated_measurements_replace_demo_and_create_mean_error_series() {
     );
     let groups = data_navigation_groups(app.session.datasets(), UiLanguage::Chinese);
     assert_eq!(groups.len(), 1);
-    assert!(groups[0].title.contains("Repeated trial after clear"));
+    assert_eq!(groups[0].title, "Repeated trial after clear");
 }
 
 #[test]
@@ -927,6 +927,10 @@ fn saved_manual_group_reopens_read_only_and_updates_in_place() {
         }],
     };
     app.insert_manual_data().unwrap();
+    assert_eq!(
+        data_navigation_groups(app.session.datasets(), UiLanguage::Chinese)[0].title,
+        "Editable"
+    );
     let original_styles = app
         .document
         .project()
@@ -971,6 +975,56 @@ fn saved_manual_group_reopens_read_only_and_updates_in_place() {
         .map(|artist| artist.id.clone())
         .collect::<BTreeSet<_>>();
     assert_eq!(updated_styles, original_styles);
+    let (reopened_session, warnings) = StudioSession::from_project(app.document.project());
+    assert!(warnings.is_empty());
+    assert_eq!(
+        data_navigation_groups(reopened_session.datasets(), UiLanguage::Chinese)[0].title,
+        "Edited"
+    );
+}
+
+#[test]
+fn opening_saved_manual_project_restores_data_sidebar() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-sidebar".to_owned(),
+            source_name: "Repeat QA".to_owned(),
+            x: ManualAxisInput {
+                name: "Field".to_owned(),
+                measurements: vec!["0 1".to_owned()],
+            },
+            y: ManualAxisInput {
+                name: "Signal".to_owned(),
+                measurements: vec!["2 4".to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }],
+    };
+    app.insert_manual_data().unwrap();
+
+    let project_path = std::env::temp_dir().join(format!(
+        "instplot-manual-sidebar-round-trip-{}.instplot",
+        std::process::id()
+    ));
+    app.document.save(&project_path).unwrap();
+    let reopened_creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut reopened = StudioApp::new(&reopened_creation, Instant::now(), None);
+    reopened.show_layers = false;
+    reopened.open_paths(vec![project_path.clone()]);
+    std::fs::remove_file(&project_path).unwrap();
+
+    assert!(reopened.show_layers);
+    assert_eq!(
+        reopened.workspace.project_path(),
+        Some(project_path.as_path())
+    );
+    assert_eq!(
+        data_navigation_groups(reopened.session.datasets(), UiLanguage::Chinese)[0].title,
+        "Repeat QA"
+    );
 }
 
 #[test]
@@ -1965,7 +2019,7 @@ fn canvas_click_does_not_close_an_existing_editor() {
     };
     app.open_context_editor(legend.clone());
     app.open_context_editor(axes.clone());
-    app.open_context_editor(legend);
+    app.open_context_editor(legend.clone());
     assert_eq!(
         app.context_editor_targets,
         [
@@ -1977,6 +2031,28 @@ fn canvas_click_does_not_close_an_existing_editor() {
             axes,
         ]
     );
+    assert_eq!(app.context_editor_focus_target, Some(legend));
+}
+
+#[test]
+fn repeated_tool_commands_raise_instead_of_closing_or_resetting_the_window() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+
+    app.request_palette_window();
+    app.request_palette_window();
+    assert!(app.show_palette && app.focus_palette);
+
+    app.request_publication_window();
+    app.request_publication_window();
+    assert!(app.show_inspector && app.focus_inspector);
+
+    app.prepare_manual_data_window();
+    app.manual_data.input.groups[0].source_name = "Unsaved draft".to_owned();
+    app.focus_manual_data = false;
+    app.prepare_manual_data_window();
+    assert!(app.manual_data.open && app.focus_manual_data);
+    assert_eq!(app.manual_data.input.groups[0].source_name, "Unsaved draft");
 }
 
 #[test]

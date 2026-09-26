@@ -9,6 +9,8 @@ mod app_ui;
 mod canvas_support;
 mod editor_support;
 mod import_flow;
+#[cfg(target_os = "macos")]
+mod macos_open_files;
 mod startup;
 mod text_input;
 mod ui_chrome;
