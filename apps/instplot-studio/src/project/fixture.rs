@@ -367,14 +367,24 @@ impl ProjectDocument {
                 project.data_sources.push(DataSourceRecord {
                     id: source_id.clone(),
                     label: label.clone(),
-                    kind: DataSourceKind::Source,
+                    kind: if source_id == &line_source_id {
+                        DataSourceKind::Fit
+                    } else {
+                        DataSourceKind::Source
+                    },
                     payload: DataSourcePayload::Embedded {
                         columns,
                         row_count,
                         alive,
                         sha256,
                     },
-                    fit: None,
+                    fit: (source_id == &line_source_id).then(|| FitIdentity {
+                        parent_data_source_id: marker_source_id.clone(),
+                        source_x_column: "x".to_owned(),
+                        source_y_column: "y".to_owned(),
+                        equation: Some("showcase curve".to_owned()),
+                        display_equation: None,
+                    }),
                     origin_path: None,
                 });
             }

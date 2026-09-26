@@ -1362,32 +1362,54 @@ fn legend_preserves_semantic_label_styles_in_the_display_list() {
 
 #[test]
 fn switching_palette_recolors_series_and_keeps_the_document_valid() {
-    let mut document = FigureDocument::showcase();
-    document.set_palette("tol-high-contrast-v1").unwrap();
+    for (palette_id, expected_colors) in [
+        ("tol-bright-v1", 7),
+        ("tol-high-contrast-v1", 3),
+        ("tol-burd-v1", 7),
+        ("sciplot-neutral-v1", 2),
+    ] {
+        let mut document = FigureDocument::showcase();
+        document.set_palette(palette_id).unwrap();
 
-    assert_eq!(document.palette_id(), "tol-high-contrast-v1");
-    let available = document
-        .palette_colors()
-        .iter()
-        .map(|color| color.id.as_str())
-        .collect::<BTreeSet<_>>();
-    let series_colors = document
-        .project()
-        .figure
-        .artists
-        .iter()
-        .filter_map(|artist| match &artist.properties {
-            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
-                Some(stroke.color_id.as_str())
-            }
-            ArtistProperties::Scatter { marker, .. } => Some(marker.color_id.as_str()),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(series_colors.len(), 3);
-    assert!(series_colors.iter().all(|color| available.contains(color)));
-    document.project().validate().unwrap();
-    document.layout_figure().unwrap();
+        assert_eq!(document.palette_id(), palette_id);
+        let available = document
+            .palette_colors()
+            .iter()
+            .map(|color| color.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let series_colors = document
+            .project()
+            .figure
+            .artists
+            .iter()
+            .filter_map(|artist| match &artist.properties {
+                ArtistProperties::Line { stroke, .. }
+                | ArtistProperties::ErrorBar { stroke, .. } => Some(stroke.color_id.as_str()),
+                ArtistProperties::Scatter { marker, .. } => Some(marker.color_id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(series_colors.len(), expected_colors, "{palette_id}");
+        assert!(series_colors.iter().all(|color| available.contains(color)));
+        for index in 0..7 {
+            let line_id = format!("node-{}", 16 + index * 2);
+            let marker_id = format!("node-{}", 17 + index * 2);
+            let line = document.artist_record(&line_id).unwrap();
+            let marker = document.artist_record(&marker_id).unwrap();
+            let ArtistProperties::Line { stroke, .. } = line.properties else {
+                panic!("{line_id} must be a line")
+            };
+            let ArtistProperties::Scatter { marker, .. } = marker.properties else {
+                panic!("{marker_id} must be a marker series")
+            };
+            assert_eq!(
+                stroke.color_id, marker.color_id,
+                "{palette_id} series index {index}"
+            );
+        }
+        document.project().validate().unwrap();
+        document.layout_figure().unwrap();
+    }
 }
 
 #[test]
