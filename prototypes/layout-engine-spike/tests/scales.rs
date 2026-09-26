@@ -46,10 +46,12 @@ fn interval_locator_includes_decimal_endpoint_without_adding_an_outside_tick() {
     assert_eq!(ticks.last(), Some(&0.7));
     let clipped = interval.major_ticks(Scale::Linear, 0.45, 0.699, 180.0);
     assert_eq!(clipped.len(), 5);
-    assert!(clipped
-        .iter()
-        .zip([0.45, 0.5, 0.55, 0.6, 0.65])
-        .all(|(actual, expected)| (*actual - expected).abs() < 1.0e-14));
+    assert!(
+        clipped
+            .iter()
+            .zip([0.45, 0.5, 0.55, 0.6, 0.65])
+            .all(|(actual, expected)| (*actual - expected).abs() < 1.0e-14)
+    );
 }
 
 #[test]
@@ -59,21 +61,11 @@ fn interval_endpoint_tolerance_is_scale_aware_across_signs_and_magnitudes() {
         vec![-0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.6]
     );
     assert_eq!(
-        Locator::Interval { step: 1.0e-12 }.major_ticks(
-            Scale::Linear,
-            -2.0e-12,
-            2.0e-12,
-            180.0,
-        ),
+        Locator::Interval { step: 1.0e-12 }.major_ticks(Scale::Linear, -2.0e-12, 2.0e-12, 180.0,),
         vec![-2.0e-12, -1.0e-12, 0.0, 1.0e-12, 2.0e-12]
     );
     assert_eq!(
-        Locator::Interval { step: 1.0e12 }.major_ticks(
-            Scale::Linear,
-            -2.0e12,
-            2.0e12,
-            180.0,
-        ),
+        Locator::Interval { step: 1.0e12 }.major_ticks(Scale::Linear, -2.0e12, 2.0e12, 180.0,),
         vec![-2.0e12, -1.0e12, 0.0, 1.0e12, 2.0e12]
     );
 }
@@ -125,11 +117,7 @@ fn negative_tick_labels_use_the_mathematical_minus_sign() {
     let decimal = format_ticks_with(&[-1.5], None, &Formatter::Decimal { precision: 1 });
     assert_eq!(decimal.labels, ["−1.5"]);
 
-    let scientific = format_ticks_with(
-        &[-1.0e-3],
-        None,
-        &Formatter::Scientific { precision: 1 },
-    );
+    let scientific = format_ticks_with(&[-1.0e-3], None, &Formatter::Scientific { precision: 1 });
     assert_eq!(scientific.labels, ["−1.0e−3"]);
 }
 
