@@ -31,14 +31,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "target" / "part-a-audit"
 PROTOTYPES = (
-    "studio-render-spike",
-    "text-shaping-spike",
-    "export-backend-spike",
     "plotine-comparison",
-    "ui-shell-spike",
     "layout-engine-spike",
 )
-FONT_DIR = ROOT / "prototypes" / "text-shaping-spike" / "assets" / "fonts"
+FONT_DIR = ROOT / "crates" / "instplot-text" / "assets" / "fonts"
 RISKY_LICENSES = re.compile(r"\b(?:AGPL|GPL|LGPL|SSPL|BUSL|CPAL|EUPL)(?:[-.0-9+]*)\b", re.I)
 ALLOWED_LICENSES = {
     "0BSD",

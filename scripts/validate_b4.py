@@ -79,7 +79,7 @@ def main() -> int:
                 "cargo",
                 "test",
                 "--manifest-path",
-                "prototypes/ui-shell-spike/Cargo.toml",
+                "crates/instplot-ui/Cargo.toml",
                 "--locked",
                 "--all-features",
             ],

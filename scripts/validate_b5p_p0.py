@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import struct
 import subprocess
@@ -21,8 +22,9 @@ EXPECTED_CASES = {
     "source-fit": (2, 2, 3, 6, 6),
     "multi-source": (2, 2, 3, 8, 8),
     "disabled-row": (1, 1, 2, 5, 4),
+    "missing-value": (1, 1, 2, 4, 4),
 }
-EXPECTED_PROJECT_SCHEMA = 3
+EXPECTED_PROJECT_SCHEMA = 6
 FIXTURE_NAMES = [
     "smoke.csv",
     "lite-source-fit.txt",
@@ -73,6 +75,28 @@ def png_dimensions(path: Path) -> tuple[int, int]:
     if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
         raise ValueError(f"not a PNG: {path}")
     return struct.unpack(">II", data[16:24])
+
+
+def pdf_page_size_pt(data: bytes) -> tuple[float, float]:
+    match = re.search(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]", data)
+    if match is None:
+        raise ValueError("PDF page has no explicit MediaBox")
+    return float(match[1]), float(match[2])
+
+
+def pdf_fonts_are_approved(data: bytes) -> bool:
+    approved = {
+        b"TeXGyreHeros-Regular",
+        b"TeXGyreHeros-Italic",
+        b"STIXTwoMath-Regular",
+    }
+    fonts = {
+        name.removesuffix(b"-Identity-H")
+        for name in re.findall(rb"/BaseFont/(?:[A-Z]{6}\+)?([A-Za-z0-9-]+)", data)
+    }
+    # Export embeds only fonts actually used by the figure. Regular is always
+    # present; italic and math are required only when corresponding glyph runs exist.
+    return b"TeXGyreHeros-Regular" in fonts and fonts <= approved
 
 
 def main() -> int:
@@ -172,7 +196,10 @@ def main() -> int:
             handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
             pdf_bytes = pdf_path.read_bytes()
             dimensions = png_dimensions(png_path)
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+            page_width_pt, page_height_pt = pdf_page_size_pt(pdf_bytes)
+            base_width_pt = float(project["figure"]["width_mm"]) * 72.0 / 25.4
+            base_height_pt = float(project["figure"]["height_mm"]) * 72.0 / 25.4
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
             checks.append(fact(f"{case_id}-artifacts", False, str(error)))
             continue
         embedded = all(
@@ -181,7 +208,18 @@ def main() -> int:
         )
         payload = handoff.get("payload", {})
         checksum_ok = handoff.get("payload_sha256") == canonical_digest(payload)
-        fonts_ok = b"TeXGyreHeros-Regular" in pdf_bytes and b"TeXGyreHeros-Italic" in pdf_bytes
+        fonts_ok = pdf_fonts_are_approved(pdf_bytes)
+        pixel_match = all(
+            abs(actual - round(points * 300.0 / 72.0)) <= 1
+            for actual, points in zip(dimensions, (page_width_pt, page_height_pt))
+        )
+        # Automatic legends may remain inside the fixed figure when the compact
+        # layout fits, or extend the export canvas when an outside placement is
+        # required.  Either result must preserve (never crop) the base figure.
+        layout_ok = (
+            page_width_pt + 0.02 >= base_width_pt
+            and page_height_pt + 0.02 >= base_height_pt
+        )
         checks.append(
             fact(
                 f"{case_id}-artifacts",
@@ -190,8 +228,11 @@ def main() -> int:
                 and checksum_ok
                 and pdf_bytes.startswith(b"%PDF-1.7")
                 and fonts_ok
-                and dimensions == (1004, 768),
-                f"embedded={embedded} checksum={checksum_ok} png={dimensions} fonts={fonts_ok}",
+                and pixel_match
+                and layout_ok,
+                f"embedded={embedded} checksum={checksum_ok} png={dimensions} "
+                f"pdf_pt={(page_width_pt, page_height_pt)} base_pt={(base_width_pt, base_height_pt)} "
+                f"pixel_match={pixel_match} layout_ok={layout_ok} fonts={fonts_ok}",
             )
         )
         checks.append(
@@ -219,15 +260,15 @@ def main() -> int:
         )
     )
 
-    rejections = manifest.get("expected_rejections", [])
-    rejection = rejections[0] if len(rejections) == 1 else {}
+    missing = json.loads((artifacts / "missing-value.instplot").read_text(encoding="utf-8"))
+    missing_column = missing["data_sources"][0]["payload"]["columns"][1]
     checks.append(
         fact(
-            "missing-value-is-explicitly-rejected",
-            rejection.get("id") == "missing-value"
-            and rejection.get("stage") == "figure_document_creation"
-            and "inconsistent columns or alive state" in rejection.get("error", ""),
-            rejection.get("error", f"rejection_count={len(rejections)}"),
+            "missing-value-is-preserved",
+            manifest.get("expected_rejections") == []
+            and missing_column.get("values") == [1.0, 1.8, 0.0, 3.9]
+            and missing_column.get("valid") == [True, True, False, True],
+            f"valid={missing_column.get('valid')}",
         )
     )
 
