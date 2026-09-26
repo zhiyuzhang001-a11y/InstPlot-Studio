@@ -1074,7 +1074,7 @@ fn palette_internal_ids_are_not_shown_as_color_names() {
 }
 
 #[test]
-fn palette_menu_names_cover_four_groups_without_internal_ids() {
+fn palette_window_names_cover_four_groups_without_internal_ids() {
     let groups = [
         (PaletteKind::Qualitative, "分类", "Categorical"),
         (PaletteKind::Sequential, "有序", "Ordered"),

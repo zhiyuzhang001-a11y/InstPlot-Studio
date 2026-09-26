@@ -78,6 +78,7 @@ impl StudioApp {
             trackpad_scroll_active: false,
             show_layers: false,
             show_inspector: false,
+            show_palette: false,
             show_messages: false,
             context_editor_targets: Vec::new(),
             active_artist_drag: None,
@@ -2349,6 +2350,123 @@ impl StudioApp {
             });
         if close_requested {
             self.show_inspector = false;
+        }
+    }
+
+    pub(super) fn palette_window(&mut self, context: &egui::Context) {
+        if !self.show_palette {
+            return;
+        }
+        let title = self.language.text(Text::ColorScheme);
+        let window_spec = instplot_ui::ToolWindowSpec::new([510.0, 430.0], [420.0, 300.0]);
+        let mut requested_palette = None;
+        if instplot_ui::ToolWindowPolicy::mode(context) == instplot_ui::ToolWindowMode::Embedded {
+            let mut open = self.show_palette;
+            window_spec
+                .embedded(title, egui::Id::new("palette-window"))
+                .open(&mut open)
+                .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
+                .show(context, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| self.palette_fields(ui, &mut requested_palette));
+                });
+            self.show_palette = open;
+        } else {
+            let viewport_id = egui::ViewportId::from_hash_of("palette-viewport");
+            let builder = window_spec.viewport(title);
+            let close_requested =
+                context.show_viewport_immediate(viewport_id, builder, |ui, _class| {
+                    let child_context = ui.ctx().clone();
+                    let close_requested = instplot_ui::viewport_close_requested(&child_context);
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::new()
+                                .fill(studio_surface(child_context.theme() == egui::Theme::Dark))
+                                .inner_margin(egui::Margin::same(16)),
+                        )
+                        .show(ui, |ui| {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| self.palette_fields(ui, &mut requested_palette));
+                        });
+                    close_requested
+                });
+            if close_requested {
+                self.show_palette = false;
+            }
+        }
+        if let Some(palette_id) = requested_palette {
+            let success = match self.language {
+                UiLanguage::Chinese => format!(
+                    "已应用配色：{}",
+                    palette_scheme_name(self.language, palette_id)
+                ),
+                UiLanguage::English => format!(
+                    "Applied palette: {}",
+                    palette_scheme_name(self.language, palette_id)
+                ),
+            };
+            self.execute_document_edit(
+                EditCommand::SetPalette {
+                    palette_id: palette_id.to_owned(),
+                },
+                &success,
+            );
+        }
+    }
+
+    fn palette_fields(&self, ui: &mut egui::Ui, requested_palette: &mut Option<&'static str>) {
+        let active = match self.document.palette_id() {
+            "publication-default-v1" | "studio-showcase-v1" => "tol-bright-v1",
+            id => id,
+        };
+        for (group_index, kind) in [
+            PaletteKind::Qualitative,
+            PaletteKind::Sequential,
+            PaletteKind::Diverging,
+            PaletteKind::Neutral,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if group_index > 0 {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+            }
+            ui.label(
+                egui::RichText::new(palette_group_name(self.language, kind))
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            ui.add_space(3.0);
+            for palette_id in USER_PALETTE_IDS {
+                if builtin_palette(palette_id).map(|palette| palette.kind) != Some(kind) {
+                    continue;
+                }
+                ui.horizontal(|ui| {
+                    let selected = ui
+                        .selectable_label(
+                            active == palette_id,
+                            palette_scheme_name(self.language, palette_id),
+                        )
+                        .clicked();
+                    if selected {
+                        *requested_palette = Some(palette_id);
+                    }
+                    if let Some(registry) = builtin_palette_registry(palette_id) {
+                        for color_id in palette_series_color_ids(palette_id).iter().take(7) {
+                            if let Some(color) =
+                                registry.colors.iter().find(|color| color.id == *color_id)
+                            {
+                                let [red, green, blue, _] = color.rgba;
+                                ui.colored_label(egui::Color32::from_rgb(red, green, blue), "●");
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
 

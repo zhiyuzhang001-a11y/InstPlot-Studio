@@ -46,6 +46,7 @@ pub(super) struct StudioApp {
     pub(super) trackpad_scroll_active: bool,
     pub(super) show_layers: bool,
     pub(super) show_inspector: bool,
+    pub(super) show_palette: bool,
     pub(super) show_messages: bool,
     pub(super) context_editor_targets: Vec<CanvasHit>,
     pub(super) active_artist_drag: Option<ArtistDrag>,
