@@ -429,11 +429,26 @@ fn color_only_encoding(project: &ProjectDocument) -> PublicationFinding {
 
 fn palette_relationship(project: &ProjectDocument) -> PublicationFinding {
     let metadata = builtin_palette(&project.palette.id);
-    let valid = metadata.is_some_and(|entry| {
-        entry.kind == PaletteKind::Qualitative
-            && entry.recommended
-            && registry_matches_metadata(&project.palette)
-    });
+    let valid = metadata
+        .is_some_and(|entry| entry.recommended && registry_matches_metadata(&project.palette));
+    let valid_message =
+        metadata.map_or(
+            "active palette is registered and recommended",
+            |entry| match entry.kind {
+                PaletteKind::Qualitative => {
+                    "active palette is recommended for independent categorical series"
+                }
+                PaletteKind::Sequential => {
+                    "active palette is recommended for series ordered from low to high"
+                }
+                PaletteKind::Diverging => {
+                    "active palette is recommended for series ordered around a meaningful midpoint"
+                }
+                PaletteKind::Neutral => {
+                    "active palette is recommended for theory, reference, or supporting series"
+                }
+            },
+        );
     finding(
         "palette_data_relationship",
         if valid {
@@ -443,9 +458,9 @@ fn palette_relationship(project: &ProjectDocument) -> PublicationFinding {
         },
         Some(project.figure.id.clone()),
         if valid {
-            "active palette is a recommended qualitative palette for object identities"
+            valid_message
         } else {
-            "active palette metadata is missing or does not match categorical object identities"
+            "active palette metadata is missing or does not match the registered palette"
         },
     )
 }

@@ -1365,6 +1365,10 @@ fn switching_palette_recolors_series_and_keeps_the_document_valid() {
     for (palette_id, expected_colors) in [
         ("tol-bright-v1", 7),
         ("tol-high-contrast-v1", 3),
+        ("okabe-ito-v1", 7),
+        ("batlow-v1", 7),
+        ("viridis-v1", 7),
+        ("cividis-v1", 7),
         ("tol-burd-v1", 7),
         ("sciplot-neutral-v1", 2),
     ] {

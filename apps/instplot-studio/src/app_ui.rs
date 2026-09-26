@@ -217,36 +217,59 @@ impl eframe::App for StudioApp {
                             "publication-default-v1" | "studio-showcase-v1" => "tol-bright-v1",
                             id => id,
                         };
-                        for palette_id in USER_PALETTE_IDS {
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .selectable_label(
-                                        active == palette_id,
-                                        palette_scheme_name(self.language, palette_id),
-                                    )
-                                    .clicked()
+                        for (group_index, kind) in [
+                            PaletteKind::Qualitative,
+                            PaletteKind::Sequential,
+                            PaletteKind::Diverging,
+                            PaletteKind::Neutral,
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            if group_index > 0 {
+                                ui.separator();
+                            }
+                            ui.label(
+                                egui::RichText::new(palette_group_name(self.language, kind))
+                                    .strong()
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                            for palette_id in USER_PALETTE_IDS {
+                                if builtin_palette(palette_id).map(|palette| palette.kind)
+                                    != Some(kind)
                                 {
-                                    requested_palette = Some(palette_id);
-                                    ui.close();
+                                    continue;
                                 }
-                                if let Some(registry) = builtin_palette_registry(palette_id) {
-                                    for color_id in
-                                        palette_series_color_ids(palette_id).iter().take(7)
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .selectable_label(
+                                            active == palette_id,
+                                            palette_scheme_name(self.language, palette_id),
+                                        )
+                                        .clicked()
                                     {
-                                        if let Some(color) = registry
-                                            .colors
-                                            .iter()
-                                            .find(|color| color.id == *color_id)
+                                        requested_palette = Some(palette_id);
+                                        ui.close();
+                                    }
+                                    if let Some(registry) = builtin_palette_registry(palette_id) {
+                                        for color_id in
+                                            palette_series_color_ids(palette_id).iter().take(7)
                                         {
-                                            let [red, green, blue, _] = color.rgba;
-                                            ui.colored_label(
-                                                egui::Color32::from_rgb(red, green, blue),
-                                                "●",
-                                            );
+                                            if let Some(color) = registry
+                                                .colors
+                                                .iter()
+                                                .find(|color| color.id == *color_id)
+                                            {
+                                                let [red, green, blue, _] = color.rgba;
+                                                ui.colored_label(
+                                                    egui::Color32::from_rgb(red, green, blue),
+                                                    "●",
+                                                );
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     });
                     let check_count = self.publication_report.error_count()

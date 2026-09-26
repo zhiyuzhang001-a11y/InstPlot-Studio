@@ -31,10 +31,10 @@ use instplot_studio::{
     AxisScale, CheckSeverity, DATA_FORMAT_CAPABILITIES, DataImporter, EditCommand, EditGroup,
     EditHistory, EguiPreviewAdapter, ErrorStatistic, FigureDocument, FormatterSpec, HandoffImport,
     LabelNode, LegendGrid, LegendPlacement, LocatorSpec, ManualAxisInput, ManualDataInput,
-    ManualYInput, MarkerShape, OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport,
-    ReferenceOrientation, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind,
-    StrokeStyle, StudioSession, USER_PALETTE_IDS, builtin_palette_registry, check_publication,
-    palette_series_color_ids, resolve_document,
+    ManualYInput, MarkerShape, OpenProjectSource, PRODUCT_NAME, PaletteKind, PreviewAdapter,
+    PublicationReport, ReferenceOrientation, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor,
+    SeriesKind, StrokeStyle, StudioSession, USER_PALETTE_IDS, builtin_palette,
+    builtin_palette_registry, check_publication, palette_series_color_ids, resolve_document,
 };
 use ui_chrome::*;
 use ui_text::{Text, UiLanguage};

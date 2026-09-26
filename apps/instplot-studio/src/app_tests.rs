@@ -1074,6 +1074,31 @@ fn palette_internal_ids_are_not_shown_as_color_names() {
 }
 
 #[test]
+fn palette_menu_names_cover_four_groups_without_internal_ids() {
+    let groups = [
+        (PaletteKind::Qualitative, "分类", "Categorical"),
+        (PaletteKind::Sequential, "有序", "Ordered"),
+        (PaletteKind::Diverging, "发散", "Diverging"),
+        (PaletteKind::Neutral, "辅助", "Supporting"),
+    ];
+    for (kind, chinese, english) in groups {
+        assert_eq!(palette_group_name(UiLanguage::Chinese, kind), chinese);
+        assert_eq!(palette_group_name(UiLanguage::English, kind), english);
+    }
+    for palette_id in USER_PALETTE_IDS {
+        assert_ne!(
+            palette_scheme_name(UiLanguage::Chinese, palette_id),
+            "Custom"
+        );
+        assert_ne!(
+            palette_scheme_name(UiLanguage::English, palette_id),
+            "Custom"
+        );
+        assert!(builtin_palette(palette_id).is_some());
+    }
+}
+
+#[test]
 fn showcase_keeps_fixed_fixture_separate_and_resolves() {
     let fixed = FigureDocument::fixed();
     let showcase = FigureDocument::showcase();
