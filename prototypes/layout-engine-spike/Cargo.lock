@@ -127,20 +127,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "export-backend-spike"
-version = "0.1.0"
-dependencies = [
- "base64",
- "krilla",
- "parley",
- "png",
- "studio-render-spike",
- "text-shaping-spike",
- "tiny-skia",
- "ttf-parser",
-]
-
-[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -401,12 +387,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "instplot-export"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "instplot-render",
+ "instplot-text",
+ "krilla",
+ "parley",
+ "png",
+ "tiny-skia",
+ "ttf-parser",
+]
+
+[[package]]
 name = "instplot-layout"
 version = "0.1.0"
 dependencies = [
+ "instplot-render",
+ "instplot-text",
  "parley",
- "studio-render-spike",
- "text-shaping-spike",
+ "ttf-parser",
+]
+
+[[package]]
+name = "instplot-render"
+version = "0.1.0"
+dependencies = [
+ "instplot-text",
+]
+
+[[package]]
+name = "instplot-text"
+version = "0.1.0"
+dependencies = [
+ "ttf-parser",
 ]
 
 [[package]]
@@ -458,9 +473,10 @@ dependencies = [
 name = "layout-engine-spike"
 version = "0.1.0"
 dependencies = [
- "export-backend-spike",
+ "instplot-export",
  "instplot-layout",
- "studio-render-spike",
+ "instplot-render",
+ "instplot-text",
 ]
 
 [[package]]
@@ -779,9 +795,9 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "siphasher"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "skrifa"
@@ -805,9 +821,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.16.1"
+version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
+checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "stable_deref_trait"
@@ -820,13 +836,6 @@ name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
-
-[[package]]
-name = "studio-render-spike"
-version = "0.1.0"
-dependencies = [
- "text-shaping-spike",
-]
 
 [[package]]
 name = "subsetter"
@@ -871,13 +880,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "text-shaping-spike"
-version = "0.1.0"
-dependencies = [
- "ttf-parser",
 ]
 
 [[package]]

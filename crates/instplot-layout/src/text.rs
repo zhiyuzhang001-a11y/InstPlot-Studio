@@ -1,22 +1,24 @@
 use std::borrow::Cow;
 
+use instplot_text::{Label, Span, Style};
 use parley::fontique::{Blob, FontInfoOverride};
 use parley::{
     FontContext, FontFamily, FontStyle, FontWeight, LayoutContext, PositionedLayoutItem,
     StyleProperty,
 };
-use text_shaping_spike::{Label, Span, Style};
 
 const PRIMARY_FAMILY: &str = "InstPlot Studio TeX Gyre Heros";
+const RELATION_FAMILY: &str = "InstPlot Studio STIX Two Math";
+const RELATION_FONT: &[u8] =
+    include_bytes!("../../../crates/instplot-text/assets/fonts/STIXTwoMath-Regular.otf");
 const REGULAR: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Regular.otf");
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Regular.otf");
 const ITALIC: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Italic.otf");
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Italic.otf");
 const BOLD: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Bold.otf");
-const BOLD_ITALIC: &[u8] = include_bytes!(
-    "../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf"
-);
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Bold.otf");
+const BOLD_ITALIC: &[u8] =
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-BoldItalic.otf");
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextSize {
@@ -53,6 +55,13 @@ impl Default for ParleyMeasurer {
                 .collection
                 .register_fonts(Blob::from(data.to_vec()), family_override);
         }
+        fonts.collection.register_fonts(
+            Blob::from(RELATION_FONT.to_vec()),
+            Some(FontInfoOverride {
+                family_name: Some(RELATION_FAMILY),
+                ..Default::default()
+            }),
+        );
         Self {
             fonts,
             layouts: LayoutContext::new(),
@@ -112,8 +121,13 @@ impl ParleyMeasurer {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, &span.text, 1.0, false);
+        let family = if matches!(span.text.as_str(), "≤" | "≥") {
+            "'InstPlot Studio STIX Two Math'"
+        } else {
+            "'InstPlot Studio TeX Gyre Heros'"
+        };
         builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed("'InstPlot Studio TeX Gyre Heros'"),
+            Cow::Borrowed(family),
         )));
         builder.push_default(StyleProperty::FontSize(font_size));
         match span.style {

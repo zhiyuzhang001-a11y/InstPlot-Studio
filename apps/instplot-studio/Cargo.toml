@@ -9,16 +9,17 @@ publish = false
 [dependencies]
 atomicwrites.workspace = true
 eframe.workspace = true
-export-backend-spike.workspace = true
+instplot-export.workspace = true
 instplot-core.workspace = true
 instplot-io.workspace = true
 instplot-layout.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-studio-render-spike.workspace = true
-text-shaping-spike.workspace = true
-ui-shell-spike.workspace = true
+instplot-render.workspace = true
+instplot-text.workspace = true
+ttf-parser = "=0.25.1"
+instplot-ui.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { workspace = true, features = ["xdg-portal"] }

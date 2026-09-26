@@ -70,6 +70,27 @@ const PUBLICATION_DEFAULT: PaletteMetadata = PaletteMetadata {
     },
 };
 
+const STUDIO_SHOWCASE: PaletteMetadata = PaletteMetadata {
+    id: "studio-showcase-v1",
+    name: "InstPlot Studio showcase",
+    source_name: "Paul Tol Colour Schemes + SciPlot neutral ink",
+    source_version: "SRON/EPS/TN/09-002 issue 3.2; InstPlot showcase v1",
+    source_reference: "fixtures/publication-v1/palettes.toml",
+    source_checksum_sha256: "99d79b14edae42e2d52e0e2eb3902c32ab81e872c52bd6fb7e2e96b420848419",
+    provenance_class: "source-attributed Tol Bright colours plus InstPlot-authored neutral ink",
+    kind: PaletteKind::Qualitative,
+    ordering: PaletteOrdering::Unordered,
+    direction: None,
+    recommended: true,
+    sampling: "Full Tol Bright categorical values; neutral ink is reserved for theory/reference roles.",
+    derived_subset: Some("Full Tol Bright plus SciPlot neutral ink"),
+    review: PaletteReview {
+        cvd: ReviewStatus::Pass,
+        print: ReviewStatus::Pass,
+        monochrome: ReviewStatus::Conditional,
+    },
+};
+
 const TOL_BRIGHT: PaletteMetadata = PaletteMetadata {
     id: "tol-bright-v1",
     name: "Paul Tol Bright",
@@ -154,8 +175,9 @@ const SCIPLOT_NEUTRAL: PaletteMetadata = PaletteMetadata {
     },
 };
 
-const BUILTIN_PALETTES: [PaletteMetadata; 5] = [
+const BUILTIN_PALETTES: [PaletteMetadata; 6] = [
     PUBLICATION_DEFAULT,
+    STUDIO_SHOWCASE,
     TOL_BRIGHT,
     TOL_HIGH_CONTRAST,
     TOL_BURD,
@@ -195,7 +217,7 @@ mod tests {
         assert_eq!(metadata.review.cvd, ReviewStatus::Pass);
         assert!(metadata.derived_subset.is_some());
         assert!(registry_matches_metadata(&project.palette));
-        assert_eq!(builtin_palettes().len(), 5);
+        assert_eq!(builtin_palettes().len(), 6);
         assert!(
             builtin_palettes()
                 .iter()

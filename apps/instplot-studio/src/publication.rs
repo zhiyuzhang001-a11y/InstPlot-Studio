@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use export_backend_spike::ResolvedItem;
+use instplot_export::ResolvedItem;
 use instplot_layout::SelectableRole;
+use instplot_render::DisplayItem;
 use serde::{Deserialize, Serialize};
-use studio_render_spike::DisplayItem;
 
 use crate::palette::{PaletteKind, builtin_palette, registry_matches_metadata};
 use crate::semantic::{color_id, non_color_signature, policy_for};
@@ -81,7 +81,7 @@ pub fn check_publication(
         palette_relationship(project),
         grayscale_distinguishability(project),
         cvd_risk(project),
-        raster_dimensions(project, raster_dpi),
+        raster_dimensions(project, resolved, raster_dpi),
         transparency(project),
         provenance(project),
     ];
@@ -261,7 +261,8 @@ fn font_embedding(resolved: &ResolvedFigure) -> PublicationFinding {
             || !diagnostic.subsetting_allowed
             || !matches!(
                 diagnostic.origin,
-                export_backend_spike::FontOrigin::BundledPrimary
+                instplot_export::FontOrigin::BundledPrimary
+                    | instplot_export::FontOrigin::BundledSymbol
             )
     }) {
         return finding(
@@ -274,7 +275,7 @@ fn font_embedding(resolved: &ResolvedFigure) -> PublicationFinding {
             ),
         );
     }
-    match export_backend_spike::to_pdf(&resolved.display) {
+    match instplot_export::to_pdf(&resolved.display) {
         Ok(pdf) if pdf.windows(9).any(|window| window == b"/FontFile") => finding(
             "font_embedding",
             CheckSeverity::Information,
@@ -495,10 +496,28 @@ fn cvd_risk(project: &ProjectDocument) -> PublicationFinding {
     }
 }
 
-fn raster_dimensions(project: &ProjectDocument, dpi: u32) -> PublicationFinding {
-    let width = (project.figure.width_mm / 25.4 * f64::from(dpi)).round() as u32;
-    let height = (project.figure.height_mm / 25.4 * f64::from(dpi)).round() as u32;
+fn raster_dimensions(
+    project: &ProjectDocument,
+    resolved: &ResolvedFigure,
+    dpi: u32,
+) -> PublicationFinding {
     let listed = project.export_preferences.raster_dpi.contains(&dpi);
+    let dimensions = instplot_export::checked_raster_dimensions(
+        f64::from(resolved.display.width),
+        f64::from(resolved.display.height),
+        dpi,
+    );
+    let Ok((width, height)) = dimensions else {
+        return finding(
+            "raster_dpi_pixels",
+            CheckSeverity::Error,
+            Some(project.figure.id.clone()),
+            format!(
+                "PNG export cannot use {dpi} dpi at the final canvas size: {}",
+                dimensions.unwrap_err()
+            ),
+        );
+    };
     let severity = if dpi < 150 {
         CheckSeverity::Error
     } else if dpi < 300 || !listed {
@@ -570,7 +589,7 @@ fn provenance(project: &ProjectDocument) -> PublicationFinding {
     )
 }
 
-fn project_id(resolved: &ResolvedFigure, node: studio_render_spike::NodeId) -> Option<String> {
+fn project_id(resolved: &ResolvedFigure, node: instplot_render::NodeId) -> Option<String> {
     resolved.layout.project_ids.get(&node).cloned()
 }
 
@@ -684,8 +703,8 @@ fn apply_override(project: &ProjectDocument, finding: &mut PublicationFinding) {
 
 #[cfg(test)]
 mod tests {
+    use instplot_render::{DisplayItem, Pt};
     use serde_json::json;
-    use studio_render_spike::{DisplayItem, Pt};
 
     use super::*;
     use crate::{
@@ -734,6 +753,46 @@ mod tests {
                     .any(|finding| finding.rule_id == rule)
             );
         }
+    }
+
+    #[test]
+    fn raster_finding_uses_final_canvas_with_outside_legend() {
+        let mut document = FigureDocument::showcase();
+        let mut legend = document.artist_record("node-15").unwrap();
+        legend.visible = true;
+        if let ArtistProperties::Legend { placement, .. } = &mut legend.properties {
+            *placement = crate::LegendPlacement::Right;
+        }
+        document.set_artist_record(legend).unwrap();
+        let resolved = resolve_document(&document).unwrap();
+        let (width, height) = instplot_export::checked_raster_dimensions(
+            f64::from(resolved.display.width),
+            f64::from(resolved.display.height),
+            300,
+        )
+        .unwrap();
+        assert!(width > (85.0_f64 / 25.4 * 300.0).round() as u32);
+        let report = check_publication(&document, &resolved, 300);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "raster_dpi_pixels")
+            .unwrap();
+        assert!(finding.message.contains(&format!("{width} × {height}")));
+    }
+
+    #[test]
+    fn oversized_png_is_reported_before_export() {
+        let mut document = FigureDocument::fixed();
+        document.set_figure_size_mm(500.0, 500.0).unwrap();
+        let report = report(&document, 1200);
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "raster_dpi_pixels")
+            .unwrap();
+        assert_eq!(finding.severity, CheckSeverity::Error);
+        assert!(finding.message.contains("safety limit"));
     }
 
     #[test]

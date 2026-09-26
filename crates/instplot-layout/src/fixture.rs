@@ -1,10 +1,10 @@
-use studio_render_spike::{Color, NodeId};
-use text_shaping_spike::Label;
+use instplot_render::{Color, NodeId};
+use instplot_text::Label;
 
 use crate::{
     Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
-    Formatter, GridSpec, LegendPosition, LegendSpec, LineStyle, Locator, MarkerShape, MarkerStyle,
-    Scale, Series,
+    Formatter, GridSpec, LegendErrorStyle, LegendPosition, LegendSpec, LineStyle, Locator,
+    MarkerShape, MarkerStyle, Scale, Series,
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
@@ -78,6 +78,7 @@ pub fn publication_fixture() -> Chart {
             locator: Locator::Auto {
                 target_spacing_pt: 34.0,
             },
+            minor_interval: None,
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
@@ -91,6 +92,7 @@ pub fn publication_fixture() -> Chart {
             locator: Locator::Auto {
                 target_spacing_pt: 28.0,
             },
+            minor_interval: None,
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
@@ -99,12 +101,15 @@ pub fn publication_fixture() -> Chart {
             Series {
                 id: NodeId(10),
                 label: "Reference".into(),
+                legend_label: None,
                 points: points(7),
                 line: Some(LineStyle {
                     width: 0.7,
                     dash: DashStyle::Dotted,
                 }),
                 marker: None,
+                legend_marker: None,
+                legend_error: None,
                 errors: Vec::new(),
                 error_style: None,
                 color: Color(150, 150, 150, 255),
@@ -112,12 +117,15 @@ pub fn publication_fixture() -> Chart {
             Series {
                 id: NodeId(11),
                 label: "Theory".into(),
+                legend_label: None,
                 points: points(6),
                 line: Some(LineStyle {
                     width: 0.9,
                     dash: DashStyle::Dashed,
                 }),
                 marker: None,
+                legend_marker: None,
+                legend_error: None,
                 errors: Vec::new(),
                 error_style: None,
                 color: Color(70, 70, 70, 255),
@@ -125,12 +133,15 @@ pub fn publication_fixture() -> Chart {
             Series {
                 id: NodeId(12),
                 label: "Fit A".into(),
+                legend_label: None,
                 points: points(5),
                 line: Some(LineStyle {
                     width: 1.0,
                     dash: DashStyle::Solid,
                 }),
                 marker: None,
+                legend_marker: None,
+                legend_error: None,
                 errors: Vec::new(),
                 error_style: None,
                 color: blue,
@@ -138,12 +149,23 @@ pub fn publication_fixture() -> Chart {
             Series {
                 id: NodeId(13),
                 label: "Experiment A".into(),
+                legend_label: None,
                 points: points(1),
                 line: None,
                 marker: Some(MarkerStyle {
                     shape: MarkerShape::Circle,
                     size: 4.0,
                     filled: false,
+                    interval: 1,
+                }),
+                legend_marker: None,
+                legend_error: Some(LegendErrorStyle {
+                    style: ErrorStyle {
+                        width: 0.65,
+                        cap_width: 4.0,
+                        dash: DashStyle::Solid,
+                    },
+                    color: blue,
                 }),
                 errors: y_errors(2),
                 error_style: Some(ErrorStyle {
@@ -156,12 +178,23 @@ pub fn publication_fixture() -> Chart {
             Series {
                 id: NodeId(14),
                 label: "Experiment B".into(),
+                legend_label: None,
                 points: points(3),
                 line: None,
                 marker: Some(MarkerStyle {
                     shape: MarkerShape::Square,
                     size: 4.0,
                     filled: true,
+                    interval: 1,
+                }),
+                legend_marker: None,
+                legend_error: Some(LegendErrorStyle {
+                    style: ErrorStyle {
+                        width: 0.65,
+                        cap_width: 4.0,
+                        dash: DashStyle::Solid,
+                    },
+                    color: orange,
                 }),
                 errors: y_errors(4),
                 error_style: Some(ErrorStyle {
@@ -174,13 +207,17 @@ pub fn publication_fixture() -> Chart {
         ],
         annotations: vec![Annotation {
             id: NodeId(20),
-            label: Label::Text("T ≤ 300 K".into()),
+            labels: vec![Label::Text("T ≤ 300 K".into())],
             position: AnnotationPosition::Data(DataPoint { x: -2.8, y: 2.1 }),
             offset_pt: (2.0, 0.0),
+            connectors: Vec::new(),
         }],
         legend: Some(LegendSpec {
             id: NodeId(1),
-            position: LegendPosition::Auto,
+            position: LegendPosition::Right,
+            manual_position: None,
+            grid: crate::LegendGrid::Auto,
+            entry_order: Vec::new(),
         }),
     }
 }
@@ -203,6 +240,7 @@ pub fn marker_gallery_fixture() -> Chart {
         .map(|(index, shape)| Series {
             id: NodeId(100 + index as u64),
             label: format!("marker-{index}"),
+            legend_label: None,
             points: vec![
                 DataPoint {
                     x: -2.5 + index as f64 * 0.75,
@@ -220,12 +258,25 @@ pub fn marker_gallery_fixture() -> Chart {
                     DashStyle::Dashed,
                     DashStyle::Dotted,
                     DashStyle::DashDot,
-                ][index % 4],
+                    DashStyle::LongDash,
+                    DashStyle::LongShortDash,
+                    DashStyle::DashDotDot,
+                ][index % 7],
             }),
             marker: Some(MarkerStyle {
                 shape: *shape,
                 size: 5.0,
                 filled: index % 2 == 0,
+                interval: 1,
+            }),
+            legend_marker: None,
+            legend_error: (index == 0).then_some(LegendErrorStyle {
+                style: ErrorStyle {
+                    width: 0.65,
+                    cap_width: 4.0,
+                    dash: DashStyle::Solid,
+                },
+                color: Color(40, 80, 160, 255),
             }),
             errors: if index == 0 {
                 vec![

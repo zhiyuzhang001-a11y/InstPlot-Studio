@@ -1,0 +1,21 @@
+[package]
+name = "instplot-ui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[features]
+default = []
+publication-stack = ["dep:instplot-export"]
+
+[dependencies]
+eframe = { version = "=0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+instplot-export = { path = "../instplot-export", optional = true }
+instplot-render = { path = "../instplot-render" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "=0.17.2", default-features = false }

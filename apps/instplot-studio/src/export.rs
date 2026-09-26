@@ -4,12 +4,13 @@ use std::path::Path;
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 
-use crate::{DocumentLayoutError, FigureDocument, resolve_document};
+use crate::{DocumentLayoutError, FigureDocument, ResolvedFigure, resolve_document};
 
 #[derive(Debug)]
 pub enum FixedPdfExportError {
     Layout(DocumentLayoutError),
-    Render(export_backend_spike::ExportError),
+    Render(instplot_export::ExportError),
+    Raster(instplot_export::RasterError),
     EncodePng(String),
     AtomicWrite(String),
 }
@@ -19,6 +20,7 @@ impl fmt::Display for FixedPdfExportError {
         match self {
             Self::Layout(error) => write!(formatter, "layout figure: {error}"),
             Self::Render(error) => write!(formatter, "render fixed figure PDF: {error}"),
+            Self::Raster(error) => write!(formatter, "render figure PNG: {error}"),
             Self::EncodePng(error) => write!(formatter, "encode figure PNG: {error}"),
             Self::AtomicWrite(error) => write!(formatter, "atomically write figure: {error}"),
         }
@@ -33,7 +35,20 @@ pub fn fixed_figure_pdf() -> Result<Vec<u8>, FixedPdfExportError> {
 
 pub fn figure_pdf(document: &FigureDocument) -> Result<Vec<u8>, FixedPdfExportError> {
     let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
-    export_backend_spike::to_pdf(&resolved.display).map_err(FixedPdfExportError::Render)
+    resolved_figure_pdf(&resolved)
+}
+
+pub fn resolved_figure_pdf(resolved: &ResolvedFigure) -> Result<Vec<u8>, FixedPdfExportError> {
+    instplot_export::to_pdf(&resolved.display).map_err(FixedPdfExportError::Render)
+}
+
+pub fn figure_svg(document: &FigureDocument) -> Result<Vec<u8>, FixedPdfExportError> {
+    let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
+    Ok(resolved_figure_svg(&resolved))
+}
+
+pub fn resolved_figure_svg(resolved: &ResolvedFigure) -> Vec<u8> {
+    instplot_export::to_svg(&resolved.display).into_bytes()
 }
 
 pub fn fixed_figure_png(dpi: u32) -> Result<Vec<u8>, FixedPdfExportError> {
@@ -50,13 +65,22 @@ pub fn figure_png_with_background(
     transparent_background: bool,
 ) -> Result<Vec<u8>, FixedPdfExportError> {
     let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
+    resolved_figure_png_with_background(&resolved, dpi, transparent_background)
+}
+
+pub fn resolved_figure_png_with_background(
+    resolved: &ResolvedFigure,
+    dpi: u32,
+    transparent_background: bool,
+) -> Result<Vec<u8>, FixedPdfExportError> {
     let background = if transparent_background {
-        export_backend_spike::Background::Transparent
+        instplot_export::Background::Transparent
     } else {
-        export_backend_spike::Background::White
+        instplot_export::Background::White
     };
-    let image = export_backend_spike::rasterize_direct(&resolved.display, dpi, background);
-    export_backend_spike::encode_png(&image)
+    let image = instplot_export::rasterize_direct(&resolved.display, dpi, background)
+        .map_err(FixedPdfExportError::Raster)?;
+    instplot_export::encode_png(&image)
         .map_err(|error| FixedPdfExportError::EncodePng(error.to_string()))
 }
 
@@ -69,6 +93,33 @@ pub fn save_figure_pdf(
     path: &Path,
 ) -> Result<usize, FixedPdfExportError> {
     let bytes = figure_pdf(document)?;
+    atomic_write(path, &bytes)?;
+    Ok(bytes.len())
+}
+
+pub fn save_resolved_figure_pdf(
+    resolved: &ResolvedFigure,
+    path: &Path,
+) -> Result<usize, FixedPdfExportError> {
+    let bytes = resolved_figure_pdf(resolved)?;
+    atomic_write(path, &bytes)?;
+    Ok(bytes.len())
+}
+
+pub fn save_figure_svg(
+    document: &FigureDocument,
+    path: &Path,
+) -> Result<usize, FixedPdfExportError> {
+    let bytes = figure_svg(document)?;
+    atomic_write(path, &bytes)?;
+    Ok(bytes.len())
+}
+
+pub fn save_resolved_figure_svg(
+    resolved: &ResolvedFigure,
+    path: &Path,
+) -> Result<usize, FixedPdfExportError> {
+    let bytes = resolved_figure_svg(resolved);
     atomic_write(path, &bytes)?;
     Ok(bytes.len())
 }
@@ -94,6 +145,17 @@ pub fn save_figure_png_with_background(
     transparent_background: bool,
 ) -> Result<usize, FixedPdfExportError> {
     let bytes = figure_png_with_background(document, dpi, transparent_background)?;
+    atomic_write(path, &bytes)?;
+    Ok(bytes.len())
+}
+
+pub fn save_resolved_figure_png_with_background(
+    resolved: &ResolvedFigure,
+    path: &Path,
+    dpi: u32,
+    transparent_background: bool,
+) -> Result<usize, FixedPdfExportError> {
+    let bytes = resolved_figure_png_with_background(resolved, dpi, transparent_background)?;
     atomic_write(path, &bytes)?;
     Ok(bytes.len())
 }
@@ -125,6 +187,18 @@ mod tests {
     }
 
     #[test]
+    fn oversized_png_returns_a_clear_error_without_allocating() {
+        let mut document = FigureDocument::fixed();
+        document.set_figure_size_mm(500.0, 500.0).unwrap();
+        assert!(matches!(
+            figure_png(&document, 1200),
+            Err(FixedPdfExportError::Raster(
+                instplot_export::RasterError::TooLarge { .. }
+            ))
+        ));
+    }
+
+    #[test]
     fn transparent_and_white_png_exports_are_distinct_valid_outputs() {
         let document = FigureDocument::fixed();
         let white = figure_png_with_background(&document, 300, false).unwrap();
@@ -132,5 +206,30 @@ mod tests {
         assert_eq!(&white[..8], b"\x89PNG\r\n\x1a\n");
         assert_eq!(&transparent[..8], b"\x89PNG\r\n\x1a\n");
         assert_ne!(white, transparent);
+    }
+
+    #[test]
+    fn svg_uses_the_same_resolved_canvas() {
+        let resolved = resolve_document(&FigureDocument::fixed()).unwrap();
+        let svg = String::from_utf8(resolved_figure_svg(&resolved)).unwrap();
+        assert!(svg.contains(&format!(
+            "viewBox=\"0 0 {:.5} {:.5}\"",
+            resolved.display.width, resolved.display.height
+        )));
+    }
+
+    #[test]
+    fn failed_export_does_not_replace_an_existing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "instplot-export-atomic-{}-{}.png",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, b"existing-good-output").unwrap();
+        let mut document = FigureDocument::fixed();
+        document.set_figure_size_mm(500.0, 500.0).unwrap();
+        assert!(save_figure_png(&document, &path, 1200).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing-good-output");
+        std::fs::remove_file(path).unwrap();
     }
 }

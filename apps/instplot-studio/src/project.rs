@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 3;
+pub const PROJECT_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +54,8 @@ pub struct AxisRecord {
     pub maximum: f64,
     pub scale: AxisScale,
     pub locator: LocatorSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minor_interval: Option<f64>,
     pub formatter: FormatterSpec,
     #[serde(default)]
     pub autoscale: bool,
@@ -92,7 +94,7 @@ impl Default for AxisAppearanceRecord {
             major_ticks: true,
             minor_ticks: true,
             tick_direction: TickDirection::In,
-            grid_major: true,
+            grid_major: false,
             grid_minor: false,
             tick_label_pad_pt: 4.0,
             label_edge_pad_pt: 6.0,
@@ -120,6 +122,7 @@ pub enum AxisScale {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LocatorSpec {
     Auto { target_count: u8 },
+    Interval { step: f64 },
     Fixed { values: Vec<f64> },
 }
 
@@ -165,6 +168,19 @@ pub enum ArtistRole {
     Legend,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnnotationConnectorRecord {
+    pub target_x: f64,
+    pub target_y: f64,
+    pub stroke: StrokeStyle,
+    #[serde(default)]
+    pub start_arrow: bool,
+    #[serde(default)]
+    pub end_arrow: bool,
+    pub arrow_size_pt: f64,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -182,6 +198,8 @@ pub enum ArtistProperties {
     },
     ErrorBar {
         binding: DataBinding,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x_error_column: Option<String>,
         y_error_column: String,
         cap_width_pt: f64,
         stroke: StrokeStyle,
@@ -195,12 +213,39 @@ pub enum ArtistProperties {
         label_id: String,
         x_pt: f64,
         y_pt: f64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        connectors: Vec<AnnotationConnectorRecord>,
     },
     Legend {
         entries: Vec<LegendEntry>,
         x_pt: f64,
         y_pt: f64,
+        #[serde(default)]
+        placement: LegendPlacement,
+        #[serde(default)]
+        grid: LegendGrid,
+        #[serde(default)]
+        position_custom: bool,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegendPlacement {
+    Auto,
+    #[default]
+    Inside,
+    Above,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LegendGrid {
+    #[default]
+    Auto,
+    Rows(u8),
+    Columns(u8),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +270,14 @@ pub struct MarkerStyle {
     pub color_id: String,
     pub shape: MarkerShape,
     pub size_pt: f64,
+    #[serde(default = "default_true")]
+    pub filled: bool,
+    #[serde(default = "default_marker_interval")]
+    pub interval: usize,
+}
+
+fn default_marker_interval() -> usize {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,7 +286,12 @@ pub enum MarkerShape {
     Circle,
     Square,
     Triangle,
+    TriangleDown,
     Diamond,
+    Pentagon,
+    Star,
+    Plus,
+    Cross,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +318,8 @@ pub struct DataSourceRecord {
     pub kind: DataSourceKind,
     pub payload: DataSourcePayload,
     pub fit: Option<FitIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_path: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,6 +357,10 @@ pub struct SourceFingerprint {
 pub struct EmbeddedColumn {
     pub name: String,
     pub values: Vec<f64>,
+    /// Per-cell validity for imports containing blank or non-finite values.
+    /// Empty means every value is valid, preserving the compact legacy format.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub valid: Vec<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,252 +562,19 @@ impl From<serde_json::Error> for ProjectError {
     }
 }
 
-impl ProjectDocument {
-    pub fn fixed_fixture() -> Self {
-        let artist_ids = [10_u64, 11, 12, 13, 14, 15].map(|id| format!("node-{id}"));
-        let embedded_columns = vec![
-            EmbeddedColumn {
-                name: "line_x".to_owned(),
-                values: vec![-3.2, 0.0, 3.2],
-            },
-            EmbeddedColumn {
-                name: "line_y".to_owned(),
-                values: vec![-2.34, 0.0, 2.34],
-            },
-            EmbeddedColumn {
-                name: "scatter_x".to_owned(),
-                values: vec![-3.2, 0.0, 3.2],
-            },
-            EmbeddedColumn {
-                name: "scatter_y".to_owned(),
-                values: vec![-2.38, 0.01, 2.34],
-            },
-            EmbeddedColumn {
-                name: "error".to_owned(),
-                values: vec![0.0, 0.08, 0.0],
-            },
-        ];
-        let embedded_alive = vec![true; 3];
-        let embedded_sha256 = embedded_digest(&embedded_columns, 3, &embedded_alive)
-            .expect("the fixed project fixture has serializable embedded data");
-        let blue_stroke = || StrokeStyle {
-            color_id: "blue".to_owned(),
-            width_pt: 0.9,
-            dash_pt: Vec::new(),
-        };
-        Self {
-            schema_version: PROJECT_SCHEMA_VERSION,
-            producer_version: env!("CARGO_PKG_VERSION").to_owned(),
-            figure: FigureRecord {
-                id: "node-1".to_owned(),
-                width_mm: 85.0,
-                height_mm: 65.0,
-                axes: vec![AxesRecord {
-                    id: "node-2".to_owned(),
-                    x: AxisRecord {
-                        id: "node-3".to_owned(),
-                        label_id: "label-x".to_owned(),
-                        minimum: -3.0,
-                        maximum: 3.0,
-                        scale: AxisScale::Linear,
-                        locator: LocatorSpec::Auto { target_count: 6 },
-                        formatter: FormatterSpec::Auto,
-                        autoscale: false,
-                        appearance: AxisAppearanceRecord::default(),
-                    },
-                    y: AxisRecord {
-                        id: "node-4".to_owned(),
-                        label_id: "label-y".to_owned(),
-                        minimum: -2.5,
-                        maximum: 2.5,
-                        scale: AxisScale::Linear,
-                        locator: LocatorSpec::Auto { target_count: 6 },
-                        formatter: FormatterSpec::Auto,
-                        autoscale: false,
-                        appearance: AxisAppearanceRecord::default(),
-                    },
-                    artist_ids: artist_ids.to_vec(),
-                }],
-                artists: vec![
-                    ArtistRecord {
-                        id: artist_ids[0].clone(),
-                        kind: ArtistKind::ReferenceLine,
-                        role: ArtistRole::Baseline,
-                        visible: true,
-                        properties: ArtistProperties::ReferenceLine {
-                            orientation: ReferenceOrientation::Horizontal,
-                            value: 0.0,
-                            stroke: StrokeStyle {
-                                color_id: "gray".to_owned(),
-                                width_pt: 0.7,
-                                dash_pt: vec![1.4, 1.4],
-                            },
-                        },
-                    },
-                    ArtistRecord {
-                        id: artist_ids[1].clone(),
-                        kind: ArtistKind::Line,
-                        role: ArtistRole::Fit,
-                        visible: true,
-                        properties: ArtistProperties::Line {
-                            binding: binding("fixture-data", "line_x", "line_y"),
-                            stroke: blue_stroke(),
-                        },
-                    },
-                    ArtistRecord {
-                        id: artist_ids[2].clone(),
-                        kind: ArtistKind::ErrorBar,
-                        role: ArtistRole::Data,
-                        visible: true,
-                        properties: ArtistProperties::ErrorBar {
-                            binding: binding("fixture-data", "scatter_x", "scatter_y"),
-                            y_error_column: "error".to_owned(),
-                            cap_width_pt: 4.0,
-                            stroke: StrokeStyle {
-                                width_pt: 0.7,
-                                ..blue_stroke()
-                            },
-                        },
-                    },
-                    ArtistRecord {
-                        id: artist_ids[3].clone(),
-                        kind: ArtistKind::Scatter,
-                        role: ArtistRole::Data,
-                        visible: true,
-                        properties: ArtistProperties::Scatter {
-                            binding: binding("fixture-data", "scatter_x", "scatter_y"),
-                            marker: MarkerStyle {
-                                color_id: "blue".to_owned(),
-                                shape: MarkerShape::Circle,
-                                size_pt: 2.0,
-                            },
-                        },
-                    },
-                    ArtistRecord {
-                        id: artist_ids[4].clone(),
-                        kind: ArtistKind::Annotation,
-                        role: ArtistRole::Annotation,
-                        visible: true,
-                        properties: ArtistProperties::Annotation {
-                            label_id: "label-temperature".to_owned(),
-                            x_pt: 48.0,
-                            y_pt: 28.0,
-                        },
-                    },
-                    ArtistRecord {
-                        id: artist_ids[5].clone(),
-                        kind: ArtistKind::Legend,
-                        role: ArtistRole::Legend,
-                        visible: true,
-                        properties: ArtistProperties::Legend {
-                            entries: vec![
-                                LegendEntry {
-                                    artist_id: artist_ids[3].clone(),
-                                    label_id: "label-experiment".to_owned(),
-                                    visible: true,
-                                },
-                                LegendEntry {
-                                    artist_id: artist_ids[1].clone(),
-                                    label_id: "label-fit".to_owned(),
-                                    visible: true,
-                                },
-                            ],
-                            x_pt: 164.0,
-                            y_pt: 30.0,
-                        },
-                    },
-                ],
-            },
-            data_sources: vec![DataSourceRecord {
-                id: "fixture-data".to_owned(),
-                label: "B2 fixed publication fixture".to_owned(),
-                kind: DataSourceKind::Source,
-                payload: DataSourcePayload::Embedded {
-                    columns: embedded_columns,
-                    row_count: 3,
-                    alive: embedded_alive,
-                    sha256: embedded_sha256,
-                },
-                fit: None,
-            }],
-            semantic_registry: vec![
-                SemanticLabel {
-                    id: "label-x".to_owned(),
-                    nodes: vec![
-                        LabelNode::GreekVariable('μ'),
-                        LabelNode::VariableSubscript(vec![LabelNode::Number("0".to_owned())]),
-                        LabelNode::Variable("H".to_owned()),
-                        LabelNode::DescriptiveSubscript(vec![LabelNode::Text("DL".to_owned())]),
-                        LabelNode::Text(" (".to_owned()),
-                        LabelNode::Unit("mT".to_owned()),
-                        LabelNode::Text(")".to_owned()),
-                    ],
-                },
-                SemanticLabel {
-                    id: "label-temperature".to_owned(),
-                    nodes: vec![
-                        LabelNode::Variable("T".to_owned()),
-                        LabelNode::Text(" ".to_owned()),
-                        LabelNode::Operator("≤".to_owned()),
-                        LabelNode::Text(" ".to_owned()),
-                        LabelNode::Number("300".to_owned()),
-                        LabelNode::Text(" ".to_owned()),
-                        LabelNode::Unit("K".to_owned()),
-                    ],
-                },
-                SemanticLabel {
-                    id: "label-experiment".to_owned(),
-                    nodes: vec![LabelNode::Text("Experiment".to_owned())],
-                },
-                SemanticLabel {
-                    id: "label-fit".to_owned(),
-                    nodes: vec![LabelNode::Text("Fit".to_owned())],
-                },
-                SemanticLabel {
-                    id: "label-y".to_owned(),
-                    nodes: vec![
-                        LabelNode::Text("Current density ".to_owned()),
-                        LabelNode::Variable("J".to_owned()),
-                        LabelNode::VariableSubscript(vec![LabelNode::Variable("e".to_owned())]),
-                        LabelNode::Text(" (".to_owned()),
-                        LabelNode::Unit("A".to_owned()),
-                        LabelNode::UnitSeparator,
-                        LabelNode::Unit("m".to_owned()),
-                        LabelNode::Superscript(vec![LabelNode::Number("−2".to_owned())]),
-                        LabelNode::Text(")".to_owned()),
-                    ],
-                },
-            ],
-            palette: PaletteRegistry {
-                id: "publication-default-v1".to_owned(),
-                colors: vec![
-                    PaletteColor {
-                        id: "blue".to_owned(),
-                        rgba: [68, 119, 170, 255],
-                    },
-                    PaletteColor {
-                        id: "gray".to_owned(),
-                        rgba: [102, 102, 102, 255],
-                    },
-                ],
-            },
-            typography: default_typography(),
-            overrides: Vec::new(),
-            export_preferences: ExportPreferences {
-                vector_format: "pdf".to_owned(),
-                raster_dpi: vec![300, 600, 1200],
-                selected_raster_dpi: 300,
-                transparent_background: false,
-            },
-            provenance: vec![ProvenanceRecord {
-                id: "provenance-create".to_owned(),
-                operation: "create_fixed_fixture".to_owned(),
-                input_ids: Vec::new(),
-                parameters: BTreeMap::new(),
-            }],
-        }
-    }
+fn showcase_curve_value(index: usize, x: f64) -> f64 {
+    let baseline = -1.95 + index as f64 * 0.58;
+    let center = -1.8 + index as f64 * 0.6;
+    let radius = 1.15 + (index % 3) as f64 * 0.12;
+    let distance = (x - center) / radius;
+    let rounded_peak = (1.0 - distance * distance).max(0.0).powi(2);
+    let y = baseline + 0.45 * rounded_peak + (index as f64 - 3.0) * 0.02 * x;
+    (y * 1_000_000.0).round() / 1_000_000.0
+}
 
+mod fixture;
+
+impl ProjectDocument {
     pub fn validate(&self) -> Result<(), ProjectError> {
         if self.schema_version != PROJECT_SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedSchema(self.schema_version));
@@ -972,6 +803,7 @@ impl ProjectDocument {
                 fingerprint: fingerprint(path)?,
             },
             fit,
+            origin_path: Some(path_text.to_owned()),
         };
         let mut candidate = self.clone();
         if let Some(existing) = candidate.data_sources.iter_mut().find(|item| item.id == id) {
@@ -1007,6 +839,11 @@ impl ProjectDocument {
                 sha256,
             },
             fit,
+            origin_path: self
+                .data_sources
+                .iter()
+                .find(|source| source.id == id)
+                .and_then(|source| source.origin_path.clone()),
         };
         let mut candidate = self.clone();
         if let Some(existing) = candidate.data_sources.iter_mut().find(|item| item.id == id) {
@@ -1027,447 +864,14 @@ impl ProjectDocument {
     }
 }
 
-pub fn save_project(path: &Path, document: &ProjectDocument) -> Result<(), ProjectError> {
-    document.validate()?;
-    let mut bytes = serde_json::to_vec_pretty(document)?;
-    bytes.push(b'\n');
-    if path.exists() {
-        let old = fs::read(path)?;
-        decode_project(&old)
-            .map_err(|error| ProjectError::InvalidExistingProject(error.to_string()))?;
-        atomic_write(&backup_path(path), &old)?;
-    }
-    atomic_write(path, &bytes)
-}
+mod storage;
 
-pub fn open_project(path: &Path) -> Result<OpenProjectReport, ProjectError> {
-    let primary = fs::read(path).and_then(|bytes| {
-        decode_project(&bytes).map_err(|error| std::io::Error::other(error.to_string()))
-    });
-    match primary {
-        Ok(document) => Ok(report_for(document, OpenProjectSource::Primary)),
-        Err(primary_error) => {
-            let backup_path = backup_path(path);
-            let backup = fs::read(&backup_path).and_then(|bytes| {
-                decode_project(&bytes).map_err(|error| std::io::Error::other(error.to_string()))
-            });
-            match backup {
-                Ok(document) => {
-                    let mut report = report_for(document, OpenProjectSource::Backup);
-                    report.warnings.insert(
-                        0,
-                        format!(
-                            "Primary project could not be opened; recovered read-only state from {}: {primary_error}",
-                            backup_path.display()
-                        ),
-                    );
-                    Ok(report)
-                }
-                Err(backup_error) => Err(ProjectError::RecoveryFailed {
-                    primary: primary_error.to_string(),
-                    backup: backup_error.to_string(),
-                }),
-            }
-        }
-    }
-}
+use storage::source_state;
+pub use storage::{decode_project, fingerprint, open_project, save_project};
 
-pub fn decode_project(bytes: &[u8]) -> Result<ProjectDocument, ProjectError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|error| ProjectError::Decode(error.to_string()))?;
-    let version_u64 = value
-        .get("schema_version")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| ProjectError::Decode("schema_version is missing or invalid".to_owned()))?;
-    let version = u32::try_from(version_u64)
-        .map_err(|_| ProjectError::Decode("schema_version exceeds u32".to_owned()))?;
-    let document = match version {
-        PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
-            .map_err(|error| ProjectError::Decode(error.to_string()))?,
-        2 => migrate_v2(value)?,
-        1 => migrate_v1(value)?,
-        0 => migrate_v0(value)?,
-        future => return Err(ProjectError::UnsupportedSchema(future)),
-    };
-    document.validate()?;
-    Ok(document)
-}
+mod validation;
 
-pub fn fingerprint(path: &Path) -> Result<SourceFingerprint, ProjectError> {
-    let bytes = fs::read(path)?;
-    Ok(SourceFingerprint {
-        size_bytes: u64::try_from(bytes.len())
-            .map_err(|_| ProjectError::Validation("source is too large".to_owned()))?,
-        sha256: hex_digest(&bytes),
-    })
-}
-
-fn source_state(source: &DataSourceRecord) -> SourceState {
-    let DataSourcePayload::External {
-        path,
-        fingerprint: expected,
-    } = &source.payload
-    else {
-        return SourceState::Embedded;
-    };
-    match fingerprint(Path::new(path)) {
-        Ok(actual) if &actual == expected => SourceState::Unchanged,
-        Ok(actual) => SourceState::Changed {
-            expected_sha256: expected.sha256.clone(),
-            actual_sha256: actual.sha256,
-        },
-        Err(ProjectError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            SourceState::Missing
-        }
-        Err(error) => SourceState::Unavailable {
-            error: error.to_string(),
-        },
-    }
-}
-
-fn report_for(document: ProjectDocument, source: OpenProjectSource) -> OpenProjectReport {
-    let warnings = document
-        .source_states()
-        .into_iter()
-        .filter_map(|(id, state)| match state {
-            SourceState::Missing => Some(format!("External data source {id} is missing")),
-            SourceState::Changed { .. } => Some(format!(
-                "External data source {id} changed; stored data was not replaced"
-            )),
-            SourceState::Unavailable { error } => Some(format!(
-                "External data source {id} could not be checked: {error}"
-            )),
-            SourceState::Unchanged | SourceState::Embedded => None,
-        })
-        .collect();
-    OpenProjectReport {
-        document,
-        source,
-        warnings,
-    }
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.exists() {
-        return Err(ProjectError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("parent directory does not exist: {}", parent.display()),
-        )));
-    }
-    AtomicFile::new(path, AllowOverwrite)
-        .write(|file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        })
-        .map_err(|error| ProjectError::AtomicWrite(error.to_string()))
-}
-
-fn backup_path(path: &Path) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(".bak");
-    PathBuf::from(value)
-}
-
-fn validate_axis(axis: &AxisRecord, labels: &BTreeSet<String>) -> Result<(), ProjectError> {
-    if !axis.minimum.is_finite() || !axis.maximum.is_finite() || axis.minimum >= axis.maximum {
-        return Err(ProjectError::Validation(format!(
-            "axis {} requires finite minimum < maximum",
-            axis.id
-        )));
-    }
-    if !labels.contains(&axis.label_id) {
-        return Err(ProjectError::Validation(format!(
-            "axis {} references unknown label {}",
-            axis.id, axis.label_id
-        )));
-    }
-    if matches!(axis.scale, AxisScale::Log10) && axis.minimum <= 0.0 {
-        return Err(ProjectError::Validation(format!(
-            "log axis {} requires a positive minimum",
-            axis.id
-        )));
-    }
-    match &axis.locator {
-        LocatorSpec::Auto { target_count } if !(2..=20).contains(target_count) => {
-            return Err(ProjectError::Validation(format!(
-                "axis {} auto locator target must be within 2..=20",
-                axis.id
-            )));
-        }
-        LocatorSpec::Fixed { values }
-            if values.is_empty()
-                || values.iter().any(|value| !value.is_finite())
-                || values.windows(2).any(|pair| pair[0] >= pair[1])
-                || values
-                    .iter()
-                    .any(|value| *value < axis.minimum || *value > axis.maximum) =>
-        {
-            return Err(ProjectError::Validation(format!(
-                "axis {} fixed locator requires finite, strictly increasing values within its range",
-                axis.id
-            )));
-        }
-        _ => {}
-    }
-    match axis.formatter {
-        FormatterSpec::Decimal { precision } | FormatterSpec::Scientific { precision }
-            if precision > 15 =>
-        {
-            return Err(ProjectError::Validation(format!(
-                "axis {} formatter precision exceeds 15",
-                axis.id
-            )));
-        }
-        _ => {}
-    }
-    if [
-        axis.appearance.tick_label_pad_pt,
-        axis.appearance.label_edge_pad_pt,
-        axis.appearance.label_tick_pad_pt,
-    ]
-    .into_iter()
-    .any(|value| !value.is_finite() || value < 0.0 || value > 72.0)
-    {
-        return Err(ProjectError::Validation(format!(
-            "axis {} has invalid label spacing",
-            axis.id
-        )));
-    }
-    Ok(())
-}
-
-fn validate_artist(
-    artist: &ArtistRecord,
-    sources: &BTreeSet<String>,
-    labels: &BTreeSet<String>,
-    artists: &BTreeSet<String>,
-    palette_colors: &BTreeSet<String>,
-) -> Result<(), ProjectError> {
-    let expected_kind = match &artist.properties {
-        ArtistProperties::Line { binding, stroke } => {
-            validate_binding(artist, binding, sources)?;
-            validate_stroke(artist, stroke, palette_colors)?;
-            ArtistKind::Line
-        }
-        ArtistProperties::Scatter { binding, marker } => {
-            validate_binding(artist, binding, sources)?;
-            if !marker.size_pt.is_finite()
-                || marker.size_pt <= 0.0
-                || !palette_colors.contains(&marker.color_id)
-            {
-                return Err(ProjectError::Validation(format!(
-                    "artist {} has an invalid marker style",
-                    artist.id
-                )));
-            }
-            ArtistKind::Scatter
-        }
-        ArtistProperties::ErrorBar {
-            binding,
-            y_error_column,
-            cap_width_pt,
-            stroke,
-        } => {
-            validate_binding(artist, binding, sources)?;
-            validate_stroke(artist, stroke, palette_colors)?;
-            if y_error_column.trim().is_empty() || !cap_width_pt.is_finite() || *cap_width_pt <= 0.0
-            {
-                return Err(ProjectError::Validation(format!(
-                    "artist {} has an invalid error-bar binding",
-                    artist.id
-                )));
-            }
-            ArtistKind::ErrorBar
-        }
-        ArtistProperties::ReferenceLine { value, stroke, .. } => {
-            validate_stroke(artist, stroke, palette_colors)?;
-            if !value.is_finite() {
-                return Err(ProjectError::Validation(format!(
-                    "artist {} has a non-finite reference value",
-                    artist.id
-                )));
-            }
-            ArtistKind::ReferenceLine
-        }
-        ArtistProperties::Annotation {
-            label_id,
-            x_pt,
-            y_pt,
-        } => {
-            if !labels.contains(label_id) || !x_pt.is_finite() || !y_pt.is_finite() {
-                return Err(ProjectError::Validation(format!(
-                    "artist {} has an invalid annotation",
-                    artist.id
-                )));
-            }
-            ArtistKind::Annotation
-        }
-        ArtistProperties::Legend {
-            entries,
-            x_pt,
-            y_pt,
-        } => {
-            if entries.is_empty()
-                || !x_pt.is_finite()
-                || !y_pt.is_finite()
-                || entries.iter().any(|entry| {
-                    !artists.contains(&entry.artist_id) || !labels.contains(&entry.label_id)
-                })
-            {
-                return Err(ProjectError::Validation(format!(
-                    "artist {} has invalid legend entries or placement",
-                    artist.id
-                )));
-            }
-            ArtistKind::Legend
-        }
-    };
-    if artist.kind != expected_kind {
-        return Err(ProjectError::Validation(format!(
-            "artist {} kind does not match its properties",
-            artist.id
-        )));
-    }
-    Ok(())
-}
-
-fn validate_binding(
-    artist: &ArtistRecord,
-    binding: &DataBinding,
-    sources: &BTreeSet<String>,
-) -> Result<(), ProjectError> {
-    if !sources.contains(&binding.data_source_id)
-        || binding.x_column.trim().is_empty()
-        || binding.y_column.trim().is_empty()
-    {
-        return Err(ProjectError::Validation(format!(
-            "artist {} has an invalid data binding",
-            artist.id
-        )));
-    }
-    Ok(())
-}
-
-fn validate_stroke(
-    artist: &ArtistRecord,
-    stroke: &StrokeStyle,
-    palette_colors: &BTreeSet<String>,
-) -> Result<(), ProjectError> {
-    if !palette_colors.contains(&stroke.color_id)
-        || !stroke.width_pt.is_finite()
-        || stroke.width_pt <= 0.0
-        || stroke
-            .dash_pt
-            .iter()
-            .any(|value| !value.is_finite() || *value <= 0.0)
-    {
-        return Err(ProjectError::Validation(format!(
-            "artist {} has an invalid stroke style",
-            artist.id
-        )));
-    }
-    Ok(())
-}
-
-fn validate_payload(source: &DataSourceRecord) -> Result<(), ProjectError> {
-    match &source.payload {
-        DataSourcePayload::External { path, fingerprint } => {
-            if path.is_empty() || fingerprint.sha256.len() != 64 {
-                return Err(ProjectError::Validation(format!(
-                    "external data source {} has invalid path or fingerprint",
-                    source.id
-                )));
-            }
-        }
-        DataSourcePayload::Embedded {
-            columns,
-            row_count,
-            alive,
-            sha256,
-        } => {
-            if sha256.len() != 64
-                || (!alive.is_empty() && alive.len() != *row_count)
-                || columns
-                    .iter()
-                    .any(|column| column.values.len() != *row_count)
-                || columns
-                    .iter()
-                    .flat_map(|column| &column.values)
-                    .any(|value| !value.is_finite())
-                || sha256 != &embedded_digest(columns, *row_count, alive)?
-            {
-                return Err(ProjectError::Validation(format!(
-                    "embedded data source {} has inconsistent data",
-                    source.id
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn embedded_digest(
-    columns: &[EmbeddedColumn],
-    row_count: usize,
-    alive: &[bool],
-) -> Result<String, ProjectError> {
-    let bytes = if alive.is_empty() {
-        serde_json::to_vec(&(columns, row_count))?
-    } else {
-        serde_json::to_vec(&(columns, row_count, alive))?
-    };
-    Ok(hex_digest(&bytes))
-}
-
-fn validate_finite_positive(name: &str, value: f64) -> Result<(), ProjectError> {
-    if value.is_finite() && value > 0.0 {
-        Ok(())
-    } else {
-        Err(ProjectError::Validation(format!(
-            "{name} must be finite and positive"
-        )))
-    }
-}
-
-fn validate_scale(name: &str, value: f64) -> Result<(), ProjectError> {
-    if value.is_finite() && (0.1..=1.0).contains(&value) {
-        Ok(())
-    } else {
-        Err(ProjectError::Validation(format!(
-            "{name} must be within 0.1..=1.0"
-        )))
-    }
-}
-
-fn collect_ids<'a>(
-    values: impl Iterator<Item = &'a str>,
-    kind: &str,
-) -> Result<BTreeSet<String>, ProjectError> {
-    let mut ids = BTreeSet::new();
-    for id in values {
-        if id.trim().is_empty() || !ids.insert(id.to_owned()) {
-            return Err(ProjectError::Validation(format!(
-                "{kind} ID is empty or duplicated: {id:?}"
-            )));
-        }
-    }
-    Ok(ids)
-}
-
-fn insert_id(ids: &mut BTreeSet<String>, id: &str) -> Result<(), ProjectError> {
-    if id.trim().is_empty() || !ids.insert(id.to_owned()) {
-        return Err(ProjectError::Validation(format!(
-            "figure node ID is empty or duplicated: {id:?}"
-        )));
-    }
-    Ok(())
-}
-
-fn hex_digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
+use validation::*;
 
 fn default_typography() -> TypographyProfile {
     TypographyProfile {
@@ -1529,346 +933,9 @@ struct LegacyProjectV0 {
     y_max: f64,
 }
 
-fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> {
-    let legacy: LegacyProjectV0 = serde_json::from_value(value)
-        .map_err(|error| ProjectError::Decode(format!("legacy schema 0: {error}")))?;
-    if legacy.schema_version != 0 {
-        return Err(ProjectError::Decode(
-            "legacy migration received a non-zero schema".to_owned(),
-        ));
-    }
-    let mut document = ProjectDocument::fixed_fixture();
-    document.figure.id = legacy.figure_id;
-    document.producer_version = env!("CARGO_PKG_VERSION").to_owned();
-    let axes = document
-        .figure
-        .axes
-        .first_mut()
-        .expect("fixed fixture has one axes");
-    axes.x.minimum = legacy.x_min;
-    axes.x.maximum = legacy.x_max;
-    axes.y.minimum = legacy.y_min;
-    axes.y.maximum = legacy.y_max;
-    document.provenance.push(ProvenanceRecord {
-        id: "provenance-migrate-v0".to_owned(),
-        operation: "migrate_schema_0_to_3".to_owned(),
-        input_ids: vec![legacy.producer_version],
-        parameters: BTreeMap::new(),
-    });
-    Ok(document)
-}
+mod migration;
 
-fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
-    let artists = value["figure"]["artists"]
-        .as_array_mut()
-        .ok_or_else(|| ProjectError::Decode("schema 1 artists are missing".to_owned()))?;
-    for artist in artists {
-        artist
-            .as_object_mut()
-            .ok_or_else(|| ProjectError::Decode("schema 1 artist is invalid".to_owned()))?
-            .insert("visible".to_owned(), Value::Bool(true));
-    }
-    let mut document: ProjectDocument = serde_json::from_value(value)
-        .map_err(|error| ProjectError::Decode(format!("schema 1 migration: {error}")))?;
-    document.provenance.push(ProvenanceRecord {
-        id: "provenance-migrate-v1".to_owned(),
-        operation: "migrate_schema_1_to_3".to_owned(),
-        input_ids: Vec::new(),
-        parameters: BTreeMap::new(),
-    });
-    Ok(document)
-}
-
-fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
-    let mut document: ProjectDocument = serde_json::from_value(value)
-        .map_err(|error| ProjectError::Decode(format!("schema 2 migration: {error}")))?;
-    document.provenance.push(ProvenanceRecord {
-        id: "provenance-migrate-v2".to_owned(),
-        operation: "migrate_schema_2_to_3".to_owned(),
-        input_ids: Vec::new(),
-        parameters: BTreeMap::new(),
-    });
-    Ok(document)
-}
+use migration::{migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5};
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::*;
-
-    static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
-
-    struct TempDirectory(PathBuf);
-
-    impl TempDirectory {
-        fn new() -> Self {
-            let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path =
-                std::env::temp_dir().join(format!("instplot-b2-{}-{sequence}", std::process::id()));
-            fs::create_dir_all(&path).unwrap();
-            Self(path)
-        }
-    }
-
-    impl Drop for TempDirectory {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn current_project_round_trips_without_losing_identity_or_provenance() {
-        let project = ProjectDocument::fixed_fixture();
-        let bytes = serde_json::to_vec(&project).unwrap();
-        let decoded = decode_project(&bytes).unwrap();
-        assert_eq!(decoded, project);
-        assert_eq!(decoded.figure.id, "node-1");
-        assert_eq!(decoded.typography.family, "TeX Gyre Heros");
-        assert_eq!(decoded.palette.id, "publication-default-v1");
-    }
-
-    #[test]
-    fn older_schema_one_embedded_payload_without_alive_still_opens() {
-        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        let payload = value["data_sources"][0]["payload"].as_object_mut().unwrap();
-        let columns: Vec<EmbeddedColumn> =
-            serde_json::from_value(payload["columns"].clone()).unwrap();
-        let row_count = payload["row_count"].as_u64().unwrap() as usize;
-        payload.remove("alive");
-        payload.insert(
-            "sha256".to_owned(),
-            Value::String(embedded_digest(&columns, row_count, &[]).unwrap()),
-        );
-        let decoded = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
-        let DataSourcePayload::Embedded { alive, .. } = &decoded.data_sources[0].payload else {
-            panic!("fixed payload must remain embedded");
-        };
-        assert!(alive.is_empty());
-    }
-
-    #[test]
-    fn source_and_fit_identity_survive_round_trip() {
-        let embedded = || {
-            let columns = vec![EmbeddedColumn {
-                name: "x".to_owned(),
-                values: vec![1.0, 2.0],
-            }];
-            let alive = vec![true, false];
-            DataSourcePayload::Embedded {
-                sha256: embedded_digest(&columns, 2, &alive).unwrap(),
-                columns,
-                row_count: 2,
-                alive,
-            }
-        };
-        let mut project = ProjectDocument::fixed_fixture();
-        project.data_sources.extend([
-            DataSourceRecord {
-                id: "source-1".to_owned(),
-                label: "measurement".to_owned(),
-                kind: DataSourceKind::Source,
-                payload: embedded(),
-                fit: None,
-            },
-            DataSourceRecord {
-                id: "fit-1".to_owned(),
-                label: "linear fit".to_owned(),
-                kind: DataSourceKind::Fit,
-                payload: embedded(),
-                fit: Some(FitIdentity {
-                    parent_data_source_id: "source-1".to_owned(),
-                    source_x_column: "field".to_owned(),
-                    source_y_column: "response".to_owned(),
-                    equation: Some("a*x+b".to_owned()),
-                    display_equation: Some("y = a × x + b".to_owned()),
-                }),
-            },
-        ]);
-        project.validate().unwrap();
-        let decoded = decode_project(&serde_json::to_vec(&project).unwrap()).unwrap();
-        assert_eq!(decoded.data_sources, project.data_sources);
-        assert_eq!(decoded.typography, project.typography);
-        assert_eq!(decoded.palette, project.palette);
-
-        let mut legacy_value = serde_json::to_value(&project).unwrap();
-        legacy_value["data_sources"][2]["fit"]
-            .as_object_mut()
-            .unwrap()
-            .remove("display_equation");
-        let legacy = decode_project(&serde_json::to_vec(&legacy_value).unwrap()).unwrap();
-        assert_eq!(
-            legacy.data_sources[2]
-                .fit
-                .as_ref()
-                .unwrap()
-                .display_equation,
-            None
-        );
-    }
-
-    #[test]
-    fn unknown_fields_are_rejected_instead_of_silently_discarded() {
-        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        value["unexpected"] = Value::Bool(true);
-        let error = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap_err();
-        assert!(error.to_string().contains("unknown field `unexpected`"));
-
-        let mut nested = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        nested["figure"]["axes"][0]["unexpected"] = Value::Bool(true);
-        let error = decode_project(&serde_json::to_vec(&nested).unwrap()).unwrap_err();
-        assert!(error.to_string().contains("unknown field `unexpected`"));
-    }
-
-    #[test]
-    fn legacy_schema_zero_migrates_with_ranges_and_audit_record() {
-        let legacy = include_bytes!("../tests/fixtures/project-v0.instplot");
-        let migrated = decode_project(legacy).unwrap();
-        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
-        assert_eq!(migrated.figure.id, "legacy-figure");
-        assert_eq!(migrated.figure.axes[0].x.minimum, -4.0);
-        assert_eq!(
-            migrated.provenance.last().unwrap().operation,
-            "migrate_schema_0_to_3"
-        );
-    }
-
-    #[test]
-    fn schema_one_migrates_artist_visibility_to_visible() {
-        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        value["schema_version"] = Value::from(1);
-        for artist in value["figure"]["artists"].as_array_mut().unwrap() {
-            artist.as_object_mut().unwrap().remove("visible");
-        }
-        let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
-        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
-        assert!(migrated.figure.artists.iter().all(|artist| artist.visible));
-        assert_eq!(
-            migrated.provenance.last().unwrap().operation,
-            "migrate_schema_1_to_3"
-        );
-    }
-
-    #[test]
-    fn schema_two_migrates_axis_appearance_defaults() {
-        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        value["schema_version"] = Value::from(2);
-        for axes in value["figure"]["axes"].as_array_mut().unwrap() {
-            for name in ["x", "y"] {
-                let axis = axes[name].as_object_mut().unwrap();
-                axis.remove("autoscale");
-                axis.remove("appearance");
-            }
-        }
-        let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
-        assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
-        assert!(migrated.figure.axes[0].x.appearance.far_ticks);
-        assert_eq!(
-            migrated.figure.axes[0].y.appearance.tick_direction,
-            TickDirection::In
-        );
-        assert_eq!(
-            migrated.provenance.last().unwrap().operation,
-            "migrate_schema_2_to_3"
-        );
-    }
-
-    #[test]
-    fn atomic_save_keeps_a_valid_backup_and_recovers_from_corruption() {
-        let directory = TempDirectory::new();
-        let path = directory.0.join("figure.instplot");
-        let first = ProjectDocument::fixed_fixture();
-        save_project(&path, &first).unwrap();
-        let mut second = first.clone();
-        second.figure.axes[0].x.maximum = 8.0;
-        save_project(&path, &second).unwrap();
-        fs::write(&path, b"not JSON").unwrap();
-
-        let recovered = open_project(&path).unwrap();
-        assert_eq!(recovered.source, OpenProjectSource::Backup);
-        assert_eq!(recovered.document, first);
-        assert!(!recovered.warnings.is_empty());
-    }
-
-    #[test]
-    fn project_round_trip_supports_unicode_and_spaces_in_the_path() {
-        let directory = TempDirectory::new();
-        let nested = directory.0.join("实验 数据");
-        fs::create_dir_all(&nested).unwrap();
-        let path = nested.join("磁化 曲线.instplot");
-        let expected = ProjectDocument::fixed_fixture();
-        save_project(&path, &expected).unwrap();
-        let opened = open_project(&path).unwrap();
-        assert_eq!(opened.source, OpenProjectSource::Primary);
-        assert_eq!(opened.document, expected);
-    }
-
-    #[test]
-    fn invalid_existing_project_is_never_overwritten() {
-        let directory = TempDirectory::new();
-        let path = directory.0.join("invalid.instplot");
-        let original = b"not a project\n";
-        fs::write(&path, original).unwrap();
-        let error = save_project(&path, &ProjectDocument::fixed_fixture()).unwrap_err();
-        assert!(matches!(error, ProjectError::InvalidExistingProject(_)));
-        assert_eq!(fs::read(path).unwrap(), original);
-    }
-
-    #[test]
-    fn changed_and_missing_sources_warn_without_replacing_stored_identity() {
-        let directory = TempDirectory::new();
-        let source = directory.0.join("data.csv");
-        fs::write(&source, b"x,y\n1,2\n").unwrap();
-        let mut project = ProjectDocument::fixed_fixture();
-        project
-            .upsert_external_source(
-                "source-1",
-                "data.csv",
-                &source,
-                DataSourceKind::Source,
-                None,
-            )
-            .unwrap();
-        let state = || {
-            project
-                .source_states()
-                .into_iter()
-                .find(|(id, _)| *id == "source-1")
-                .unwrap()
-                .1
-        };
-        assert_eq!(state(), SourceState::Unchanged);
-        let project_path = directory.0.join("source-state.instplot");
-        save_project(&project_path, &project).unwrap();
-
-        fs::write(&source, b"x,y\n1,3\n").unwrap();
-        assert!(matches!(state(), SourceState::Changed { .. }));
-        assert!(
-            project
-                .data_sources
-                .iter()
-                .any(|record| record.id == "source-1")
-        );
-        let changed = open_project(&project_path).unwrap();
-        assert_eq!(changed.warnings.len(), 1);
-        assert_eq!(changed.document, project);
-
-        fs::remove_file(source).unwrap();
-        assert_eq!(state(), SourceState::Missing);
-        let missing = open_project(&project_path).unwrap();
-        assert_eq!(missing.warnings.len(), 1);
-        assert_eq!(missing.document, project);
-    }
-
-    #[test]
-    fn future_schema_is_rejected_explicitly() {
-        let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
-        value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION + 1);
-        assert!(matches!(
-            decode_project(&serde_json::to_vec(&value).unwrap()),
-            Err(ProjectError::UnsupportedSchema(version)) if version == PROJECT_SCHEMA_VERSION + 1
-        ));
-    }
-}
+mod project_tests;

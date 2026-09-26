@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use export_backend_spike::{Background, encode_png, rasterize_direct, resolve, to_pdf, to_svg};
+use instplot_export::{Background, encode_png, rasterize_direct, resolve, to_pdf, to_svg};
 use layout_engine_spike::{layout, marker_gallery_fixture, publication_fixture};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resolved = resolve(&result.display_list);
     std::fs::write(output.join("a7-single-axes.pdf"), to_pdf(&resolved)?)?;
     std::fs::write(output.join("a7-single-axes.svg"), to_svg(&resolved))?;
-    let image = rasterize_direct(&resolved, 300, Background::White);
+    let image = rasterize_direct(&resolved, 300, Background::White)?;
     std::fs::write(
         output.join("a7-single-axes-300dpi.png"),
         encode_png(&image)?,
@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gallery = layout(&marker_gallery_fixture())?;
     let gallery = resolve(&gallery.display_list);
     std::fs::write(output.join("a7-marker-gallery.svg"), to_svg(&gallery))?;
-    let image = rasterize_direct(&gallery, 300, Background::White);
+    let image = rasterize_direct(&gallery, 300, Background::White)?;
     std::fs::write(
         output.join("a7-marker-gallery-300dpi.png"),
         encode_png(&image)?,

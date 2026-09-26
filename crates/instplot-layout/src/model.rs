@@ -1,5 +1,5 @@
-use studio_render_spike::{Color, NodeId};
-use text_shaping_spike::Label;
+use instplot_render::{Color, NodeId};
+use instplot_text::Label;
 
 use crate::scale::{Formatter, Locator, Scale};
 
@@ -23,6 +23,7 @@ pub struct AxisSpec {
     pub maximum: f64,
     pub scale: Scale,
     pub locator: Locator,
+    pub minor_interval: Option<f64>,
     pub formatter: Formatter,
     pub grid: GridSpec,
     pub appearance: AxisAppearance,
@@ -80,9 +81,15 @@ pub struct GridSpec {
 pub struct Series {
     pub id: NodeId,
     pub label: String,
+    /// Semantic label used for legend shaping; `label` remains the plain tooltip text.
+    pub legend_label: Option<Label>,
     pub points: Vec<DataPoint>,
     pub line: Option<LineStyle>,
     pub marker: Option<MarkerStyle>,
+    /// Optional marker shown only in the legend key for a line+marker series.
+    pub legend_marker: Option<MarkerStyle>,
+    /// Style used to communicate attached error bars in the legend key.
+    pub legend_error: Option<LegendErrorStyle>,
     pub errors: Vec<ErrorBar>,
     pub error_style: Option<ErrorStyle>,
     pub color: Color,
@@ -93,6 +100,12 @@ pub struct ErrorStyle {
     pub width: f64,
     pub cap_width: f64,
     pub dash: DashStyle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LegendErrorStyle {
+    pub style: ErrorStyle,
+    pub color: Color,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -115,6 +128,9 @@ pub enum DashStyle {
     Dashed,
     Dotted,
     DashDot,
+    LongDash,
+    LongShortDash,
+    DashDotDot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -130,6 +146,8 @@ pub enum MarkerShape {
     TriangleUp,
     TriangleDown,
     Diamond,
+    Pentagon,
+    Star,
     Plus,
     Cross,
 }
@@ -139,14 +157,27 @@ pub struct MarkerStyle {
     pub shape: MarkerShape,
     pub size: f64,
     pub filled: bool,
+    /// Draw one marker for every `interval` source points. Lines are never decimated.
+    pub interval: usize,
 }
 
 #[derive(Clone, Debug)]
 pub struct Annotation {
     pub id: NodeId,
-    pub label: Label,
+    pub labels: Vec<Label>,
     pub position: AnnotationPosition,
     pub offset_pt: (f64, f64),
+    pub connectors: Vec<AnnotationConnector>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnnotationConnector {
+    pub target: DataPoint,
+    pub stroke: LineStyle,
+    pub color: Color,
+    pub start_arrow: bool,
+    pub end_arrow: bool,
+    pub arrow_size: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,14 +186,27 @@ pub enum AnnotationPosition {
     FigurePoints { x: f64, y: f64 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LegendSpec {
     pub id: NodeId,
     pub position: LegendPosition,
+    pub manual_position: Option<(f64, f64)>,
+    pub grid: LegendGrid,
+    pub entry_order: Vec<NodeId>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LegendGrid {
+    #[default]
+    Auto,
+    Rows(usize),
+    Columns(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LegendPosition {
     Auto,
+    Above,
+    Right,
     FigurePoints { x: f64, y: f64 },
 }

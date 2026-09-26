@@ -49,25 +49,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(&output)?;
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
 
-    let mut valid_cases = Vec::new();
-    valid_cases.push(write_case(
-        "single-source",
-        &fixtures.join("smoke.csv"),
-        instplot_io::read_data_file(&fixtures.join("smoke.csv"))?,
-        &output,
-    )?);
-    valid_cases.push(write_case(
-        "source-fit",
-        &fixtures.join("lite-source-fit.txt"),
-        instplot_io::read_data_file(&fixtures.join("lite-source-fit.txt"))?,
-        &output,
-    )?);
-    valid_cases.push(write_case(
-        "multi-source",
-        &fixtures.join("p0-multi-source.txt"),
-        instplot_io::read_data_file(&fixtures.join("p0-multi-source.txt"))?,
-        &output,
-    )?);
+    let mut valid_cases = vec![
+        write_case(
+            "single-source",
+            &fixtures.join("smoke.csv"),
+            instplot_io::read_data_file(&fixtures.join("smoke.csv"))?,
+            &output,
+        )?,
+        write_case(
+            "source-fit",
+            &fixtures.join("lite-source-fit.txt"),
+            instplot_io::read_data_file(&fixtures.join("lite-source-fit.txt"))?,
+            &output,
+        )?,
+        write_case(
+            "multi-source",
+            &fixtures.join("p0-multi-source.txt"),
+            instplot_io::read_data_file(&fixtures.join("p0-multi-source.txt"))?,
+            &output,
+        )?,
+        write_case(
+            "missing-value",
+            &fixtures.join("p0-missing-values.csv"),
+            instplot_io::read_data_file(&fixtures.join("p0-missing-values.csv"))?,
+            &output,
+        )?,
+    ];
 
     let disabled_fixture = fixtures.join("p0-disabled-source.csv");
     let mut disabled = instplot_io::read_data_file(&disabled_fixture)?;
@@ -79,17 +86,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &output,
     )?);
 
-    let missing_fixture = fixtures.join("p0-missing-values.csv");
-    let missing = instplot_io::read_data_file(&missing_fixture)?;
-    let error = FigureDocument::from_datasets(&missing)
-        .expect_err("non-finite missing value must be rejected explicitly")
-        .to_string();
-    let expected_rejections = vec![RejectionManifest {
-        id: "missing-value".to_owned(),
-        fixture: relative_fixture(&missing_fixture),
-        stage: "figure_document_creation",
-        error,
-    }];
+    let expected_rejections = Vec::new();
 
     let manifest = BaselineManifest {
         schema_version: 1,

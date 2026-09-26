@@ -8,5 +8,6 @@ publish = false
 instplot-layout = { path = "../../crates/instplot-layout" }
 
 [dev-dependencies]
-export-backend-spike = { path = "../export-backend-spike" }
-studio-render-spike = { path = "../studio-render-spike" }
+instplot-export = { path = "../../crates/instplot-export" }
+instplot-render = { path = "../../crates/instplot-render" }
+instplot-text = { path = "../../crates/instplot-text" }
