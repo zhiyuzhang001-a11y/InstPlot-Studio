@@ -946,6 +946,7 @@ fn first_file_import_replaces_even_edited_showcase_and_later_import_adds_a_curve
     let first = session.datasets()[0].clone();
     let first_ids = BTreeSet::from([first.plot_id.clone()]);
     let mut showcase = FigureDocument::showcase();
+    showcase.set_palette("tol-bright-v1").unwrap();
     let mut history = EditHistory::new(&showcase, true);
     history
         .execute(
@@ -967,6 +968,7 @@ fn first_file_import_replaces_even_edited_showcase_and_later_import_adds_a_curve
         None,
     )
     .unwrap();
+    assert_eq!(document.palette_id(), "tol-bright-v1");
     assert_eq!(document.project().data_sources.len(), 1);
     assert!(
         document
@@ -1059,6 +1061,15 @@ fn palette_internal_ids_are_not_shown_as_color_names() {
         assert!(!chinese.contains("object-"), "{}", color.id);
         assert!(!english.contains("object-"), "{}", color.id);
         assert_ne!(chinese, color.id);
+    }
+    for palette_id in USER_PALETTE_IDS {
+        let registry = builtin_palette_registry(palette_id).unwrap();
+        for color in registry.colors {
+            let chinese = palette_color_name(UiLanguage::Chinese, &color.id);
+            let english = palette_color_name(UiLanguage::English, &color.id);
+            assert_ne!(chinese, color.id);
+            assert_ne!(english, color.id);
+        }
     }
 }
 

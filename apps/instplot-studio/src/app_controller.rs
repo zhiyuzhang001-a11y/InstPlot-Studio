@@ -1778,6 +1778,9 @@ impl StudioApp {
         let mut document = if replace_showcase {
             let mut document =
                 FigureDocument::from_datasets(&datasets).map_err(|error| error.to_string())?;
+            if USER_PALETTE_IDS.contains(&self.document.palette_id()) {
+                document.set_palette(self.document.palette_id())?;
+            }
             let automatic = document
                 .series()
                 .into_iter()
@@ -1816,9 +1819,9 @@ impl StudioApp {
                 &specification.y_column,
                 self.manual_data.style,
             )?;
-            let color_id = document
-                .palette_colors()
-                .get(series_index % document.palette_colors().len().max(1))
+            let series_palette = document.series_palette_colors();
+            let color_id = series_palette
+                .get(series_index % series_palette.len().max(1))
                 .map(|color| color.id.clone());
             for id in &created {
                 let Some(mut record) = document.artist_record(id) else {

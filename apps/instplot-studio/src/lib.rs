@@ -39,7 +39,8 @@ pub use handoff::{
 };
 pub use palette::{
     PALETTE_DATA_SCHEMA_VERSION, PaletteKind, PaletteMetadata, PaletteOrdering, PaletteReview,
-    ReviewStatus, builtin_palette, builtin_palettes, registry_matches_metadata,
+    ReviewStatus, USER_PALETTE_IDS, builtin_palette, builtin_palette_registry, builtin_palettes,
+    palette_series_color_ids, registry_matches_metadata,
 };
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{

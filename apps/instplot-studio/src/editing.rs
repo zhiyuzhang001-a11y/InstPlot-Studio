@@ -93,6 +93,9 @@ pub enum EditCommand {
     SetAllMarkerFilled {
         filled: bool,
     },
+    SetPalette {
+        palette_id: String,
+    },
     SetSemanticLabel {
         label_id: String,
         nodes: Vec<LabelNode>,
@@ -124,6 +127,7 @@ impl EditCommand {
             Self::SetAllMarkerSizes { .. } => "Change all marker sizes",
             Self::SetAllMarkerIntervals { .. } => "Change all marker intervals",
             Self::SetAllMarkerFilled { .. } => "Change all marker fill styles",
+            Self::SetPalette { .. } => "Change colour scheme",
             Self::SetSemanticLabel { .. } => "Change semantic label",
             Self::SetExportPreferences(_) => "Change export settings",
         }
@@ -202,6 +206,7 @@ impl EditCommand {
             Self::SetAllMarkerSizes { size_pt } => document.set_all_marker_sizes(size_pt),
             Self::SetAllMarkerIntervals { interval } => document.set_all_marker_intervals(interval),
             Self::SetAllMarkerFilled { filled } => document.set_all_marker_filled(filled),
+            Self::SetPalette { palette_id } => document.set_palette(&palette_id),
             Self::SetSemanticLabel { label_id, nodes } => {
                 document.set_semantic_label_nodes(&label_id, nodes)
             }
@@ -728,5 +733,27 @@ mod tests {
                 .compile()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn palette_selection_is_one_atomic_undoable_edit() {
+        let mut document = FigureDocument::showcase();
+        let original = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetPalette {
+                    palette_id: "tol-burd-v1".to_owned(),
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(document.palette_id(), "tol-burd-v1");
+        assert!(history.is_dirty(&document));
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &original);
+        history.redo(&mut document).unwrap();
+        assert_eq!(document.palette_id(), "tol-burd-v1");
     }
 }

@@ -33,7 +33,8 @@ use instplot_studio::{
     LabelNode, LegendGrid, LegendPlacement, LocatorSpec, ManualAxisInput, ManualDataInput,
     ManualYInput, MarkerShape, OpenProjectSource, PRODUCT_NAME, PreviewAdapter, PublicationReport,
     ReferenceOrientation, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind,
-    StrokeStyle, StudioSession, check_publication, resolve_document,
+    StrokeStyle, StudioSession, USER_PALETTE_IDS, builtin_palette_registry, check_publication,
+    palette_series_color_ids, resolve_document,
 };
 use ui_chrome::*;
 use ui_text::{Text, UiLanguage};

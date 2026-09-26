@@ -44,6 +44,9 @@ pub(super) fn document_with_imported_datasets(
     if replace_showcase {
         let mut document =
             FigureDocument::from_datasets(datasets).map_err(|error| error.to_string())?;
+        if USER_PALETTE_IDS.contains(&current.palette_id()) {
+            document.set_palette(current.palette_id())?;
+        }
         for dimension in [AxisDimension::X, AxisDimension::Y] {
             let mut axis = document.axis_record(dimension);
             axis.autoscale = true;

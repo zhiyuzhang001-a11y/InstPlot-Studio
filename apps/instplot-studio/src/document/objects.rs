@@ -115,6 +115,121 @@ impl FigureDocument {
         &self.project.palette.colors
     }
 
+    pub fn palette_id(&self) -> &str {
+        &self.project.palette.id
+    }
+
+    pub fn series_palette_colors(&self) -> Vec<&PaletteColor> {
+        palette_series_color_ids(&self.project.palette.id)
+            .iter()
+            .filter_map(|id| {
+                self.project
+                    .palette
+                    .colors
+                    .iter()
+                    .find(|color| color.id == *id)
+            })
+            .collect()
+    }
+
+    /// Changes the active colour scheme and deterministically recolours every
+    /// data family. A fit retains its source colour, while theory/reference
+    /// roles continue to use semantic neutral ink.
+    pub fn set_palette(&mut self, palette_id: &str) -> Result<(), String> {
+        let registry = builtin_palette_registry(palette_id)
+            .ok_or_else(|| format!("unknown built-in palette {palette_id}"))?;
+        let series_colors = palette_series_color_ids(palette_id);
+        if series_colors.is_empty() {
+            return Err("the selected palette has no series colours".to_owned());
+        }
+
+        let mut candidate = self.project.clone();
+        candidate.palette = registry;
+        let mut family_colors = BTreeMap::<String, String>::new();
+        for source in &candidate.data_sources {
+            let family_id = source
+                .fit
+                .as_ref()
+                .map_or(source.id.as_str(), |fit| fit.parent_data_source_id.as_str());
+            if !family_colors.contains_key(family_id) {
+                let index = family_colors.len() % series_colors.len();
+                family_colors.insert(family_id.to_owned(), series_colors[index].to_owned());
+            }
+        }
+
+        let source_families = candidate
+            .data_sources
+            .iter()
+            .map(|source| {
+                let family_id = source
+                    .fit
+                    .as_ref()
+                    .map_or(source.id.as_str(), |fit| fit.parent_data_source_id.as_str());
+                (source.id.clone(), family_id.to_owned())
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut changed_properties = BTreeMap::new();
+        for artist in &mut candidate.figure.artists {
+            let role_color = match artist.role {
+                ArtistRole::Theory => Some("neutral-primary"),
+                ArtistRole::Reference => Some("neutral-secondary"),
+                ArtistRole::Baseline => Some("object-black"),
+                _ => None,
+            };
+            match &mut artist.properties {
+                ArtistProperties::Line { binding, stroke }
+                | ArtistProperties::ErrorBar {
+                    binding, stroke, ..
+                } => {
+                    let color = role_color.or_else(|| {
+                        source_families
+                            .get(&binding.data_source_id)
+                            .and_then(|family| family_colors.get(family))
+                            .map(String::as_str)
+                    });
+                    if let Some(color) = color {
+                        stroke.color_id = color.to_owned();
+                    }
+                }
+                ArtistProperties::Scatter { binding, marker } => {
+                    let color = role_color.or_else(|| {
+                        source_families
+                            .get(&binding.data_source_id)
+                            .and_then(|family| family_colors.get(family))
+                            .map(String::as_str)
+                    });
+                    if let Some(color) = color {
+                        marker.color_id = color.to_owned();
+                    }
+                }
+                ArtistProperties::ReferenceLine { stroke, .. } => {
+                    stroke.color_id = role_color.unwrap_or("neutral-primary").to_owned();
+                }
+                ArtistProperties::Annotation { connectors, .. } => {
+                    for connector in connectors {
+                        connector.stroke.color_id = "object-black".to_owned();
+                    }
+                }
+                ArtistProperties::Legend { .. } => {}
+            }
+            changed_properties.insert(
+                artist.id.clone(),
+                serde_json::to_value(&artist.properties)
+                    .map_err(|error| format!("artist style cannot be recorded: {error}"))?,
+            );
+        }
+        for record in &mut candidate.overrides {
+            if record.property == "artist_style"
+                && let Some(value) = changed_properties.get(&record.target_id)
+            {
+                record.value = value.clone();
+            }
+        }
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
     pub fn export_preferences(&self) -> &crate::ExportPreferences {
         &self.project.export_preferences
     }

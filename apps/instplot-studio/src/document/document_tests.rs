@@ -1361,6 +1361,36 @@ fn legend_preserves_semantic_label_styles_in_the_display_list() {
 }
 
 #[test]
+fn switching_palette_recolors_series_and_keeps_the_document_valid() {
+    let mut document = FigureDocument::showcase();
+    document.set_palette("tol-high-contrast-v1").unwrap();
+
+    assert_eq!(document.palette_id(), "tol-high-contrast-v1");
+    let available = document
+        .palette_colors()
+        .iter()
+        .map(|color| color.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let series_colors = document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
+                Some(stroke.color_id.as_str())
+            }
+            ArtistProperties::Scatter { marker, .. } => Some(marker.color_id.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(series_colors.len(), 3);
+    assert!(series_colors.iter().all(|color| available.contains(color)));
+    document.project().validate().unwrap();
+    document.layout_figure().unwrap();
+}
+
+#[test]
 fn series_management_is_valid_deterministic_and_round_trips() {
     let mut document = FigureDocument::fixed();
     let created = document

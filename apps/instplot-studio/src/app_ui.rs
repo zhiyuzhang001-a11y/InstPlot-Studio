@@ -92,6 +92,8 @@ impl eframe::App for StudioApp {
             self.undo();
         }
 
+        let mut requested_palette = None;
+
         egui::Panel::top("product_header")
             .frame(
                 egui::Frame::new()
@@ -210,6 +212,43 @@ impl eframe::App for StudioApp {
                         self.manual_data.open = true;
                         self.manual_data.error = None;
                     }
+                    ui.menu_button(self.language.text(Text::ColorScheme), |ui| {
+                        let active = match self.document.palette_id() {
+                            "publication-default-v1" | "studio-showcase-v1" => "tol-bright-v1",
+                            id => id,
+                        };
+                        for palette_id in USER_PALETTE_IDS {
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(
+                                        active == palette_id,
+                                        palette_scheme_name(self.language, palette_id),
+                                    )
+                                    .clicked()
+                                {
+                                    requested_palette = Some(palette_id);
+                                    ui.close();
+                                }
+                                if let Some(registry) = builtin_palette_registry(palette_id) {
+                                    for color_id in
+                                        palette_series_color_ids(palette_id).iter().take(7)
+                                    {
+                                        if let Some(color) = registry
+                                            .colors
+                                            .iter()
+                                            .find(|color| color.id == *color_id)
+                                        {
+                                            let [red, green, blue, _] = color.rgba;
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(red, green, blue),
+                                                "●",
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
                     let check_count = self.publication_report.error_count()
                         + self.publication_report.warning_count();
                     let check_label = if check_count == 0 {
@@ -243,6 +282,29 @@ impl eframe::App for StudioApp {
                     }
                 });
             });
+
+        if let Some(palette_id) = requested_palette {
+            let success = match self.language {
+                UiLanguage::Chinese => {
+                    format!(
+                        "已应用配色：{}",
+                        palette_scheme_name(self.language, palette_id)
+                    )
+                }
+                UiLanguage::English => {
+                    format!(
+                        "Applied palette: {}",
+                        palette_scheme_name(self.language, palette_id)
+                    )
+                }
+            };
+            self.execute_document_edit(
+                EditCommand::SetPalette {
+                    palette_id: palette_id.to_owned(),
+                },
+                &success,
+            );
+        }
 
         egui::Panel::bottom("product_footer")
             .frame(

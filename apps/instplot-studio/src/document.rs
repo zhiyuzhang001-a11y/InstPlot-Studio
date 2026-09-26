@@ -18,7 +18,8 @@ use crate::{
     DataSourceKind, DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode,
     LegendEntry, LegendGrid, LegendPlacement, LocatorSpec, MarkerShape, MarkerStyle,
     OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
-    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, open_project, save_project,
+    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry,
+    open_project, palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -583,9 +584,9 @@ fn default_series_color(project: &ProjectDocument, data_source_id: &str) -> Stri
             _ => continue,
         };
     }
-    let available = HANDOFF_COLORS
+    let available = palette_series_color_ids(&project.palette.id)
         .iter()
-        .map(|(id, _)| *id)
+        .copied()
         .filter(|id| project.palette.colors.iter().any(|color| color.id == *id))
         .collect::<Vec<_>>();
     let used = project
