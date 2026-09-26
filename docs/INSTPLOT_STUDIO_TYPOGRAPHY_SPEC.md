@@ -1,9 +1,9 @@
 # InstPlot Studio 字体与科学排版规范
 
-**文件名：** `INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`  
-**规范版本：** V1.0  
-**状态：** Accepted  
-**适用范围：** InstPlot Studio V1 的科学绘图标签、坐标轴、刻度、图例、注释及面板标记  
+**文件名：** `INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
+**规范版本：** V1.0
+**状态：** Accepted
+**适用范围：** InstPlot Studio V1 的科学绘图标签、坐标轴、刻度、图例、注释及面板标记
 **默认出版字体：** TeX Gyre Heros
 
 ## 1. 目的与规范用语
@@ -43,7 +43,7 @@ V1 不以以下能力为目标：
 
 ### 3.1 默认字体家族
 
-InstPlot Studio V1 的默认出版字体必须为 **TeX Gyre Heros**。Latin、Greek、数字、单位及 V1 Scientific Symbol Core 应优先由同一字体家族提供，避免使用独立 Symbol 字体造成视觉不一致。
+InstPlot Studio V1 的默认出版字体必须为 **TeX Gyre Heros**。Latin、Greek、数字、单位及 V1 Scientific Symbol Core 默认由同一字体家族提供；关系符号 `≤`、`≥` 是明确的例外，使用随软件交付的 STIX Two Math 原生字形。此例外不得改变 Greek/Latin 变量的斜体规则，也不得依赖目标电脑的系统字体。
 
 ### 3.2 必需字体文件
 
@@ -139,6 +139,11 @@ H_x  H_y  M_z  J_c
 ```
 
 解析器不得只按下标长度猜测语义；Label AST 必须明确区分 `DescriptiveSubscript` 与 `VariableSubscript`。自动解析无法可靠判断时，应采用显式语义输入或给出可编辑的默认结果。
+
+输入层以数学分隔符作为明确的语义边界：`$v_sk$`（或 `$v_{sk}$`）中的
+`v`、`s`、`k` 均为数学变量并使用 Italic；`$v$_sk`（或 `$v$_{sk}`）将数学变量 `v` 与数学区外的描述性
+下标 `sk` 分开，后者使用 Regular。`$v_{\mathrm{sk}}$` 是在数学区内显式
+指定描述性正体的等价写法。数字下标在两种模式下都保持 Regular。
 
 ### 4.8 上标
 
@@ -336,7 +341,7 @@ Temperature (°C)
 U+03BC，但在 `Unit` 语义中必须用 Regular；这与同一字符作为 `GreekVariable`
 时使用 Italic 不冲突。
 
-V1 不需要独立 Symbol 字体。只有在未来扩展高级数学能力且主字体确实缺字时，才可以引入经过明确声明和验证的 Math fallback。
+V1 不需要通用 Symbol 字体。仅 `≤`、`≥` 使用独立的 STIX Two Math 符号 face；无论字符出现在普通文本还是数学输入中，布局、预览、PDF 和其他导出后端都必须选取同一 face。其他符号仍使用 TeX Gyre Heros；不得把这一例外扩大为任意系统字体 fallback。
 
 ### 8.1 科学计数法
 
@@ -387,6 +392,10 @@ Label AST 必须保存语义，而不是仅保存最终字符串。最低映射�
 | `Operator` | Regular | 正常 | 运算符和关系符 |
 | `Emphasis` | Bold | 正常 | 显式强调 |
 | `BoldVariable` | Bold Italic | 正常 | 显式粗斜体变量 |
+
+`Number` 的 Regular 语义在上下标内也保持不变；例如 `μ_0` 中的 `μ` 为
+Italic，而 `0` 为缩小、下移的 Regular。`VariableSubscript` 的 Italic 规则
+只作用于变量字符，不得把数字强制变成斜体。
 
 示例 `H_DL (mT)` 的期望 semantic runs：
 
@@ -476,7 +485,7 @@ m s⁻¹
 
 ### 11.3 版本与可重复性
 
-软件必须记录并固定实际使用的 TeX Gyre Heros 版本及文件校验信息。字体版本更新属于可见输出变更，必须重新执行 coverage、fixture 和 PDF 验证，不能只凭 family name 认为结果等价。
+软件必须记录并固定实际使用的 TeX Gyre Heros 与 STIX Two Math 版本及文件校验信息。STIX face 只允许映射 `≤`、`≥`，并须检查其 cmap、嵌入许可和导出后的字形。字体版本更新属于可见输出变更，必须重新执行 coverage、fixture 和 PDF 验证，不能只凭 family name 认为结果等价。
 
 ## 12. PDF 与文本保真
 

@@ -4,8 +4,9 @@ InstPlot Studio is an independent Rust application for publication-quality scien
 It is designed to cooperate with InstPlot Lite without becoming a mode, crate, or
 workspace member inside the Lite repository.
 
-The repository directory and existing prototype package identifiers still use
-the historical `SciPlot` name until a separate mechanical rename is completed.
+The repository directory retains the historical `SciPlot` checkout name. Production
+packages use formal `instplot-*` identities under `apps/` and `crates/`; only explicitly
+historical comparison fixtures remain under `prototypes/`.
 
 ## Repository boundary
 
@@ -17,7 +18,22 @@ the historical `SciPlot` name until a separate mechanical rename is completed.
   contract and regression tests for Lite.
 - Generated artifacts and machine-local paths are never committed as dependencies.
 
-## Current phase
+## Current architecture
+
+The staged modularization plan is complete through the second-product proof. See
+[`docs/INSTPLOT_STUDIO_MODULARIZATION_PLAN.md`](docs/INSTPLOT_STUDIO_MODULARIZATION_PLAN.md),
+[`adr/023-modular-product-boundaries.md`](adr/023-modular-product-boundaries.md), and
+[`docs/INSTPLOT_EXTENSION_GUIDE.md`](docs/INSTPLOT_EXTENSION_GUIDE.md).
+The repository finalization procedure is recorded in
+[`docs/INSTPLOT_STUDIO_CODEBASE_FINALIZATION_PLAN.md`](docs/INSTPLOT_STUDIO_CODEBASE_FINALIZATION_PLAN.md),
+and release changes are summarized in [`CHANGELOG.md`](CHANGELOG.md).
+
+`apps/instplot-studio` is the full product. `apps/instplot-demo` is the independent
+InstPlot Quick consumer that imports data, selects XY columns, edits labels and exports
+SVG through shared services. Formal reusable crates are `instplot-text`,
+`instplot-render`, `instplot-layout`, `instplot-export`, and `instplot-ui`.
+
+## Historical delivery record
 
 Part A and Gate A are complete. The local 21-check validation, typography and
 visual matrix, dependency audit, macOS PDF review, Windows automated audit and
@@ -25,7 +41,7 @@ Windows 10 manual scaling/input/PDF review pass. Linux and physical Retina
 checks are explicitly deferred to a release that claims those targets; they are
 not represented as passed.
 
-Part B is active. B0 is complete: Lite now consumes the shared core, I/O,
+Part B and the modularization program are complete. B0 established that Lite consumes the shared core, I/O,
 processing, fitting, and expression crates from one Cargo workspace, while an
 independent Studio-side consumer proves that the shared data model can be used
 through a pinned Git revision. B1 is complete: the independent
@@ -63,6 +79,42 @@ cargo test --workspace --locked
 cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 cargo run --release --locked --package instplot-studio -- --product-info
 ```
+
+For a single Spotlight-searchable local macOS app, run
+`python3 scripts/install_studio_macos.py`. It builds the release binary and
+installs `~/Applications/InstPlot Studio.app` with a stable bundle identifier.
+Run the same command after later changes: it replaces that same app rather
+than creating a version-suffixed copy. Close the installed app before updating.
+
+Studio opens TXT, CSV, DAT, TSV, XLSX and XLS data through the same shared
+parser as Lite, including multiple sections or worksheets. Use File → Open Data,
+the data drawer, or drag files into the window. The initial seven-curve figure
+is a disposable example: the first successful import replaces it, even if the
+example was edited. Later imports add to the current figure; a failed file
+does not discard other successful files in the same batch. A fit file selected
+before its source is retried after the source imports. Lite exports with an
+aggregate fit marked `Parent-ID: *` do not identify the fit's individual source
+datasets: Studio imports the source data and explicitly warns that it skipped
+that fit, rather than inventing a scientific association.
+The data drawer groups datasets by file, keeps X/Y and plot creation controls
+with the selected dataset, and links directly to curves already using it. A
+curve's compact editor also exposes its data binding, so changing the plotted
+file or X/Y columns does not require opening the full inspector.
+Repeated basenames are distinguished by their parent folder, and section names
+are shown without repeating the filename or exposing embedded internal IDs.
+Each file group can be removed with its linked plot objects in one undoable
+action; multi-section files also allow removing an individual data section.
+The File menu clears all imported data in one undoable action.
+These operations change only the current project, never the source files on disk.
+Project schema 5 preserves imported file provenance across save/reopen; older
+schema 4 projects migrate automatically, although they cannot recover file
+origins that were never stored.
+The data drawer remains focused on files and XY/error bindings; raw numeric processing remains in
+Lite rather than crowding the Studio drawing interface.
+Reimporting the same path refreshes data only while its existing dataset IDs
+remain present; if a section disappears or changes identity, Studio rejects the
+refresh and keeps the current figure unchanged to avoid stale curves. Start a
+new figure to load the changed set of sections.
 
 Run the complete repeatable B1 validation with:
 
