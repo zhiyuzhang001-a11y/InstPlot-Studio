@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("audit_part_a.py")
@@ -110,6 +112,50 @@ class AuditHelpersTest(unittest.TestCase):
                 check for check in checks if check.check_id == "windows-scaling"
             )
             self.assertEqual(scaling.status, "blocked")
+
+    def test_validation_accepts_a_complete_dynamic_check_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            validation = output / "validation"
+            validation.mkdir()
+            summary = {
+                "result": "pass",
+                "passed": 2,
+                "failed": 0,
+                "failed_checks": [],
+                "checks": [
+                    {"name": "one", "result": "pass"},
+                    {"name": "two", "result": "pass"},
+                ],
+            }
+            (validation / "summary.json").write_text(json.dumps(summary))
+            command_result = audit.Check(
+                "command", "implementation", "validation", "pass", "ok"
+            )
+            with patch.object(audit, "command_check", return_value=command_result):
+                result = audit.run_validation(output, skip=False)
+            self.assertEqual(result.status, "pass")
+            self.assertEqual(result.summary, "all 2 local Part A checks passed")
+
+    def test_validation_rejects_inconsistent_pass_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            validation = output / "validation"
+            validation.mkdir()
+            summary = {
+                "result": "pass",
+                "passed": 21,
+                "failed": 0,
+                "failed_checks": [],
+                "checks": [{"name": "one", "result": "pass"}],
+            }
+            (validation / "summary.json").write_text(json.dumps(summary))
+            command_result = audit.Check(
+                "command", "implementation", "validation", "pass", "ok"
+            )
+            with patch.object(audit, "command_check", return_value=command_result):
+                result = audit.run_validation(output, skip=False)
+            self.assertEqual(result.status, "fail")
 
 if __name__ == "__main__":
     unittest.main()

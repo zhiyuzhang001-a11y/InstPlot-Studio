@@ -329,7 +329,7 @@ def run_validation(output_dir: Path, skip: bool) -> Check:
         output_dir,
         "part-a-validation-command",
         "implementation",
-        "run the complete six-prototype Part A validation",
+        "run the complete Part A validation suite",
         [sys.executable, "scripts/validate_part_a.py", "--output-dir", str(validation_dir)],
     )
     if not summary_path.is_file():
@@ -347,8 +347,19 @@ def run_validation(output_dir: Path, skip: bool) -> Check:
     failed = summary.get("failed_checks", [])
     check.check_id = "part-a-validation"
     check.evidence = [relative(summary_path)]
-    if check.status == "pass" and summary.get("result") == "pass" and summary.get("passed") == 21:
-        check.summary = "all 21 local Part A checks passed"
+    checks = summary.get("checks")
+    complete = (
+        check.status == "pass"
+        and summary.get("result") == "pass"
+        and isinstance(checks, list)
+        and bool(checks)
+        and summary.get("passed") == len(checks)
+        and summary.get("failed") == 0
+        and not failed
+        and all(item.get("result") == "pass" for item in checks)
+    )
+    if complete:
+        check.summary = f"all {len(checks)} local Part A checks passed"
         return check
     check.status = "fail"
     check.summary = f"validation failed: {summary.get('passed', 0)} passed, {summary.get('failed', '?')} failed"
