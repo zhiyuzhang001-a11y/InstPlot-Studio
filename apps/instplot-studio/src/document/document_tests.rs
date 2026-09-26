@@ -125,6 +125,8 @@ fn multiline_annotation_and_multiple_arrow_modes_round_trip_and_render() {
 #[test]
 fn error_columns_drive_autoscale_reject_negative_values_and_round_trip() {
     let mut document = FigureDocument::from_datasets(&[error_dataset()]).unwrap();
+    assert!(document.axis_record(AxisDimension::X).autoscale);
+    assert!(document.axis_record(AxisDimension::Y).autoscale);
     let series_id = document
         .series()
         .into_iter()
@@ -134,11 +136,6 @@ fn error_columns_drive_autoscale_reject_negative_values_and_round_trip() {
     document
         .set_series_error_columns(&series_id, Some("xe"), Some("ye"))
         .unwrap();
-    for dimension in [AxisDimension::X, AxisDimension::Y] {
-        let mut axis = document.axis_record(dimension);
-        axis.autoscale = true;
-        document.set_axis_record(dimension, axis).unwrap();
-    }
     let ranges = document.axis_ranges();
     assert!(ranges.x_min < 0.5 && ranges.x_max > 2.25);
     assert!(ranges.y_min < 7.0 && ranges.y_max > 24.0);
@@ -175,6 +172,80 @@ fn error_columns_drive_autoscale_reject_negative_values_and_round_trip() {
             .contains("invalid value")
     );
     assert_eq!(invalid_document, before);
+}
+
+#[test]
+fn adding_error_columns_immediately_expands_both_automatic_axes_past_every_cap() {
+    let mut document = FigureDocument::from_datasets(&[error_dataset()]).unwrap();
+    let series_id = document
+        .series()
+        .into_iter()
+        .find(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+        .unwrap()
+        .id;
+
+    let before = document.axis_ranges();
+    assert!(before.x_min > 0.5 && before.x_max < 2.25);
+    assert!(before.y_min > 7.0 && before.y_max < 24.0);
+
+    document
+        .set_series_error_columns(&series_id, Some("xe"), Some("ye"))
+        .unwrap();
+
+    let after = document.axis_ranges();
+    assert!(
+        after.x_min < 0.5,
+        "left X error cap must have visual padding"
+    );
+    assert!(
+        after.x_max > 2.25,
+        "right X error cap must have visual padding"
+    );
+    assert!(
+        after.y_min < 7.0,
+        "lower Y error cap must have visual padding"
+    );
+    assert!(
+        after.y_max > 24.0,
+        "upper Y error cap must have visual padding"
+    );
+}
+
+#[test]
+fn new_curve_and_error_bar_defaults_use_one_point_strokes() {
+    let mut document = FigureDocument::from_datasets(&[error_dataset()]).unwrap();
+    let series_id = document
+        .series()
+        .into_iter()
+        .find(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+        .unwrap()
+        .id;
+    document
+        .set_series_style(&series_id, SeriesCreationStyle::Line)
+        .unwrap();
+    document
+        .set_series_error_columns(&series_id, None, Some("ye"))
+        .unwrap();
+
+    let widths = document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
+                Some(stroke.width_pt)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(widths.contains(&DEFAULT_CURVE_WIDTH_PT));
+    assert!(widths.contains(&DEFAULT_ERROR_BAR_WIDTH_PT));
+    assert!(
+        widths
+            .iter()
+            .all(|width| (*width - 1.0).abs() < f64::EPSILON)
+    );
 }
 
 #[test]

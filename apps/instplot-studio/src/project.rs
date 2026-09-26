@@ -10,6 +10,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const PROJECT_SCHEMA_VERSION: u32 = 6;
+/// Default physical stroke used by newly created data curves.
+pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
+/// Default physical stroke used by newly created error bars.
+pub const DEFAULT_ERROR_BAR_WIDTH_PT: f64 = 1.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

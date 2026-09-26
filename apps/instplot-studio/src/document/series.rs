@@ -45,7 +45,7 @@ impl FigureDocument {
                     binding,
                     stroke: StrokeStyle {
                         color_id: color_id.clone(),
-                        width_pt: 0.9,
+                        width_pt: DEFAULT_CURVE_WIDTH_PT,
                         dash_pt: Vec::new(),
                     },
                 },
@@ -160,7 +160,7 @@ impl FigureDocument {
                 cap_width_pt: 4.0,
                 stroke: StrokeStyle {
                     color_id,
-                    width_pt: 0.7,
+                    width_pt: DEFAULT_ERROR_BAR_WIDTH_PT,
                     dash_pt: Vec::new(),
                 },
             },
@@ -328,7 +328,7 @@ impl FigureDocument {
             .unwrap_or_else(|| default_series_color(&candidate, &binding.data_source_id));
         let line_style = line_style.unwrap_or_else(|| StrokeStyle {
             color_id: fallback_color.clone(),
-            width_pt: 0.9,
+            width_pt: DEFAULT_CURVE_WIDTH_PT,
             dash_pt: Vec::new(),
         });
         let marker_style = marker_style.unwrap_or_else(|| MarkerStyle {
@@ -626,6 +626,9 @@ impl FigureDocument {
                     candidate.delete_series(&error_id)?;
                 }
             }
+        }
+        for dimension in [AxisDimension::X, AxisDimension::Y] {
+            apply_autoscale(&mut candidate.project, dimension)?;
         }
         candidate
             .project

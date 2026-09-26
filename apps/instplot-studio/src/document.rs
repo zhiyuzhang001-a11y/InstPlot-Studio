@@ -14,12 +14,13 @@ use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_f
 use instplot_text::Label;
 
 use crate::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale, DataBinding,
-    DataSourceKind, DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode,
-    LegendEntry, LegendGrid, LegendPlacement, LocatorSpec, MarkerShape, MarkerStyle,
-    OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
-    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry,
-    open_project, palette_series_color_ids, save_project,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale,
+    DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
+    DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode, LegendEntry,
+    LegendGrid, LegendPlacement, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport,
+    PaletteColor, PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord,
+    ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry, open_project,
+    palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -288,7 +289,7 @@ impl FigureDocument {
                         binding,
                         stroke: StrokeStyle {
                             color_id: color_id.clone(),
-                            width_pt: 0.9,
+                            width_pt: DEFAULT_CURVE_WIDTH_PT,
                             dash_pt: Vec::new(),
                         },
                     },
@@ -955,6 +956,10 @@ fn set_handoff_axes(
     axes.x.maximum = x_max;
     axes.y.minimum = y_min;
     axes.y.maximum = y_max;
+    // These bounds were derived from the visible data. Preserve that semantic state so
+    // adding error bars or rebinding columns can extend the range automatically later.
+    axes.x.autoscale = true;
+    axes.y.autoscale = true;
     let x_label = project
         .semantic_registry
         .iter_mut()

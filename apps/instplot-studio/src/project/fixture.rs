@@ -35,7 +35,7 @@ impl ProjectDocument {
             .expect("the fixed project fixture has serializable embedded data");
         let blue_stroke = || StrokeStyle {
             color_id: "blue".to_owned(),
-            width_pt: 0.9,
+            width_pt: DEFAULT_CURVE_WIDTH_PT,
             dash_pt: Vec::new(),
         };
         Self {
@@ -397,7 +397,7 @@ impl ProjectDocument {
                     binding: binding(&line_source_id, "x", "y"),
                     stroke: StrokeStyle {
                         color_id: color_id.to_owned(),
-                        width_pt: 1.05,
+                        width_pt: DEFAULT_CURVE_WIDTH_PT,
                         dash_pt: dash_pt.to_vec(),
                     },
                 },
