@@ -1,6 +1,6 @@
 # InstPlot Studio 代码整合封板计划
 
-状态：待执行
+状态：执行中（Phase 0–4 已通过，正在执行 GitHub PR 与发布封板）
 制定日期：2026-09-26
 适用仓库：`zhiyuzhang001-a11y/InstPlot-Studio`
 本地仓库：`<repository-root>`
@@ -365,13 +365,13 @@ cargo test --manifest-path prototypes/layout-engine-spike/Cargo.toml --locked
 
 只有以下条件全部满足，计划才能标记“已完成”：
 
-- [ ] 当前所有修改、新文件和删除项均已分类并处理。
-- [ ] 没有本机路径、凭据、用户数据或临时产物进入 Git。
-- [ ] 正式 crate 与应用边界通过审计，依赖方向符合 ADR。
-- [ ] 旧原型删除与正式替代实现一一对应。
-- [ ] 提交历史清楚，并且每个推送提交都可构建。
-- [ ] 干净 worktree 的格式、测试、Clippy、doc、release 和兼容门禁全部通过。
-- [ ] R01–R16 继续通过，没有新增 P0/P1 回归。
+- [x] 当前所有修改、新文件和删除项均已分类并处理。
+- [x] 没有本机路径、凭据、用户数据或临时产物进入 Git。
+- [x] 正式 crate 与应用边界通过审计，依赖方向符合 ADR。
+- [x] 旧原型删除与正式替代实现一一对应。
+- [x] 提交历史清楚，并且每个推送提交都可构建。
+- [x] 干净 worktree 的格式、测试、Clippy、doc、release 和兼容门禁全部通过。
+- [x] R01–R16 继续通过，没有新增 P0/P1 回归。
 - [ ] GitHub PR diff 已人工复核。
 - [ ] Linux、macOS、Windows CI 全部通过。
 - [ ] PR 已合并，远程和本地 `main` 一致。
