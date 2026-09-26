@@ -63,6 +63,7 @@ impl StudioApp {
             binding_y: String::new(),
             binding_error: String::new(),
             pending_data_removal: None,
+            pending_managed_save_conflict: None,
             label_inputs: BTreeMap::new(),
             numeric_inputs: BTreeMap::new(),
             x_fixed_ticks,
@@ -256,6 +257,10 @@ impl StudioApp {
         else {
             return;
         };
+        self.open_project_path(path);
+    }
+
+    fn open_project_path(&mut self, path: PathBuf) {
         let state = AppTransactionState {
             document: &self.document,
             session: &self.session,
@@ -357,13 +362,54 @@ impl StudioApp {
         let Some(path) = path else {
             return false;
         };
+        let has_manual_data = self
+            .document
+            .project()
+            .data_sources
+            .iter()
+            .any(|source| source.origin == instplot_studio::DataSourceOrigin::Manual);
+        if has_manual_data && (save_as || self.document.has_unmanaged_manual_sources()) {
+            let selection = rfd::FileDialog::new()
+                .set_title("选择手动数据格式与保存目录")
+                .add_filter("CSV", &["csv"])
+                .add_filter("TSV", &["tsv"])
+                .add_filter("文本数据", &["txt"])
+                .add_filter("DAT 数据", &["dat"])
+                .add_filter("Excel 工作簿", &["xlsx"])
+                .set_file_name("手动数据.csv")
+                .save_file();
+            let Some(selection) = selection else {
+                return false;
+            };
+            let Some(format) = managed_format_from_path(&selection) else {
+                self.push_error(
+                    "save-manual-data",
+                    "请选择 CSV、TSV、TXT、DAT 或 XLSX 格式".to_owned(),
+                );
+                return false;
+            };
+            let directory = selection.parent().unwrap_or_else(|| Path::new("."));
+            if let Err(error) = self.document.configure_manual_data_files(directory, format) {
+                self.push_error("save-manual-data", error);
+                return false;
+            }
+        }
+        self.execute_project_save(path, false)
+    }
+
+    pub(super) fn execute_project_save(&mut self, path: PathBuf, overwrite_managed: bool) -> bool {
         let state = AppTransactionState {
             document: &self.document,
             session: &self.session,
             workspace: &self.workspace,
             edit_history: &self.edit_history,
         };
-        match ApplicationController::execute(state, AppAction::SaveProject(path)) {
+        let action = if overwrite_managed {
+            AppAction::SaveProjectOverwriteManaged(path.clone())
+        } else {
+            AppAction::SaveProject(path.clone())
+        };
+        match ApplicationController::execute(state, action) {
             Ok(outcome) => {
                 let effect = self.commit_app_outcome(outcome);
                 let AppEffect::SavedProject { path } = effect else {
@@ -374,6 +420,13 @@ impl StudioApp {
                 true
             }
             Err(error) => {
+                if let Some(explanation) = managed_save_conflict_explanation(&error.diagnostics) {
+                    self.pending_managed_save_conflict = Some(ManagedSaveConflict {
+                        project_path: path,
+                        explanation,
+                    });
+                    return false;
+                }
                 self.push_error(
                     error.code,
                     self.language.operation_failed(
@@ -383,6 +436,76 @@ impl StudioApp {
                 );
                 false
             }
+        }
+    }
+
+    pub(super) fn managed_save_conflict_dialog(&mut self, context: &egui::Context) {
+        let Some(conflict) = self.pending_managed_save_conflict.clone() else {
+            return;
+        };
+        let mut overwrite = false;
+        let mut save_as = false;
+        let mut reopen = false;
+        let mut cancel = false;
+        egui::Window::new("手动数据文件冲突")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
+            .show(context, |ui| {
+                studio_dialog_heading(ui, "手动数据文件冲突");
+                ui.label(&conflict.explanation);
+                ui.label("请选择如何处理；Studio 不会静默覆盖外部更改。");
+                ui.horizontal_wrapped(|ui| {
+                    overwrite = ui.button("覆盖外部文件").clicked();
+                    save_as = ui.button("另存为…").clicked();
+                    reopen = ui.button("重新打开已保存项目").clicked();
+                    cancel = ui.button(self.language.text(Text::Cancel)).clicked();
+                });
+            });
+        if overwrite {
+            if self.execute_project_save(conflict.project_path, true) {
+                self.pending_managed_save_conflict = None;
+            }
+        } else if save_as {
+            self.pending_managed_save_conflict = None;
+            self.save_project(true);
+        } else if reopen {
+            self.pending_managed_save_conflict = None;
+            self.open_project_path(conflict.project_path);
+        } else if cancel {
+            self.pending_managed_save_conflict = None;
+        }
+    }
+
+    pub(super) fn export_manual_data(&mut self) {
+        let selection = rfd::FileDialog::new()
+            .set_title("导出手动数据：选择格式与保存目录")
+            .add_filter("CSV", &["csv"])
+            .add_filter("TSV", &["tsv"])
+            .add_filter("文本数据", &["txt"])
+            .add_filter("DAT 数据", &["dat"])
+            .add_filter("Excel 工作簿", &["xlsx"])
+            .set_file_name("手动数据.csv")
+            .save_file();
+        let Some(selection) = selection else {
+            return;
+        };
+        let Some(format) = managed_format_from_path(&selection) else {
+            self.push_error(
+                "export-manual-data",
+                "请选择 CSV、TSV、TXT、DAT 或 XLSX 格式".to_owned(),
+            );
+            return;
+        };
+        let directory = selection.parent().unwrap_or_else(|| Path::new("."));
+        match self.document.export_manual_data_files(directory, format) {
+            Ok(0) => self.push_error("export-manual-data", "当前没有可导出的手动数据".to_owned()),
+            Ok(count) => {
+                self.clear_message("export-manual-data");
+                self.set_success(format!("已导出 {count} 个手动数据文件"));
+            }
+            Err(error) => self.push_error("export-manual-data", error.to_string()),
         }
     }
 
@@ -1595,167 +1718,113 @@ impl StudioApp {
         }
     }
 
+    pub(super) fn prepare_manual_data_window(&mut self) {
+        let groups = self
+            .document
+            .project()
+            .data_sources
+            .iter()
+            .filter_map(|source| source.manual_recipe.as_ref())
+            .map(ManualDataGroupInput::from_recipe)
+            .collect::<Vec<_>>();
+        self.manual_data.input = if groups.is_empty() {
+            ManualDataInput::default()
+        } else {
+            ManualDataInput { groups }
+        };
+        self.manual_data.editing_group_id = None;
+        self.manual_data.error = None;
+        self.manual_data.open = true;
+    }
+
     pub(super) fn manual_data_fields(
         &mut self,
         ui: &mut egui::Ui,
         submit: &mut bool,
         cancel: &mut bool,
     ) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("数据名称");
-            ui.add_sized(
-                [210.0, 32.0],
-                egui::TextEdit::singleline(&mut self.manual_data.input.source_name),
-            );
-            ui.label("图形");
-            egui::ComboBox::from_id_salt("manual-series-style")
-                .selected_text(match self.manual_data.style {
-                    SeriesCreationStyle::Line => "曲线",
-                    SeriesCreationStyle::Scatter => "散点",
-                    SeriesCreationStyle::LineAndMarker => "曲线 + 点",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.manual_data.style,
-                        SeriesCreationStyle::LineAndMarker,
-                        "曲线 + 点",
-                    );
-                    ui.selectable_value(
-                        &mut self.manual_data.style,
-                        SeriesCreationStyle::Scatter,
-                        "散点",
-                    );
-                    ui.selectable_value(
-                        &mut self.manual_data.style,
-                        SeriesCreationStyle::Line,
-                        "曲线",
-                    );
-                });
-            ui.label("重复测量误差");
-            egui::ComboBox::from_id_salt("manual-error-statistic")
-                .selected_text(match self.manual_data.input.error_statistic {
-                    ErrorStatistic::StandardDeviation => "样本标准差 (SD)",
-                    ErrorStatistic::StandardError => "标准误 (SEM)",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.manual_data.input.error_statistic,
-                        ErrorStatistic::StandardDeviation,
-                        "样本标准差 (SD)",
-                    );
-                    ui.selectable_value(
-                        &mut self.manual_data.input.error_statistic,
-                        ErrorStatistic::StandardError,
-                        "标准误 (SEM)",
-                    );
-                });
-        });
         ui.weak("每个框只粘贴一列数值；支持换行、Tab、空格、逗号和分号，不要包含表头。增加重复测量后会自动计算均值和误差棒。");
         ui.separator();
 
         let data_area_height = (ui.available_height() - 86.0).max(180.0);
+        let saved_ids = self
+            .document
+            .project()
+            .data_sources
+            .iter()
+            .filter(|source| source.manual_recipe.is_some())
+            .map(|source| source.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut edit_group = None;
         egui::ScrollArea::vertical()
             .max_height(data_area_height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let mut remove_x = None;
-                ui.label("X 数据");
-                let x_count = self.manual_data.input.x_inputs.len();
-                for (index, axis) in self.manual_data.input.x_inputs.iter_mut().enumerate() {
-                    let can_remove = x_count > 1;
-                    if manual_axis_input_card(ui, "X", index, axis, can_remove) {
-                        remove_x = Some(index);
+                let group_count = self.manual_data.input.groups.len();
+                let mut remove_group = None;
+                for (index, group) in self.manual_data.input.groups.iter_mut().enumerate() {
+                    let saved = saved_ids.contains(&group.group_id);
+                    let editable = !saved
+                        || self.manual_data.editing_group_id.as_deref()
+                            == Some(group.group_id.as_str());
+                    let (edit, remove) =
+                        manual_group_input_card(ui, index, group, saved, editable, group_count > 1);
+                    if edit {
+                        edit_group = Some(group.group_id.clone());
+                    }
+                    if remove {
+                        remove_group = Some((
+                            index,
+                            group.group_id.clone(),
+                            group.source_name.clone(),
+                            saved,
+                        ));
                     }
                 }
-                if let Some(index) = remove_x {
-                    self.manual_data.input.x_inputs.remove(index);
-                    for y in &mut self.manual_data.input.y_inputs {
-                        y.x_index = if y.x_index == index {
-                            0
-                        } else if y.x_index > index {
-                            y.x_index - 1
-                        } else {
-                            y.x_index
-                        };
+                if let Some((index, group_id, label, saved)) = remove_group {
+                    if saved {
+                        self.pending_data_removal = Some(DataRemovalRequest::File {
+                            label,
+                            ids: vec![group_id],
+                        });
+                    } else {
+                        self.manual_data.input.groups.remove(index);
                     }
                 }
-                if ui.button("＋ 新增 X 组（用于多条曲线）").clicked() {
-                    let index = self.manual_data.input.x_inputs.len() + 1;
+                if ui.button("＋ 新增数据组").clicked() {
+                    let next = self
+                        .document
+                        .project()
+                        .data_sources
+                        .iter()
+                        .filter(|source| {
+                            source.origin != instplot_studio::DataSourceOrigin::Imported
+                        })
+                        .count()
+                        + self.manual_data.input.groups.len()
+                        + 1;
                     self.manual_data
                         .input
-                        .x_inputs
-                        .push(ManualAxisInput::new(format!("X{index}")));
-                }
-
-                ui.add_space(8.0);
-                let x_names = self
-                    .manual_data
-                    .input
-                    .x_inputs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, x)| {
-                        if x.name.trim().is_empty() {
-                            format!("X{}", index + 1)
-                        } else {
-                            x.name.trim().to_owned()
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let mut remove_y = None;
-                ui.label("Y 数据");
-                let y_count = self.manual_data.input.y_inputs.len();
-                for (index, y) in self.manual_data.input.y_inputs.iter_mut().enumerate() {
-                    studio_file_card_frame(ui.ctx().theme() == egui::Theme::Dark).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.strong(format!("Y{}", index + 1));
-                            ui.label("名称");
-                            ui.add_sized(
-                                [180.0, 30.0],
-                                egui::TextEdit::singleline(&mut y.axis.name),
-                            );
-                            ui.label("对应");
-                            y.x_index = y.x_index.min(x_names.len().saturating_sub(1));
-                            egui::ComboBox::from_id_salt(("manual-y-x", index))
-                                .selected_text(
-                                    x_names
-                                        .get(y.x_index)
-                                        .cloned()
-                                        .unwrap_or_else(|| "X".to_owned()),
-                                )
-                                .show_ui(ui, |ui| {
-                                    for (x_index, name) in x_names.iter().enumerate() {
-                                        ui.selectable_value(&mut y.x_index, x_index, name);
-                                    }
-                                });
-                            if y_count > 1
-                                && studio_close_button_sized(ui, "删除 Y", 28.0).clicked()
-                            {
-                                remove_y = Some(index);
-                            }
-                        });
-                        manual_measurement_inputs(ui, "Y", index, &mut y.axis.measurements);
-                    });
-                    ui.add_space(6.0);
-                }
-                if let Some(index) = remove_y {
-                    self.manual_data.input.y_inputs.remove(index);
-                }
-                if ui.button("＋ 新增 Y 组").clicked() {
-                    let index = self.manual_data.input.y_inputs.len() + 1;
-                    self.manual_data.input.y_inputs.push(ManualYInput {
-                        axis: ManualAxisInput::new(format!("Y{index}")),
-                        x_index: 0,
-                    });
+                        .groups
+                        .push(ManualDataGroupInput::new(next));
                 }
             });
+        if let Some(group_id) = edit_group {
+            self.prepare_manual_data_window();
+            self.manual_data.editing_group_id = Some(group_id);
+        }
 
         if let Some(error) = &self.manual_data.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
         ui.separator();
         ui.horizontal(|ui| {
-            *submit |= ui.button("绘图").clicked();
+            let action = if self.manual_data.editing_group_id.is_some() {
+                "应用修改"
+            } else {
+                "绘图"
+            };
+            *submit |= ui.button(action).clicked();
             *cancel |= ui.button("取消").clicked();
         });
     }
@@ -1763,18 +1832,45 @@ impl StudioApp {
     pub(super) fn insert_manual_data(&mut self) -> Result<(), String> {
         let parsed = DataImporter::import_manual(&self.manual_data.input)
             .map_err(|diagnostic| diagnostic.to_string())?;
-        let dataset = parsed.dataset;
-        let series_specs = parsed.series;
+        let existing_ids = self
+            .document
+            .project()
+            .data_sources
+            .iter()
+            .map(|source| source.id.clone())
+            .collect::<BTreeSet<_>>();
+        let parsed_groups = parsed
+            .groups
+            .into_iter()
+            .filter(|group| {
+                self.manual_data.editing_group_id.as_deref() == Some(group.dataset.plot_id.as_str())
+                    || !existing_ids.contains(&group.dataset.plot_id)
+            })
+            .collect::<Vec<_>>();
+        if parsed_groups.is_empty() {
+            return Err("没有新增或正在编辑的数据组".to_owned());
+        }
         let replace_showcase = self.workspace.should_replace_showcase_on_import();
         let mut datasets = if replace_showcase {
             Vec::new()
         } else {
             self.session.datasets().to_vec()
         };
-        if datasets.iter().any(|item| item.plot_id == dataset.plot_id) {
-            return Err("相同数据已经存在于当前图中".to_owned());
+        for group in &parsed_groups {
+            if let Some(position) = datasets
+                .iter()
+                .position(|item| item.plot_id == group.dataset.plot_id)
+            {
+                if self.manual_data.editing_group_id.as_deref()
+                    != Some(group.dataset.plot_id.as_str())
+                {
+                    return Err(format!("数据组“{}”已经存在于当前图中", group.recipe.name));
+                }
+                datasets[position] = group.dataset.clone();
+            } else {
+                datasets.push(group.dataset.clone());
+            }
         }
-        datasets.push(dataset.clone());
 
         let mut document = if replace_showcase {
             let mut document =
@@ -1800,30 +1896,78 @@ impl StudioApp {
         } else {
             let mut document = self.document.clone();
             document
-                .sync_datasets(&datasets)
+                .sync_datasets_without_autoscale(&datasets)
                 .map_err(|error| error.to_string())?;
             document
         };
-        let marker_size = match (self.manual_data.style, dataset.row_count) {
-            (SeriesCreationStyle::Scatter, 0..=10) => 5.0,
-            (SeriesCreationStyle::Scatter, 11..=250) => 4.0,
-            (SeriesCreationStyle::Scatter, _) => 3.0,
-            (SeriesCreationStyle::LineAndMarker, 0..=10) => 4.5,
-            (SeriesCreationStyle::LineAndMarker, 11..=1_000) => 3.5,
-            (SeriesCreationStyle::LineAndMarker, _) => 2.5,
-            (SeriesCreationStyle::Line, _) => 0.0,
-        };
-        for (series_index, specification) in series_specs.iter().enumerate() {
+        let series_offset = document
+            .series()
+            .into_iter()
+            .filter(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+            .filter_map(|series| {
+                series
+                    .binding
+                    .map(|binding| (binding.data_source_id, binding.x_column, binding.y_column))
+            })
+            .collect::<BTreeSet<_>>()
+            .len();
+        for (series_index, group) in parsed_groups.iter().enumerate() {
+            let dataset = &group.dataset;
+            let specification = &group.series;
+            let style = match group.recipe.plot_style {
+                ManualPlotStyle::Line => SeriesCreationStyle::Line,
+                ManualPlotStyle::Scatter => SeriesCreationStyle::Scatter,
+                ManualPlotStyle::LineAndMarker => SeriesCreationStyle::LineAndMarker,
+            };
+            let marker_size = match (style, dataset.row_count) {
+                (SeriesCreationStyle::Scatter, 0..=10) => 5.0,
+                (SeriesCreationStyle::Scatter, 11..=250) => 4.0,
+                (SeriesCreationStyle::Scatter, _) => 3.0,
+                (SeriesCreationStyle::LineAndMarker, 0..=10) => 4.5,
+                (SeriesCreationStyle::LineAndMarker, 11..=1_000) => 3.5,
+                (SeriesCreationStyle::LineAndMarker, _) => 2.5,
+                (SeriesCreationStyle::Line, _) => 0.0,
+            };
+            let style_index = series_offset + series_index;
+            let existing_series = document
+                .series()
+                .into_iter()
+                .filter(|series| {
+                    series.binding.as_ref().is_some_and(|binding| {
+                        binding.data_source_id == dataset.plot_id
+                            && matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter)
+                    })
+                })
+                .collect::<Vec<_>>();
+            if let Some(primary) = existing_series.first() {
+                for series in &existing_series {
+                    document.rebind_series(
+                        &series.id,
+                        &dataset.plot_id,
+                        &specification.x_column,
+                        &specification.y_column,
+                        None,
+                    )?;
+                }
+                document.set_series_style(&primary.id, style)?;
+                document.set_series_legend_label(
+                    &primary.id,
+                    vec![LabelNode::Text(specification.label.clone())],
+                )?;
+                document.set_series_error_columns(
+                    &primary.id,
+                    specification.x_error_column.as_deref(),
+                    specification.y_error_column.as_deref(),
+                )?;
+                document.set_manual_source_metadata(&dataset.plot_id, group.recipe.clone())?;
+                continue;
+            }
             let created = document.create_series(
                 &dataset.plot_id,
                 &specification.x_column,
                 &specification.y_column,
-                self.manual_data.style,
+                style,
             )?;
-            let series_palette = document.series_palette_colors();
-            let color_id = series_palette
-                .get(series_index % series_palette.len().max(1))
-                .map(|color| color.id.clone());
             for id in &created {
                 let Some(mut record) = document.artist_record(id) else {
                     continue;
@@ -1832,16 +1976,9 @@ impl StudioApp {
                     ArtistProperties::Scatter { marker, .. } => {
                         marker.size_pt = marker_size;
                         marker.shape =
-                            PRODUCT_MARKER_SHAPES[series_index % PRODUCT_MARKER_SHAPES.len()];
-                        if let Some(color_id) = &color_id {
-                            marker.color_id.clone_from(color_id);
-                        }
+                            PRODUCT_MARKER_SHAPES[style_index % PRODUCT_MARKER_SHAPES.len()];
                     }
-                    ArtistProperties::Line { stroke, .. } => {
-                        if let Some(color_id) = &color_id {
-                            stroke.color_id.clone_from(color_id);
-                        }
-                    }
+                    ArtistProperties::Line { .. } => {}
                     _ => {}
                 }
                 document.set_artist_record(record)?;
@@ -1851,32 +1988,26 @@ impl StudioApp {
                 vec![LabelNode::Text(specification.label.clone())],
             )?;
             if let Some(error_column) = specification.y_error_column.as_deref() {
-                let error_id = document.create_error_bars(
+                document.create_error_bars(
                     &dataset.plot_id,
                     &specification.x_column,
                     &specification.y_column,
                     error_column,
                     specification.x_error_column.as_deref(),
                 )?;
-                if let Some(color_id) = &color_id
-                    && let Some(mut record) = document.artist_record(&error_id)
-                    && let ArtistProperties::ErrorBar { stroke, .. } = &mut record.properties
-                {
-                    stroke.color_id.clone_from(color_id);
-                    document.set_artist_record(record)?;
-                }
             }
+            document.set_manual_source_metadata(&dataset.plot_id, group.recipe.clone())?;
         }
-        let first = series_specs
+        let first = parsed_groups
             .first()
             .ok_or_else(|| "请至少录入一组 XY 数据".to_owned())?;
         document.set_axis_label(
             AxisDimension::X,
-            vec![LabelNode::Text(first.x_column.clone())],
+            vec![LabelNode::Text(first.series.x_column.clone())],
         )?;
         document.set_axis_label(
             AxisDimension::Y,
-            vec![LabelNode::Text(first.y_column.clone())],
+            vec![LabelNode::Text(first.series.y_column.clone())],
         )?;
         document.refresh_autoscale()?;
         let state = AppTransactionState {
@@ -1890,8 +2021,8 @@ impl StudioApp {
             AppAction::CommitPreparedData {
                 document: Box::new(document),
                 datasets,
-                source_path: dataset.source.clone(),
-                selected_dataset: dataset.plot_id.clone(),
+                source_path: first.dataset.source.clone(),
+                selected_dataset: first.dataset.plot_id.clone(),
             },
         )
         .map_err(|error| error.diagnostics.join("；"))?;
@@ -1906,9 +2037,14 @@ impl StudioApp {
         self.first_frame = true;
         self.set_success(format!(
             "已绘制 {} 条曲线，最多 {} 个数据点",
-            series_specs.len(),
-            dataset.row_count
+            parsed_groups.len(),
+            parsed_groups
+                .iter()
+                .map(|group| group.dataset.row_count)
+                .max()
+                .unwrap_or(0)
         ));
+        self.manual_data.editing_group_id = None;
         Ok(())
     }
 
@@ -1968,6 +2104,9 @@ impl StudioApp {
                                 self.selected_canvas_role = None;
                                 self.context_editor_targets.clear();
                                 self.sync_axis_editors();
+                                if self.manual_data.open {
+                                    self.prepare_manual_data_window();
+                                }
                                 self.set_success(title.to_owned());
                                 self.clear_message("edit");
                             }
@@ -3711,5 +3850,37 @@ impl StudioApp {
         if output.response.lost_focus() {
             self.edit_history.finish_coalescing();
         }
+    }
+}
+
+fn managed_format_from_path(path: &Path) -> Option<ManagedDataFormat> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("csv") => Some(ManagedDataFormat::Csv),
+        Some("tsv") => Some(ManagedDataFormat::Tsv),
+        Some("txt") => Some(ManagedDataFormat::Txt),
+        Some("dat") => Some(ManagedDataFormat::Dat),
+        Some("xlsx") => Some(ManagedDataFormat::Xlsx),
+        _ => None,
+    }
+}
+
+fn managed_save_conflict_explanation(diagnostics: &[String]) -> Option<String> {
+    let details = diagnostics.join("；");
+    if details.contains("changed outside Studio") {
+        Some("关联的手动数据文件已被其他程序修改。覆盖会用当前项目数据替换外部更改；另存为可保留两份；重新打开项目会放弃本次未保存修改。".to_owned())
+    } else if details.contains("managed manual data file is missing") {
+        Some("关联的手动数据文件已移动或删除。覆盖会按原路径重新创建；另存为可选择新位置；重新打开项目会放弃本次未保存修改。".to_owned())
+    } else if details.contains("refusing to overwrite an unrelated file") {
+        Some(
+            "目标位置已有不属于当前项目的文件。覆盖会替换该文件；另存为可选择安全的新位置。"
+                .to_owned(),
+        )
+    } else {
+        None
     }
 }

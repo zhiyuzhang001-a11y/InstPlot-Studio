@@ -57,6 +57,7 @@ pub fn decode_project(bytes: &[u8]) -> Result<ProjectDocument, ProjectError> {
     let document = match version {
         PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
             .map_err(|error| ProjectError::Decode(error.to_string()))?,
+        6 => migrate_v6(value)?,
         5 => migrate_v5(value)?,
         4 => migrate_v4(value)?,
         3 => migrate_v3(value)?,

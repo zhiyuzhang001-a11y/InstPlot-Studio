@@ -110,7 +110,7 @@ impl ProjectDocument {
                             y_error_column: "error".to_owned(),
                             cap_width_pt: 4.0,
                             stroke: StrokeStyle {
-                                width_pt: 0.7,
+                                width_pt: DEFAULT_ERROR_BAR_WIDTH_PT,
                                 ..blue_stroke()
                             },
                         },
@@ -182,6 +182,9 @@ impl ProjectDocument {
                 },
                 fit: None,
                 origin_path: None,
+                origin: DataSourceOrigin::Imported,
+                manual_recipe: None,
+                managed_file: None,
             }],
             semantic_registry: vec![
                 SemanticLabel {
@@ -386,6 +389,9 @@ impl ProjectDocument {
                         display_equation: None,
                     }),
                     origin_path: None,
+                    origin: DataSourceOrigin::Imported,
+                    manual_recipe: None,
+                    managed_file: None,
                 });
             }
             project.figure.artists.push(ArtistRecord {

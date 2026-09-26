@@ -4,7 +4,19 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
-- No unreleased product changes.
+### Added
+
+- Independent XY cards for manual data entry, with X/Y repeated measurements, SD/SEM error bars,
+  explicit edit mode and one synchronized sidebar source per plotted group.
+- Managed manual-data persistence in CSV, TSV, TXT, DAT or XLSX alongside the embedded project
+  recipe, plus a separate data-export command and external-file conflict choices.
+
+### Changed
+
+- Imported and manually entered curves now share one ordering, palette, marker, legend, autoscale,
+  deletion and project lifecycle while retaining explicit source identity.
+- Managed data files use fingerprint checks and atomic replacement; imported source files remain
+  read-only and deleting a project card does not delete its disk file.
 
 ## [0.1.0] - 2026-09-26
 

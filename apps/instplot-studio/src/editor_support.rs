@@ -783,31 +783,6 @@ pub(super) fn position_editor(
     edit
 }
 
-pub(super) fn manual_axis_input_card(
-    ui: &mut egui::Ui,
-    axis_name: &str,
-    index: usize,
-    axis: &mut ManualAxisInput,
-    can_remove: bool,
-) -> bool {
-    let mut remove = false;
-    studio_file_card_frame(ui.ctx().theme() == egui::Theme::Dark).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.strong(format!("{axis_name}{}", index + 1));
-            ui.label("名称");
-            ui.add_sized([180.0, 30.0], egui::TextEdit::singleline(&mut axis.name));
-            if can_remove
-                && studio_close_button_sized(ui, &format!("删除 {axis_name}"), 28.0).clicked()
-            {
-                remove = true;
-            }
-        });
-        manual_measurement_inputs(ui, axis_name, index, &mut axis.measurements);
-    });
-    ui.add_space(6.0);
-    remove
-}
-
 pub(super) fn manual_measurement_inputs(
     ui: &mut egui::Ui,
     axis_name: &str,
@@ -846,6 +821,93 @@ pub(super) fn manual_measurement_inputs(
     if ui.button("＋ 重复测量（用于误差棒）").clicked() {
         measurements.push(String::new());
     }
+}
+
+pub(super) fn manual_group_input_card(
+    ui: &mut egui::Ui,
+    index: usize,
+    group: &mut ManualDataGroupInput,
+    saved: bool,
+    editable: bool,
+    can_remove: bool,
+) -> (bool, bool) {
+    let mut edit = false;
+    let mut remove = false;
+    studio_file_card_frame(ui.ctx().theme() == egui::Theme::Dark).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.strong(format!("数据组 {}", index + 1));
+            if editable {
+                ui.add_sized(
+                    [220.0, 30.0],
+                    egui::TextEdit::singleline(&mut group.source_name),
+                );
+            } else {
+                ui.label(&group.source_name);
+            }
+            if saved && !editable && ui.button("编辑").clicked() {
+                edit = true;
+            }
+            if can_remove && studio_close_button_sized(ui, "删除数据组", 28.0).clicked() {
+                remove = true;
+            }
+        });
+        ui.add_enabled_ui(editable, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("图形");
+                egui::ComboBox::from_id_salt(("manual-style", index))
+                    .selected_text(match group.plot_style {
+                        ManualPlotStyle::Line => "曲线",
+                        ManualPlotStyle::Scatter => "散点",
+                        ManualPlotStyle::LineAndMarker => "曲线 + 点",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut group.plot_style,
+                            ManualPlotStyle::LineAndMarker,
+                            "曲线 + 点",
+                        );
+                        ui.selectable_value(
+                            &mut group.plot_style,
+                            ManualPlotStyle::Scatter,
+                            "散点",
+                        );
+                        ui.selectable_value(&mut group.plot_style, ManualPlotStyle::Line, "曲线");
+                    });
+                ui.label("重复测量误差");
+                egui::ComboBox::from_id_salt(("manual-statistic", index))
+                    .selected_text(match group.error_statistic {
+                        ErrorStatistic::StandardDeviation => "样本标准差 (SD)",
+                        ErrorStatistic::StandardError => "标准误 (SEM)",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut group.error_statistic,
+                            ErrorStatistic::StandardDeviation,
+                            "样本标准差 (SD)",
+                        );
+                        ui.selectable_value(
+                            &mut group.error_statistic,
+                            ErrorStatistic::StandardError,
+                            "标准误 (SEM)",
+                        );
+                    });
+            });
+            ui.columns(2, |columns| {
+                columns[0].horizontal(|ui| {
+                    ui.strong("X");
+                    ui.add_sized([160.0, 30.0], egui::TextEdit::singleline(&mut group.x.name));
+                });
+                manual_measurement_inputs(&mut columns[0], "X", index, &mut group.x.measurements);
+                columns[1].horizontal(|ui| {
+                    ui.strong("Y");
+                    ui.add_sized([160.0, 30.0], egui::TextEdit::singleline(&mut group.y.name));
+                });
+                manual_measurement_inputs(&mut columns[1], "Y", index, &mut group.y.measurements);
+            });
+        });
+    });
+    ui.add_space(6.0);
+    (edit, remove)
 }
 
 pub(super) fn minor_interval_editor(

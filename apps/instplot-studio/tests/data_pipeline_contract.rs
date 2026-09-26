@@ -2,7 +2,7 @@ use std::path::Path;
 
 use instplot_studio::{
     DATA_FORMAT_CAPABILITIES, DataImporter, DataSourceKind, ErrorStatistic, ManualAxisInput,
-    ManualDataInput, ManualYInput, ProjectDocument, StudioSession,
+    ManualDataGroupInput, ManualDataInput, ManualPlotStyle, ProjectDocument, StudioSession,
 };
 
 fn axis(name: &str, measurements: &[&str]) -> ManualAxisInput {
@@ -24,22 +24,23 @@ fn data_pipeline_imports_files_and_pasted_measurements_without_starting_the_ui()
     assert_eq!(datasets[0].columns.len(), 2);
 
     let manual = DataImporter::import_manual(&ManualDataInput {
-        source_name: "Repeated measurement".to_owned(),
-        x_inputs: vec![axis("Field", &["0 1 2"])],
-        y_inputs: vec![ManualYInput {
-            axis: axis("Signal", &["2 4 6", "4 6 8"]),
-            x_index: 0,
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-contract".to_owned(),
+            source_name: "Repeated measurement".to_owned(),
+            x: axis("Field", &["0 1 2"]),
+            y: axis("Signal", &["2 4 6", "4 6 8"]),
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
         }],
-        error_statistic: ErrorStatistic::StandardDeviation,
     })
     .unwrap();
-    assert_eq!(manual.series.len(), 1);
+    assert_eq!(manual.groups.len(), 1);
     assert_eq!(
-        manual.series[0].y_error_column.as_deref(),
+        manual.groups[0].series.y_error_column.as_deref(),
         Some("Signal · SD")
     );
     assert!(
-        manual
+        manual.groups[0]
             .dataset
             .columns
             .iter()
@@ -64,13 +65,14 @@ fn data_pipeline_reports_structured_diagnostics_for_files_and_manual_input() {
     assert!(!file_error.reason.is_empty());
 
     let manual_error = DataImporter::import_manual(&ManualDataInput {
-        source_name: "empty".to_owned(),
-        x_inputs: vec![axis("X", &[""])],
-        y_inputs: vec![ManualYInput {
-            axis: axis("Y", &["1 2"]),
-            x_index: 0,
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-empty".to_owned(),
+            source_name: "empty".to_owned(),
+            x: axis("X", &[""]),
+            y: axis("Y", &["1 2"]),
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
         }],
-        error_statistic: ErrorStatistic::StandardDeviation,
     })
     .unwrap_err();
     assert_eq!(manual_error.code, "manual-input");

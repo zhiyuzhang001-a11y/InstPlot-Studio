@@ -291,6 +291,83 @@ pub(super) fn validate_payload(source: &DataSourceRecord) -> Result<(), ProjectE
     Ok(())
 }
 
+pub(super) fn validate_source_origin(source: &DataSourceRecord) -> Result<(), ProjectError> {
+    if source.kind == DataSourceKind::Fit && source.origin != DataSourceOrigin::Imported {
+        return Err(ProjectError::Validation(format!(
+            "fit data source {} cannot be manual",
+            source.id
+        )));
+    }
+    if source.origin == DataSourceOrigin::Imported
+        && (source.manual_recipe.is_some() || source.managed_file.is_some())
+    {
+        return Err(ProjectError::Validation(format!(
+            "imported data source {} contains manual-data metadata",
+            source.id
+        )));
+    }
+    if source.origin == DataSourceOrigin::LegacyManual && source.manual_recipe.is_some() {
+        return Err(ProjectError::Validation(format!(
+            "legacy manual data source {} cannot claim a recoverable recipe",
+            source.id
+        )));
+    }
+    if let Some(recipe) = &source.manual_recipe {
+        if source.origin != DataSourceOrigin::Manual
+            || recipe.group_id.trim().is_empty()
+            || recipe.name.trim().is_empty()
+            || recipe.x.name.trim().is_empty()
+            || recipe.y.name.trim().is_empty()
+            || recipe.x.measurements.is_empty()
+            || recipe.y.measurements.is_empty()
+        {
+            return Err(ProjectError::Validation(format!(
+                "manual data source {} has an invalid recipe",
+                source.id
+            )));
+        }
+        for (axis_name, axis) in [("X", &recipe.x), ("Y", &recipe.y)] {
+            let expected = axis.measurements[0].len();
+            if expected == 0
+                || axis.measurements.iter().any(|measurement| {
+                    measurement.len() != expected
+                        || measurement.iter().any(|value| !value.is_finite())
+                })
+            {
+                return Err(ProjectError::Validation(format!(
+                    "manual data source {} has inconsistent {axis_name} measurements",
+                    source.id
+                )));
+            }
+        }
+        if recipe.x.measurements[0].len() != recipe.y.measurements[0].len() {
+            return Err(ProjectError::Validation(format!(
+                "manual data source {} has mismatched X/Y lengths",
+                source.id
+            )));
+        }
+    }
+    if let Some(managed) = &source.managed_file {
+        if source.origin != DataSourceOrigin::Manual || managed.path.trim().is_empty() {
+            return Err(ProjectError::Validation(format!(
+                "data source {} has invalid managed-file metadata",
+                source.id
+            )));
+        }
+        if managed
+            .fingerprint
+            .as_ref()
+            .is_some_and(|fingerprint| fingerprint.sha256.len() != 64)
+        {
+            return Err(ProjectError::Validation(format!(
+                "data source {} has an invalid managed-file fingerprint",
+                source.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn embedded_digest(
     columns: &[EmbeddedColumn],
     row_count: usize,

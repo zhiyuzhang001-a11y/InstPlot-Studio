@@ -1,4 +1,7 @@
 use super::*;
+use std::io::Write;
+
+use atomicwrites::{AllowOverwrite, AtomicFile};
 
 impl FigureDocument {
     pub fn data_source_dependency_count(&self, data_source_id: &str) -> usize {
@@ -180,6 +183,21 @@ impl FigureDocument {
     }
 
     pub fn sync_datasets(&mut self, datasets: &[DataSet]) -> Result<(), ProjectError> {
+        self.sync_datasets_inner(datasets, true)
+    }
+
+    pub fn sync_datasets_without_autoscale(
+        &mut self,
+        datasets: &[DataSet],
+    ) -> Result<(), ProjectError> {
+        self.sync_datasets_inner(datasets, false)
+    }
+
+    fn sync_datasets_inner(
+        &mut self,
+        datasets: &[DataSet],
+        refresh_autoscale: bool,
+    ) -> Result<(), ProjectError> {
         let mut candidate = self.project.clone();
         for dataset in datasets
             .iter()
@@ -235,11 +253,309 @@ impl FigureDocument {
             .artists
             .iter()
             .any(|artist| artist.visible && artist_binding(artist).is_some());
-        if has_visible_bound_artist {
+        if refresh_autoscale && has_visible_bound_artist {
             apply_autoscale(&mut candidate, AxisDimension::X).map_err(ProjectError::Validation)?;
             apply_autoscale(&mut candidate, AxisDimension::Y).map_err(ProjectError::Validation)?;
         }
         self.project = candidate;
         Ok(())
+    }
+
+    pub fn set_manual_source_metadata(
+        &mut self,
+        data_source_id: &str,
+        recipe: ManualDataRecipe,
+    ) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        let source = candidate
+            .data_sources
+            .iter_mut()
+            .find(|source| source.id == data_source_id)
+            .ok_or_else(|| format!("data source {data_source_id} is missing"))?;
+        source.origin = DataSourceOrigin::Manual;
+        source.manual_recipe = Some(recipe);
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn has_unmanaged_manual_sources(&self) -> bool {
+        self.project.data_sources.iter().any(|source| {
+            source.origin == DataSourceOrigin::Manual && source.managed_file.is_none()
+        })
+    }
+
+    pub fn configure_manual_data_files(
+        &mut self,
+        directory: &Path,
+        format: ManagedDataFormat,
+    ) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        let mut reserved = BTreeSet::new();
+        for source in &mut candidate.data_sources {
+            if source.origin != DataSourceOrigin::Manual {
+                continue;
+            }
+            let stem = safe_file_stem(&source.label, &source.id);
+            let mut path = directory.join(format!("{stem}.{}", format.extension()));
+            let mut suffix = 2;
+            while path.exists() || !reserved.insert(path.clone()) {
+                path = directory.join(format!("{stem}-{suffix}.{}", format.extension()));
+                suffix += 1;
+            }
+            source.managed_file = Some(ManagedDataFile {
+                path: path.to_string_lossy().into_owned(),
+                format,
+                fingerprint: None,
+            });
+        }
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn save_with_managed_manual_data(&self, path: &Path) -> Result<Self, ProjectError> {
+        self.save_with_managed_manual_data_policy(path, false)
+    }
+
+    pub fn overwrite_managed_manual_data(&self, path: &Path) -> Result<Self, ProjectError> {
+        self.save_with_managed_manual_data_policy(path, true)
+    }
+
+    fn save_with_managed_manual_data_policy(
+        &self,
+        path: &Path,
+        overwrite_conflicts: bool,
+    ) -> Result<Self, ProjectError> {
+        let mut saved = self.clone();
+        // Validate every managed target before writing any of them. This prevents
+        // a later conflict from leaving an earlier data file partially updated.
+        if !overwrite_conflicts {
+            for source in &saved.project.data_sources {
+                let Some(managed) = source.managed_file.as_ref() else {
+                    continue;
+                };
+                if source.origin != DataSourceOrigin::Manual {
+                    continue;
+                }
+                validate_managed_target(managed)?;
+            }
+        }
+        for source in &mut saved.project.data_sources {
+            let Some(managed) = source.managed_file.clone() else {
+                continue;
+            };
+            if source.origin != DataSourceOrigin::Manual {
+                continue;
+            }
+            let mut dataset = embedded_dataset(source)?;
+            if managed.format != ManagedDataFormat::Csv && managed.format != ManagedDataFormat::Xlsx
+            {
+                stabilize_text_column_names(&mut dataset);
+            }
+            let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
+            let data_path = PathBuf::from(managed.path);
+            if let Some(parent) = data_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            write_dataset_atomically(&data_path, &dataset, &columns)?;
+            source
+                .managed_file
+                .as_mut()
+                .expect("managed file was cloned above")
+                .fingerprint = Some(fingerprint(&data_path)?);
+        }
+        saved.project.validate()?;
+        save_project(path, &saved.project)?;
+        Ok(saved)
+    }
+
+    pub fn export_manual_data_files(
+        &self,
+        directory: &Path,
+        format: ManagedDataFormat,
+    ) -> Result<usize, ProjectError> {
+        let mut exported = 0;
+        let mut reserved = BTreeSet::new();
+        for source in &self.project.data_sources {
+            if !matches!(
+                source.origin,
+                DataSourceOrigin::Manual | DataSourceOrigin::LegacyManual
+            ) {
+                continue;
+            }
+            let mut dataset = embedded_dataset(source)?;
+            if format != ManagedDataFormat::Csv && format != ManagedDataFormat::Xlsx {
+                stabilize_text_column_names(&mut dataset);
+            }
+            let stem = safe_file_stem(&source.label, &source.id);
+            let mut path = directory.join(format!("{stem}.{}", format.extension()));
+            let mut suffix = 2;
+            while path.exists() || !reserved.insert(path.clone()) {
+                path = directory.join(format!("{stem}-{suffix}.{}", format.extension()));
+                suffix += 1;
+            }
+            std::fs::create_dir_all(directory)?;
+            let columns = (0..dataset.columns.len()).collect::<Vec<_>>();
+            write_dataset_atomically(&path, &dataset, &columns)?;
+            exported += 1;
+        }
+        Ok(exported)
+    }
+}
+
+fn write_dataset_atomically(
+    path: &Path,
+    dataset: &DataSet,
+    columns: &[usize],
+) -> Result<(), ProjectError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("data");
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("data");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = parent.join(format!(
+        ".{stem}.instplot-{}-{nonce}.{extension}",
+        std::process::id()
+    ));
+    if let Err(error) = save_retained_rows_selected_with_fits(&temporary, dataset, columns, &[]) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(ProjectError::Validation(error));
+    }
+    let bytes = match std::fs::read(&temporary) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(ProjectError::Io(error));
+        }
+    };
+    let result = AtomicFile::new(path, AllowOverwrite)
+        .write(|file| file.write_all(&bytes))
+        .map_err(|error| ProjectError::AtomicWrite(error.to_string()));
+    let _ = std::fs::remove_file(temporary);
+    result
+}
+
+fn validate_managed_target(managed: &ManagedDataFile) -> Result<(), ProjectError> {
+    let data_path = PathBuf::from(&managed.path);
+    match (&managed.fingerprint, data_path.exists()) {
+        (Some(expected), true) if fingerprint(&data_path)? != *expected => {
+            Err(ProjectError::Validation(format!(
+                "managed manual data file changed outside Studio: {}. Use Save As to keep both versions",
+                data_path.display()
+            )))
+        }
+        (Some(_), false) => Err(ProjectError::Validation(format!(
+            "managed manual data file is missing: {}. Use Save As to choose a new location",
+            data_path.display()
+        ))),
+        (None, true) => Err(ProjectError::Validation(format!(
+            "refusing to overwrite an unrelated file: {}. Choose another folder or file format",
+            data_path.display()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+fn safe_file_stem(label: &str, fallback: &str) -> String {
+    let stem = label
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            other => other,
+        })
+        .collect::<String>();
+    if stem.is_empty() {
+        fallback.to_owned()
+    } else {
+        stem
+    }
+}
+
+fn embedded_dataset(source: &DataSourceRecord) -> Result<DataSet, ProjectError> {
+    let DataSourcePayload::Embedded {
+        columns,
+        row_count,
+        alive,
+        ..
+    } = &source.payload
+    else {
+        return Err(ProjectError::Validation(format!(
+            "manual data source {} is not embedded",
+            source.id
+        )));
+    };
+    Ok(DataSet {
+        source: PathBuf::from(format!("embedded://{}", source.id)),
+        label: Some(source.label.clone()),
+        kind: DataSetKind::Source,
+        plot_id: source.id.clone(),
+        fit_link: None,
+        encoding: "UTF-8".to_owned(),
+        separator: String::new(),
+        columns: columns
+            .iter()
+            .map(|column| NumericColumn {
+                name: column.name.clone(),
+                values: column
+                    .values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        if column.valid.get(index).copied().unwrap_or(true) {
+                            *value
+                        } else {
+                            f64::NAN
+                        }
+                    })
+                    .collect(),
+            })
+            .collect(),
+        row_count: *row_count,
+        alive: if alive.is_empty() {
+            vec![true; *row_count]
+        } else {
+            alive.clone()
+        },
+    })
+}
+
+fn stabilize_text_column_names(dataset: &mut DataSet) {
+    let mut used = BTreeSet::new();
+    for (index, column) in dataset.columns.iter_mut().enumerate() {
+        let base = column
+            .name
+            .chars()
+            .map(|character| {
+                if character.is_alphanumeric() || character == '_' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let base = base.trim_matches('_');
+        let base = if base.is_empty() {
+            format!("column_{}", index + 1)
+        } else {
+            base.to_owned()
+        };
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        while !used.insert(candidate.clone()) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        column.name = candidate;
     }
 }

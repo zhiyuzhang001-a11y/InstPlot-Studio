@@ -16,6 +16,8 @@ use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
 const TICK_FONT: f64 = 8.0;
 const LABEL_FONT: f64 = 9.0;
 const LEGEND_FONT: f64 = 8.0;
+const AXIS_STROKE_WIDTH_PT: f64 = 0.7;
+const FALLBACK_ERROR_BAR_WIDTH_PT: f64 = 0.7;
 const MAX_ITERATIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1027,7 +1029,11 @@ fn draw_axes(
     warnings: &mut Vec<LayoutWarning>,
 ) -> (Bounds, Bounds) {
     draw_grid(chart, axes, x_axis, y_axis, list);
-    let spine = stroke(Color(45, 50, 55, 255), 0.6, DashStyle::Solid);
+    let spine = stroke(
+        Color(45, 50, 55, 255),
+        AXIS_STROKE_WIDTH_PT,
+        DashStyle::Solid,
+    );
     if chart.x.appearance.near_spine {
         grid_line(
             list,
@@ -1604,7 +1610,7 @@ fn draw_error_bar(
         return Err(LayoutError::InvalidData(series.id));
     };
     let style = series.error_style.unwrap_or(crate::model::ErrorStyle {
-        width: 0.65,
+        width: FALLBACK_ERROR_BAR_WIDTH_PT,
         cap_width: 4.0,
         dash: DashStyle::Solid,
     });
@@ -1928,7 +1934,11 @@ fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, dx: f64, dy: 
             ],
         },
         fill: None,
-        stroke: Some(stroke(Color(45, 50, 55, 255), 0.6, DashStyle::Solid)),
+        stroke: Some(stroke(
+            Color(45, 50, 55, 255),
+            AXIS_STROKE_WIDTH_PT,
+            DashStyle::Solid,
+        )),
     });
 }
 

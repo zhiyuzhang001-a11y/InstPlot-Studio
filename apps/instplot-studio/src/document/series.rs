@@ -20,7 +20,7 @@ impl FigureDocument {
             DataSourceKind::Fit => ArtistRole::Fit,
         };
         let source_label = source.label.clone();
-        let color_id = default_series_color(&self.project, data_source_id);
+        let color_id = default_series_color(&self.project, data_source_id, x_column, y_column);
         let marker_shape = default_series_marker(&self.project, data_source_id);
         let kinds = match style {
             SeriesCreationStyle::Line => vec![ArtistKind::Line],
@@ -142,7 +142,7 @@ impl FigureDocument {
         if let Some(column) = x_error_column {
             validate_error_column(&self.project, data_source_id, column)?;
         }
-        let color_id = default_series_color(&self.project, data_source_id);
+        let color_id = default_series_color(&self.project, data_source_id, x_column, y_column);
         let id = next_stable_id(&self.project, "error-bars");
         self.project.figure.artists.push(ArtistRecord {
             id: id.clone(),
@@ -325,7 +325,14 @@ impl FigureDocument {
             .as_ref()
             .map(|stroke| stroke.color_id.clone())
             .or_else(|| marker_style.as_ref().map(|marker| marker.color_id.clone()))
-            .unwrap_or_else(|| default_series_color(&candidate, &binding.data_source_id));
+            .unwrap_or_else(|| {
+                default_series_color(
+                    &candidate,
+                    &binding.data_source_id,
+                    &binding.x_column,
+                    &binding.y_column,
+                )
+            });
         let line_style = line_style.unwrap_or_else(|| StrokeStyle {
             color_id: fallback_color.clone(),
             width_pt: DEFAULT_CURVE_WIDTH_PT,

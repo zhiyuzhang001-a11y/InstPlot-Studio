@@ -31,6 +31,7 @@ pub(super) struct StudioApp {
     pub(super) binding_y: String,
     pub(super) binding_error: String,
     pub(super) pending_data_removal: Option<DataRemovalRequest>,
+    pub(super) pending_managed_save_conflict: Option<ManagedSaveConflict>,
     pub(super) label_inputs: BTreeMap<String, LabelInputState>,
     pub(super) numeric_inputs: BTreeMap<String, DeferredNumericInput>,
     pub(super) x_fixed_ticks: String,
@@ -67,6 +68,12 @@ pub(super) enum PendingAction {
     OpenLiteHandoff,
     OpenProject,
     Exit,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ManagedSaveConflict {
+    pub(super) project_path: PathBuf,
+    pub(super) explanation: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,22 +251,12 @@ pub(super) struct DeferredNumericInput {
     pub(super) error: Option<String>,
 }
 
+#[derive(Default)]
 pub(super) struct ManualDataState {
     pub(super) open: bool,
     pub(super) input: ManualDataInput,
-    pub(super) style: SeriesCreationStyle,
+    pub(super) editing_group_id: Option<String>,
     pub(super) error: Option<String>,
-}
-
-impl Default for ManualDataState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            input: ManualDataInput::default(),
-            style: SeriesCreationStyle::LineAndMarker,
-            error: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]

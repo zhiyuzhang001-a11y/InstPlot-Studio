@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 6;
+pub const PROJECT_SCHEMA_VERSION: u32 = 7;
 /// Default physical stroke used by newly created data curves.
 pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
 /// Default physical stroke used by newly created error bars.
@@ -324,6 +324,85 @@ pub struct DataSourceRecord {
     pub fit: Option<FitIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<String>,
+    #[serde(default)]
+    pub origin: DataSourceOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_recipe: Option<ManualDataRecipe>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_file: Option<ManagedDataFile>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DataSourceOrigin {
+    #[default]
+    Imported,
+    Manual,
+    LegacyManual,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManualDataRecipe {
+    pub group_id: String,
+    pub name: String,
+    pub x: ManualMeasurementRecord,
+    pub y: ManualMeasurementRecord,
+    pub error_statistic: ManualErrorStatistic,
+    pub plot_style: ManualPlotStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManualMeasurementRecord {
+    pub name: String,
+    pub measurements: Vec<Vec<f64>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualErrorStatistic {
+    StandardDeviation,
+    StandardError,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualPlotStyle {
+    Line,
+    Scatter,
+    LineAndMarker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedDataFile {
+    pub path: String,
+    pub format: ManagedDataFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<SourceFingerprint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedDataFormat {
+    Csv,
+    Tsv,
+    Txt,
+    Dat,
+    Xlsx,
+}
+
+impl ManagedDataFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+            Self::Txt => "txt",
+            Self::Dat => "dat",
+            Self::Xlsx => "xlsx",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -696,6 +775,7 @@ impl ProjectDocument {
                 }
                 _ => {}
             }
+            validate_source_origin(source)?;
             validate_payload(source)?;
         }
         collect_ids(
@@ -808,6 +888,9 @@ impl ProjectDocument {
             },
             fit,
             origin_path: Some(path_text.to_owned()),
+            origin: DataSourceOrigin::Imported,
+            manual_recipe: None,
+            managed_file: None,
         };
         let mut candidate = self.clone();
         if let Some(existing) = candidate.data_sources.iter_mut().find(|item| item.id == id) {
@@ -848,6 +931,21 @@ impl ProjectDocument {
                 .iter()
                 .find(|source| source.id == id)
                 .and_then(|source| source.origin_path.clone()),
+            origin: self
+                .data_sources
+                .iter()
+                .find(|source| source.id == id)
+                .map_or(DataSourceOrigin::Imported, |source| source.origin),
+            manual_recipe: self
+                .data_sources
+                .iter()
+                .find(|source| source.id == id)
+                .and_then(|source| source.manual_recipe.clone()),
+            managed_file: self
+                .data_sources
+                .iter()
+                .find(|source| source.id == id)
+                .and_then(|source| source.managed_file.clone()),
         };
         let mut candidate = self.clone();
         if let Some(existing) = candidate.data_sources.iter_mut().find(|item| item.id == id) {
@@ -939,7 +1037,9 @@ struct LegacyProjectV0 {
 
 mod migration;
 
-use migration::{migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5};
+use migration::{
+    migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6,
+};
 
 #[cfg(test)]
 mod project_tests;

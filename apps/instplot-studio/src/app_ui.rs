@@ -149,6 +149,15 @@ impl eframe::App for StudioApp {
                         }
                         ui.separator();
                         ui.menu_button(self.language.text(Text::Export), |ui| {
+                            if features.data_import
+                                && ui.button(self.language.text(Text::ExportData)).clicked()
+                            {
+                                ui.close();
+                                self.export_manual_data();
+                            }
+                            if features.data_import {
+                                ui.separator();
+                            }
                             if features.export_pdf
                                 && ui.button(self.language.text(Text::ExportPdf)).clicked()
                             {
@@ -207,8 +216,7 @@ impl eframe::App for StudioApp {
                     if features.manual_data
                         && ui.button(self.language.text(Text::EnterData)).clicked()
                     {
-                        self.manual_data.open = true;
-                        self.manual_data.error = None;
+                        self.prepare_manual_data_window();
                     }
                     if ui
                         .selectable_label(self.show_palette, self.language.text(Text::ColorScheme))
@@ -832,6 +840,7 @@ impl eframe::App for StudioApp {
             );
         }
         self.unsaved_dialog(&context);
+        self.managed_save_conflict_dialog(&context);
         self.data_removal_dialog(&context);
         self.export_dialog(&context);
     }

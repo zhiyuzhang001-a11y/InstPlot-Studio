@@ -161,7 +161,7 @@ pub fn publication_fixture() -> Chart {
                 legend_marker: None,
                 legend_error: Some(LegendErrorStyle {
                     style: ErrorStyle {
-                        width: 0.65,
+                        width: 0.7,
                         cap_width: 4.0,
                         dash: DashStyle::Solid,
                     },
@@ -169,7 +169,7 @@ pub fn publication_fixture() -> Chart {
                 }),
                 errors: y_errors(2),
                 error_style: Some(ErrorStyle {
-                    width: 0.65,
+                    width: 0.7,
                     cap_width: 4.0,
                     dash: DashStyle::Solid,
                 }),
@@ -190,7 +190,7 @@ pub fn publication_fixture() -> Chart {
                 legend_marker: None,
                 legend_error: Some(LegendErrorStyle {
                     style: ErrorStyle {
-                        width: 0.65,
+                        width: 0.7,
                         cap_width: 4.0,
                         dash: DashStyle::Solid,
                     },
@@ -198,7 +198,7 @@ pub fn publication_fixture() -> Chart {
                 }),
                 errors: y_errors(4),
                 error_style: Some(ErrorStyle {
-                    width: 0.65,
+                    width: 0.7,
                     cap_width: 4.0,
                     dash: DashStyle::Solid,
                 }),
@@ -272,7 +272,7 @@ pub fn marker_gallery_fixture() -> Chart {
             legend_marker: None,
             legend_error: (index == 0).then_some(LegendErrorStyle {
                 style: ErrorStyle {
-                    width: 0.65,
+                    width: 0.7,
                     cap_width: 4.0,
                     dash: DashStyle::Solid,
                 },
@@ -292,7 +292,7 @@ pub fn marker_gallery_fixture() -> Chart {
                 Vec::new()
             },
             error_style: (index == 0).then_some(ErrorStyle {
-                width: 0.65,
+                width: 0.7,
                 cap_width: 4.0,
                 dash: DashStyle::Solid,
             }),

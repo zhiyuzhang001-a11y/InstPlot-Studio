@@ -1,8 +1,9 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use instplot_core::{DataSet, DataSetKind};
+use instplot_core::{DataSet, DataSetKind, NumericColumn};
+use instplot_io::save_retained_rows_selected_with_fits;
 use instplot_layout::{
     Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance as LayoutAxisAppearance,
     AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec,
@@ -13,14 +14,16 @@ use instplot_layout::{
 use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
 use instplot_text::Label;
 
+use crate::project::fingerprint;
 use crate::{
     ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale,
     DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
-    DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode, LegendEntry,
-    LegendGrid, LegendPlacement, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport,
-    PaletteColor, PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord,
-    ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry, open_project,
-    palette_series_color_ids, save_project,
+    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, FitIdentity,
+    FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
+    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
+    OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
+    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry,
+    open_project, palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -555,26 +558,41 @@ fn next_stable_id(project: &ProjectDocument, prefix: &str) -> String {
         .expect("the stable ID sequence is practically unbounded")
 }
 
-fn default_series_color(project: &ProjectDocument, data_source_id: &str) -> String {
-    let family_id = project
+fn series_color_key(project: &ProjectDocument, binding: &DataBinding) -> String {
+    if let Some(fit) = project
         .data_sources
         .iter()
-        .find(|source| source.id == data_source_id)
+        .find(|source| source.id == binding.data_source_id)
         .and_then(|source| source.fit.as_ref())
-        .map_or(data_source_id, |fit| fit.parent_data_source_id.as_str());
+    {
+        return format!(
+            "{}\u{0}{}\u{0}{}",
+            fit.parent_data_source_id, fit.source_x_column, fit.source_y_column
+        );
+    }
+    format!(
+        "{}\u{0}{}\u{0}{}",
+        binding.data_source_id, binding.x_column, binding.y_column
+    )
+}
+
+fn default_series_color(
+    project: &ProjectDocument,
+    data_source_id: &str,
+    x_column: &str,
+    y_column: &str,
+) -> String {
+    let requested = DataBinding {
+        data_source_id: data_source_id.to_owned(),
+        x_column: x_column.to_owned(),
+        y_column: y_column.to_owned(),
+    };
+    let requested_key = series_color_key(project, &requested);
     for artist in &project.figure.artists {
         let Some(binding) = artist_binding(artist) else {
             continue;
         };
-        let binding_family = project
-            .data_sources
-            .iter()
-            .find(|source| source.id == binding.data_source_id)
-            .and_then(|source| source.fit.as_ref())
-            .map_or(binding.data_source_id.as_str(), |fit| {
-                fit.parent_data_source_id.as_str()
-            });
-        if binding_family != family_id {
+        if series_color_key(project, binding) != requested_key {
             continue;
         }
         return match &artist.properties {
@@ -608,12 +626,15 @@ fn default_series_color(project: &ProjectDocument, data_source_id: &str) -> Stri
         .find(|id| !used.contains(id))
         .or_else(|| {
             (!available.is_empty()).then(|| {
-                let family_count = project
-                    .data_sources
+                let existing_series = project
+                    .figure
+                    .artists
                     .iter()
-                    .filter(|source| source.fit.is_none())
-                    .count();
-                available[family_count % available.len()]
+                    .filter_map(artist_binding)
+                    .map(|binding| series_color_key(project, binding))
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                available[existing_series % available.len()]
             })
         })
         .map(str::to_owned)

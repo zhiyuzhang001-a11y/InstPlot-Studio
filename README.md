@@ -106,9 +106,12 @@ Each file group can be removed with its linked plot objects in one undoable
 action; multi-section files also allow removing an individual data section.
 The File menu clears all imported data in one undoable action.
 These operations change only the current project, never the source files on disk.
-Project schema 5 preserves imported file provenance across save/reopen; older
-schema 4 projects migrate automatically, although they cannot recover file
-origins that were never stored.
+Project schema 7 preserves imported-file provenance and distinguishes each manually entered XY
+group. Manual groups retain their original X/Y repetitions and SD/SEM recipe in the project; the
+first project save can additionally create one managed CSV, TSV, TXT, DAT or XLSX file per group.
+Later saves update those files atomically after fingerprint checks, while File → Export → Export
+Data writes independent copies. Older project schemas migrate automatically, although legacy
+manual data cannot recover repetitions that were never stored.
 The data drawer remains focused on files and XY/error bindings; raw numeric processing remains in
 Lite rather than crowding the Studio drawing interface.
 Reimporting the same path refreshes data only while its existing dataset IDs

@@ -641,21 +641,21 @@ fn manual_repeated_measurements_replace_demo_and_create_mean_error_series() {
     let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
     let mut app = StudioApp::new(&creation, Instant::now(), None);
     app.manual_data.input = ManualDataInput {
-        source_name: "Repeated trial".to_owned(),
-        x_inputs: vec![ManualAxisInput {
-            name: "Field".to_owned(),
-            measurements: vec!["0 1".to_owned()],
-        }],
-        y_inputs: vec![ManualYInput {
-            axis: ManualAxisInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-repeated".to_owned(),
+            source_name: "Repeated trial".to_owned(),
+            x: ManualAxisInput {
+                name: "Field".to_owned(),
+                measurements: vec!["0 1".to_owned()],
+            },
+            y: ManualAxisInput {
                 name: "Signal".to_owned(),
                 measurements: vec!["1 2".to_owned(), "2 4".to_owned(), "3 6".to_owned()],
             },
-            x_index: 0,
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
         }],
-        error_statistic: ErrorStatistic::StandardDeviation,
     };
-    app.manual_data.style = SeriesCreationStyle::LineAndMarker;
 
     app.insert_manual_data().unwrap();
 
@@ -694,6 +694,49 @@ fn manual_repeated_measurements_replace_demo_and_create_mean_error_series() {
         &[LabelNode::Text("Signal".to_owned())]
     );
     assert!(app.resolved.layout.result.legend.is_some());
+
+    let project_path = std::env::temp_dir().join(format!(
+        "instplot-manual-data-round-trip-{}.instplot",
+        std::process::id()
+    ));
+    app.document.save(&project_path).unwrap();
+    let (reopened, _) = FigureDocument::open(&project_path).unwrap();
+    std::fs::remove_file(&project_path).unwrap();
+    let instplot_studio::DataSourcePayload::Embedded { columns, .. } =
+        &reopened.project().data_sources[0].payload
+    else {
+        panic!("manual data must remain embedded in the saved project")
+    };
+    assert_eq!(
+        reopened.project().data_sources[0].origin,
+        instplot_studio::DataSourceOrigin::Manual
+    );
+    let recipe = reopened.project().data_sources[0]
+        .manual_recipe
+        .as_ref()
+        .expect("manual source must preserve its editable recipe");
+    assert_eq!(recipe.x.measurements.len(), 1);
+    assert_eq!(recipe.y.measurements.len(), 3);
+    for expected in [
+        "Signal",
+        "Signal · SD",
+        "Signal · 测量 1",
+        "Signal · 测量 2",
+        "Signal · 测量 3",
+    ] {
+        assert!(
+            columns.iter().any(|column| column.name == expected),
+            "saved project is missing {expected}"
+        );
+    }
+    assert_eq!(
+        reopened
+            .series()
+            .iter()
+            .filter(|series| series.kind == SeriesKind::ErrorBar)
+            .count(),
+        1
+    );
 
     let error_id = app
         .document
@@ -742,7 +785,8 @@ fn manual_repeated_measurements_replace_demo_and_create_mean_error_series() {
         .collect::<Vec<_>>();
     remove_app_data_sources(&mut app, ids);
     assert!(app.session.datasets().is_empty());
-    app.manual_data.input.source_name = "Repeated trial after clear".to_owned();
+    app.manual_data.input.groups[0].source_name = "Repeated trial after clear".to_owned();
+    app.manual_data.input.groups[0].group_id = "manual-repeated-after-clear".to_owned();
 
     app.insert_manual_data().unwrap();
 
@@ -765,36 +809,37 @@ fn manual_multiple_xy_groups_create_distinct_series_and_automatic_errors() {
     let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
     let mut app = StudioApp::new(&creation, Instant::now(), None);
     app.manual_data.input = ManualDataInput {
-        source_name: "Two experiments".to_owned(),
-        x_inputs: vec![
-            ManualAxisInput {
-                name: "Field A".to_owned(),
-                measurements: vec!["0 1".to_owned()],
-            },
-            ManualAxisInput {
-                name: "Field B".to_owned(),
-                measurements: vec!["10 20 30".to_owned()],
-            },
-        ],
-        y_inputs: vec![
-            ManualYInput {
-                axis: ManualAxisInput {
+        groups: vec![
+            ManualDataGroupInput {
+                group_id: "manual-experiment-a".to_owned(),
+                source_name: "Experiment A".to_owned(),
+                x: ManualAxisInput {
+                    name: "Field A".to_owned(),
+                    measurements: vec!["0 1".to_owned()],
+                },
+                y: ManualAxisInput {
                     name: "Signal A".to_owned(),
                     measurements: vec!["2 4".to_owned(), "4 8".to_owned()],
                 },
-                x_index: 0,
+                error_statistic: ErrorStatistic::StandardDeviation,
+                plot_style: ManualPlotStyle::LineAndMarker,
             },
-            ManualYInput {
-                axis: ManualAxisInput {
+            ManualDataGroupInput {
+                group_id: "manual-experiment-b".to_owned(),
+                source_name: "Experiment B".to_owned(),
+                x: ManualAxisInput {
+                    name: "Field B".to_owned(),
+                    measurements: vec!["10 20 30".to_owned()],
+                },
+                y: ManualAxisInput {
                     name: "Signal B".to_owned(),
                     measurements: vec!["5 6 7".to_owned()],
                 },
-                x_index: 1,
+                error_statistic: ErrorStatistic::StandardDeviation,
+                plot_style: ManualPlotStyle::LineAndMarker,
             },
         ],
-        error_statistic: ErrorStatistic::StandardDeviation,
     };
-    app.manual_data.style = SeriesCreationStyle::LineAndMarker;
 
     app.insert_manual_data().unwrap();
 
@@ -837,6 +882,297 @@ fn manual_multiple_xy_groups_create_distinct_series_and_automatic_errors() {
         .collect::<Vec<_>>();
     assert_eq!(marker_styles.len(), 2);
     assert_ne!(marker_styles[0], marker_styles[1]);
+
+    for palette_id in ["tol-bright-v1", "okabe-ito-v1"] {
+        app.document.set_palette(palette_id).unwrap();
+        let mut colors_by_y = BTreeMap::<String, BTreeSet<String>>::new();
+        for artist in &app.document.project().figure.artists {
+            let (binding, color) = match &artist.properties {
+                ArtistProperties::Line { binding, stroke }
+                | ArtistProperties::ErrorBar {
+                    binding, stroke, ..
+                } => (binding, &stroke.color_id),
+                ArtistProperties::Scatter { binding, marker } => (binding, &marker.color_id),
+                _ => continue,
+            };
+            colors_by_y
+                .entry(binding.y_column.clone())
+                .or_default()
+                .insert(color.clone());
+        }
+        assert_eq!(colors_by_y.len(), 2);
+        assert!(colors_by_y.values().all(|colors| colors.len() == 1));
+        assert_ne!(colors_by_y["Signal A"], colors_by_y["Signal B"]);
+    }
+}
+
+#[test]
+fn saved_manual_group_reopens_read_only_and_updates_in_place() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-editable".to_owned(),
+            source_name: "Editable".to_owned(),
+            x: ManualAxisInput {
+                name: "Field".to_owned(),
+                measurements: vec!["0 1".to_owned()],
+            },
+            y: ManualAxisInput {
+                name: "Signal".to_owned(),
+                measurements: vec!["2 4".to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }],
+    };
+    app.insert_manual_data().unwrap();
+    let original_styles = app
+        .document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter(|artist| {
+            matches!(
+                artist.properties,
+                ArtistProperties::Line { .. } | ArtistProperties::Scatter { .. }
+            )
+        })
+        .map(|artist| artist.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    app.prepare_manual_data_window();
+    assert_eq!(app.manual_data.input.groups.len(), 1);
+    assert!(app.manual_data.editing_group_id.is_none());
+    app.manual_data.editing_group_id = Some("manual-editable".to_owned());
+    app.manual_data.input.groups[0].source_name = "Edited".to_owned();
+    app.manual_data.input.groups[0].y.name = "Response".to_owned();
+    app.manual_data.input.groups[0].y.measurements[0] = "3 9".to_owned();
+    app.insert_manual_data().unwrap();
+
+    assert_eq!(app.document.project().data_sources.len(), 1);
+    assert_eq!(app.session.dataset_count(), 1);
+    let source = &app.document.project().data_sources[0];
+    assert_eq!(source.label, "Edited");
+    assert_eq!(source.manual_recipe.as_ref().unwrap().y.name, "Response");
+    let updated_styles = app
+        .document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter(|artist| {
+            matches!(
+                artist.properties,
+                ArtistProperties::Line { .. } | ArtistProperties::Scatter { .. }
+            )
+        })
+        .map(|artist| artist.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(updated_styles, original_styles);
+}
+
+#[test]
+fn managed_manual_data_round_trips_all_supported_formats() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-managed".to_owned(),
+            source_name: "Managed Trial".to_owned(),
+            x: ManualAxisInput {
+                name: "Field".to_owned(),
+                measurements: vec!["0 1 2".to_owned()],
+            },
+            y: ManualAxisInput {
+                name: "Signal".to_owned(),
+                measurements: vec!["2 4 6".to_owned(), "4 6 8".to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }],
+    };
+    app.insert_manual_data().unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("instplot-managed-formats-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    for format in [
+        ManagedDataFormat::Csv,
+        ManagedDataFormat::Tsv,
+        ManagedDataFormat::Txt,
+        ManagedDataFormat::Dat,
+        ManagedDataFormat::Xlsx,
+    ] {
+        let format_directory = directory.join(format.extension());
+        let mut document = app.document.clone();
+        document
+            .configure_manual_data_files(&format_directory, format)
+            .unwrap();
+        let project_path = format_directory.join("figure.instplot");
+        let saved = document
+            .save_with_managed_manual_data(&project_path)
+            .unwrap();
+        let managed = saved.project().data_sources[0]
+            .managed_file
+            .as_ref()
+            .unwrap();
+        assert_eq!(managed.format, format);
+        assert!(managed.fingerprint.is_some());
+        let data_path = PathBuf::from(&managed.path);
+        assert!(data_path.exists());
+        let imported = DataImporter::read_file(&data_path).unwrap();
+        assert!(!imported.is_empty());
+        assert!(
+            imported[0]
+                .columns
+                .iter()
+                .any(|column| column.name == "Signal")
+        );
+        let export_directory = format_directory.join("export-copy");
+        assert_eq!(
+            saved
+                .export_manual_data_files(&export_directory, format)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            saved.project().data_sources[0]
+                .managed_file
+                .as_ref()
+                .unwrap()
+                .path,
+            managed.path,
+            "exporting a copy must not change the managed save association"
+        );
+        let mut edited = saved.clone();
+        let source = &saved.project().data_sources[0];
+        edited
+            .set_manual_source_metadata(
+                &source.id,
+                source.manual_recipe.clone().expect("manual recipe"),
+            )
+            .unwrap();
+        assert_eq!(
+            edited.project().data_sources[0].managed_file,
+            source.managed_file,
+            "editing manual values must keep their managed file association"
+        );
+        let mut removed = saved.clone();
+        removed
+            .delete_data_source(&source.id, true)
+            .expect("removing a manual card should remove only the project object");
+        assert!(
+            data_path.exists(),
+            "removing a manual card must not delete its managed disk file"
+        );
+        if format == ManagedDataFormat::Csv {
+            saved
+                .save_with_managed_manual_data(&project_path)
+                .expect("an unchanged managed file should update without prompting");
+            std::fs::write(&data_path, b"externally changed\n").unwrap();
+            let error = saved
+                .save_with_managed_manual_data(&project_path)
+                .unwrap_err();
+            assert!(error.to_string().contains("changed outside Studio"));
+            let overwritten = saved
+                .overwrite_managed_manual_data(&project_path)
+                .expect("explicit overwrite should restore the managed data file");
+            assert_eq!(DataImporter::read_file(&data_path).unwrap()[0].row_count, 3);
+            assert!(
+                overwritten.project().data_sources[0]
+                    .managed_file
+                    .as_ref()
+                    .unwrap()
+                    .fingerprint
+                    .is_some()
+            );
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn external_manual_file_change_opens_an_explicit_save_conflict() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput::new(1)],
+    };
+    app.manual_data.input.groups[0].x.measurements[0] = "0 1".to_owned();
+    app.manual_data.input.groups[0].y.measurements[0] = "2 3".to_owned();
+    app.insert_manual_data().unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("instplot-save-conflict-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    app.document
+        .configure_manual_data_files(&directory, ManagedDataFormat::Csv)
+        .unwrap();
+    let project_path = directory.join("figure.instplot");
+    assert!(app.execute_project_save(project_path.clone(), false));
+    let managed_path = PathBuf::from(
+        &app.document.project().data_sources[0]
+            .managed_file
+            .as_ref()
+            .unwrap()
+            .path,
+    );
+    std::fs::write(&managed_path, b"external change\n").unwrap();
+
+    assert!(!app.execute_project_save(project_path.clone(), false));
+    let conflict = app
+        .pending_managed_save_conflict
+        .as_ref()
+        .expect("a visible choice dialog should be pending");
+    assert_eq!(conflict.project_path, project_path);
+    assert!(conflict.explanation.contains("外部"));
+    let conflict_path = conflict.project_path.clone();
+    assert!(app.execute_project_save(conflict_path, true));
+    assert_eq!(
+        DataImporter::read_file(&managed_path).unwrap()[0].row_count,
+        2
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn saving_manual_data_never_rewrites_an_imported_source_file() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let imported_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.csv");
+    let original_bytes = std::fs::read(&imported_path).unwrap();
+    app.load_data_paths(vec![imported_path.clone()]);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput::new(1)],
+    };
+    app.manual_data.input.groups[0].source_name = "Independent manual data".to_owned();
+    app.manual_data.input.groups[0].x.measurements[0] = "0 1 2".to_owned();
+    app.manual_data.input.groups[0].y.measurements[0] = "3 4 5".to_owned();
+    app.insert_manual_data().unwrap();
+
+    let directory =
+        std::env::temp_dir().join(format!("instplot-import-readonly-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    app.document
+        .configure_manual_data_files(&directory, ManagedDataFormat::Csv)
+        .unwrap();
+    let saved = app
+        .document
+        .save_with_managed_manual_data(&directory.join("figure.instplot"))
+        .unwrap();
+
+    assert_eq!(std::fs::read(&imported_path).unwrap(), original_bytes);
+    let imported_source = saved
+        .project()
+        .data_sources
+        .iter()
+        .find(|source| source.origin == instplot_studio::DataSourceOrigin::Imported)
+        .unwrap();
+    assert!(imported_source.managed_file.is_none());
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

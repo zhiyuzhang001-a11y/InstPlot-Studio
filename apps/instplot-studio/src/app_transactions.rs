@@ -25,6 +25,7 @@ pub(super) enum AppAction {
     RemoveDataSources(Vec<String>),
     OpenProject(PathBuf),
     SaveProject(PathBuf),
+    SaveProjectOverwriteManaged(PathBuf),
     Undo,
     Redo,
     EditDocument {
@@ -139,6 +140,9 @@ impl ApplicationController {
             AppAction::RemoveDataSources(ids) => Self::remove_data_sources(state, ids),
             AppAction::OpenProject(path) => Self::open_project(state, path),
             AppAction::SaveProject(path) => Self::save_project(state, path),
+            AppAction::SaveProjectOverwriteManaged(path) => {
+                Self::save_project_overwrite_managed(state, path)
+            }
             AppAction::Undo => Self::move_history(state, false),
             AppAction::Redo => Self::move_history(state, true),
             AppAction::EditDocument { command, group } => {
@@ -477,25 +481,36 @@ impl ApplicationController {
     }
 
     fn save_project(state: AppTransactionState<'_>, path: PathBuf) -> Result<AppOutcome, AppError> {
-        state.document.save(&path).map_err(|error| AppError {
-            code: "save-project",
-            diagnostics: vec![error.to_string()],
-        })?;
+        let document = state
+            .document
+            .save_with_managed_manual_data(&path)
+            .map_err(|error| AppError {
+                code: "save-project",
+                diagnostics: vec![error.to_string()],
+            })?;
+        Self::finish_saved_project(state, document, path)
+    }
+
+    fn finish_saved_project(
+        state: AppTransactionState<'_>,
+        document: FigureDocument,
+        path: PathBuf,
+    ) -> Result<AppOutcome, AppError> {
         let mut workspace = state.workspace.clone();
         workspace.note_saved(path.clone());
         let mut edit_history = state.edit_history.clone();
-        edit_history.mark_saved(state.document);
-        let resolved = resolved_preview(state.document).map_err(|error| AppError {
+        edit_history.mark_saved(&document);
+        let resolved = resolved_preview(&document).map_err(|error| AppError {
             code: "save-project-layout",
             diagnostics: vec![error.to_string()],
         })?;
         let publication_report = check_publication(
-            state.document,
+            &document,
             &resolved,
-            state.document.export_preferences().selected_raster_dpi,
+            document.export_preferences().selected_raster_dpi,
         );
         Ok(AppOutcome {
-            document: state.document.clone(),
+            document,
             session: state.session.clone(),
             workspace,
             edit_history,
@@ -503,6 +518,20 @@ impl ApplicationController {
             publication_report,
             effect: AppEffect::SavedProject { path },
         })
+    }
+
+    fn save_project_overwrite_managed(
+        state: AppTransactionState<'_>,
+        path: PathBuf,
+    ) -> Result<AppOutcome, AppError> {
+        let document = state
+            .document
+            .overwrite_managed_manual_data(&path)
+            .map_err(|error| AppError {
+                code: "save-project",
+                diagnostics: vec![error.to_string()],
+            })?;
+        Self::finish_saved_project(state, document, path)
     }
 
     fn move_history(state: AppTransactionState<'_>, redo: bool) -> Result<AppOutcome, AppError> {

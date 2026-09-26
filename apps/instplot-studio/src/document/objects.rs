@@ -133,8 +133,8 @@ impl FigureDocument {
     }
 
     /// Changes the active colour scheme and deterministically recolours every
-    /// data family. A fit retains its source colour, while theory/reference
-    /// roles continue to use semantic neutral ink.
+    /// visual XY series. Line, marker, error bar, and linked fit styles share
+    /// one colour; independent Y columns in one source remain distinct.
     pub fn set_palette(&mut self, palette_id: &str) -> Result<(), String> {
         let registry = builtin_palette_registry(palette_id)
             .ok_or_else(|| format!("unknown built-in palette {palette_id}"))?;
@@ -145,27 +145,14 @@ impl FigureDocument {
 
         let mut candidate = self.project.clone();
         candidate.palette = registry;
-        let mut family_colors = BTreeMap::<String, String>::new();
-        for source in &candidate.data_sources {
-            let family_id = source
-                .fit
-                .as_ref()
-                .map_or(source.id.as_str(), |fit| fit.parent_data_source_id.as_str());
-            if !family_colors.contains_key(family_id) {
-                let index = family_colors.len() % series_colors.len();
-                family_colors.insert(family_id.to_owned(), series_colors[index].to_owned());
-            }
-        }
-
-        let source_families = candidate
-            .data_sources
+        let mut visual_series_colors = BTreeMap::<String, String>::new();
+        let binding_keys = candidate
+            .figure
+            .artists
             .iter()
-            .map(|source| {
-                let family_id = source
-                    .fit
-                    .as_ref()
-                    .map_or(source.id.as_str(), |fit| fit.parent_data_source_id.as_str());
-                (source.id.clone(), family_id.to_owned())
+            .filter_map(|artist| {
+                artist_binding(artist)
+                    .map(|binding| (artist.id.clone(), series_color_key(&candidate, binding)))
             })
             .collect::<BTreeMap<_, _>>();
         let mut changed_properties = BTreeMap::new();
@@ -177,26 +164,32 @@ impl FigureDocument {
                 _ => None,
             };
             match &mut artist.properties {
-                ArtistProperties::Line { binding, stroke }
-                | ArtistProperties::ErrorBar {
-                    binding, stroke, ..
-                } => {
+                ArtistProperties::Line { stroke, .. }
+                | ArtistProperties::ErrorBar { stroke, .. } => {
                     let color = role_color.or_else(|| {
-                        source_families
-                            .get(&binding.data_source_id)
-                            .and_then(|family| family_colors.get(family))
-                            .map(String::as_str)
+                        let key = binding_keys.get(&artist.id)?;
+                        let next_index = visual_series_colors.len() % series_colors.len();
+                        Some(
+                            visual_series_colors
+                                .entry(key.clone())
+                                .or_insert_with(|| series_colors[next_index].to_owned())
+                                .as_str(),
+                        )
                     });
                     if let Some(color) = color {
                         stroke.color_id = color.to_owned();
                     }
                 }
-                ArtistProperties::Scatter { binding, marker } => {
+                ArtistProperties::Scatter { marker, .. } => {
                     let color = role_color.or_else(|| {
-                        source_families
-                            .get(&binding.data_source_id)
-                            .and_then(|family| family_colors.get(family))
-                            .map(String::as_str)
+                        let key = binding_keys.get(&artist.id)?;
+                        let next_index = visual_series_colors.len() % series_colors.len();
+                        Some(
+                            visual_series_colors
+                                .entry(key.clone())
+                                .or_insert_with(|| series_colors[next_index].to_owned())
+                                .as_str(),
+                        )
                     });
                     if let Some(color) = color {
                         marker.color_id = color.to_owned();

@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use instplot_core::{DataSet, DataSetKind, NumericColumn, generated_plot_id};
+use instplot_core::{DataSet, DataSetKind, NumericColumn};
 use instplot_io::{ImportError, read_data_file};
+
+use crate::{ManualDataRecipe, ManualErrorStatistic, ManualMeasurementRecord, ManualPlotStyle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataDiagnostic {
@@ -264,29 +266,69 @@ impl ManualAxisInput {
 }
 
 #[derive(Clone, Debug)]
-pub struct ManualYInput {
-    pub axis: ManualAxisInput,
-    pub x_index: usize,
+pub struct ManualDataGroupInput {
+    pub group_id: String,
+    pub source_name: String,
+    pub x: ManualAxisInput,
+    pub y: ManualAxisInput,
+    pub error_statistic: ErrorStatistic,
+    pub plot_style: ManualPlotStyle,
+}
+
+impl ManualDataGroupInput {
+    pub fn new(index: usize) -> Self {
+        Self {
+            group_id: format!("manual-group-{index}"),
+            source_name: format!("手动数据 {index}"),
+            x: ManualAxisInput::new("X"),
+            y: ManualAxisInput::new("Y"),
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }
+    }
+
+    pub fn from_recipe(recipe: &ManualDataRecipe) -> Self {
+        let measurements = |values: &[Vec<f64>]| {
+            values
+                .iter()
+                .map(|measurement| {
+                    measurement
+                        .iter()
+                        .map(|value| value.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect()
+        };
+        Self {
+            group_id: recipe.group_id.clone(),
+            source_name: recipe.name.clone(),
+            x: ManualAxisInput {
+                name: recipe.x.name.clone(),
+                measurements: measurements(&recipe.x.measurements),
+            },
+            y: ManualAxisInput {
+                name: recipe.y.name.clone(),
+                measurements: measurements(&recipe.y.measurements),
+            },
+            error_statistic: match recipe.error_statistic {
+                ManualErrorStatistic::StandardDeviation => ErrorStatistic::StandardDeviation,
+                ManualErrorStatistic::StandardError => ErrorStatistic::StandardError,
+            },
+            plot_style: recipe.plot_style,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct ManualDataInput {
-    pub source_name: String,
-    pub x_inputs: Vec<ManualAxisInput>,
-    pub y_inputs: Vec<ManualYInput>,
-    pub error_statistic: ErrorStatistic,
+    pub groups: Vec<ManualDataGroupInput>,
 }
 
 impl Default for ManualDataInput {
     fn default() -> Self {
         Self {
-            source_name: "手动数据 1".to_owned(),
-            x_inputs: vec![ManualAxisInput::new("X")],
-            y_inputs: vec![ManualYInput {
-                axis: ManualAxisInput::new("Y"),
-                x_index: 0,
-            }],
-            error_statistic: ErrorStatistic::StandardDeviation,
+            groups: vec![ManualDataGroupInput::new(1)],
         }
     }
 }
@@ -302,8 +344,14 @@ pub struct ParsedManualSeries {
 
 #[derive(Debug)]
 pub struct ParsedManualData {
+    pub groups: Vec<ParsedManualGroup>,
+}
+
+#[derive(Debug)]
+pub struct ParsedManualGroup {
     pub dataset: DataSet,
-    pub series: Vec<ParsedManualSeries>,
+    pub series: ParsedManualSeries,
+    pub recipe: ManualDataRecipe,
 }
 
 #[derive(Clone, Debug)]
@@ -315,115 +363,103 @@ struct ParsedAxis {
 }
 
 pub fn parse_manual_data(input: &ManualDataInput) -> Result<ParsedManualData, String> {
-    if input.x_inputs.is_empty() {
-        return Err("请至少保留一组 X 数据".to_owned());
+    if input.groups.is_empty() {
+        return Err("请至少保留一个 XY 数据组".to_owned());
     }
-    if input.y_inputs.is_empty() {
-        return Err("请至少保留一组 Y 数据".to_owned());
+    let mut ids = BTreeSet::new();
+    let mut groups = Vec::with_capacity(input.groups.len());
+    for (index, group) in input.groups.iter().enumerate() {
+        if group.group_id.trim().is_empty() || !ids.insert(group.group_id.clone()) {
+            return Err(format!("数据组 {} 的身份无效或重复", index + 1));
+        }
+        groups.push(parse_manual_group(group, index + 1)?);
     }
+    Ok(ParsedManualData { groups })
+}
 
+fn parse_manual_group(
+    input: &ManualDataGroupInput,
+    index: usize,
+) -> Result<ParsedManualGroup, String> {
     let mut used_names = BTreeSet::new();
-    let mut parsed_x = Vec::with_capacity(input.x_inputs.len());
-    for (index, axis) in input.x_inputs.iter().enumerate() {
-        parsed_x.push(parse_axis(
-            axis,
-            &format!("X{}", index + 1),
-            input.error_statistic,
-            &mut used_names,
-        )?);
+    let x = parse_axis(&input.x, "X", input.error_statistic, &mut used_names)?;
+    let y = parse_axis(&input.y, "Y", input.error_statistic, &mut used_names)?;
+    if x.mean.len() != y.mean.len() {
+        return Err(format!(
+            "数据组 {index}：{} 有 {} 个数据，{} 有 {} 个数据",
+            y.name,
+            y.mean.len(),
+            x.name,
+            x.mean.len()
+        ));
     }
-    let mut parsed_y = Vec::with_capacity(input.y_inputs.len());
-    for (index, input_y) in input.y_inputs.iter().enumerate() {
-        if input_y.x_index >= parsed_x.len() {
-            return Err(format!("Y{} 没有对应的 X 数据", index + 1));
-        }
-        let parsed = parse_axis(
-            &input_y.axis,
-            &format!("Y{}", index + 1),
-            input.error_statistic,
-            &mut used_names,
-        )?;
-        let x_len = parsed_x[input_y.x_index].mean.len();
-        if parsed.mean.len() != x_len {
-            return Err(format!(
-                "{} 有 {} 个数据，配对的 {} 有 {} 个数据",
-                parsed.name,
-                parsed.mean.len(),
-                parsed_x[input_y.x_index].name,
-                x_len
-            ));
-        }
-        parsed_y.push(parsed);
-    }
-
-    let row_count = parsed_x
-        .iter()
-        .chain(parsed_y.iter())
-        .map(|axis| axis.mean.len())
-        .max()
-        .unwrap_or(0);
+    let row_count = x.mean.len();
     let mut columns = Vec::new();
-    for axis in parsed_x.iter().chain(parsed_y.iter()) {
+    for axis in [&x, &y] {
         columns.push(NumericColumn {
             name: axis.name.clone(),
-            values: padded(&axis.mean, row_count),
+            values: axis.mean.clone(),
         });
         if let Some(error) = &axis.error {
             columns.push(NumericColumn {
                 name: error_name(&axis.name, input.error_statistic),
-                values: padded(error, row_count),
+                values: error.clone(),
             });
         }
         if axis.raw.len() > 1 {
-            for (index, values) in axis.raw.iter().enumerate() {
+            for (measurement_index, values) in axis.raw.iter().enumerate() {
                 columns.push(NumericColumn {
-                    name: format!("{} · 测量 {}", axis.name, index + 1),
-                    values: padded(values, row_count),
+                    name: format!("{} · 测量 {}", axis.name, measurement_index + 1),
+                    values: values.clone(),
                 });
             }
         }
     }
-
-    let source_name = nonempty(&input.source_name, "手动数据");
+    let source_name = nonempty(&input.source_name, &format!("手动数据 {index}"));
     let source = PathBuf::from(format!("manual-data/{source_name}.txt"));
-    let plot_id = generated_plot_id(&source, &columns);
-    let mut series: Vec<ParsedManualSeries> = input
-        .y_inputs
-        .iter()
-        .enumerate()
-        .map(|(index, y)| {
-            let x = &parsed_x[y.x_index];
-            let y = &parsed_y[index];
-            ParsedManualSeries {
-                label: y.name.clone(),
-                x_column: x.name.clone(),
-                y_column: y.name.clone(),
-                x_error_column: x
-                    .error
-                    .as_ref()
-                    .map(|_| error_name(&x.name, input.error_statistic)),
-                y_error_column: y
-                    .error
-                    .as_ref()
-                    .map(|_| error_name(&y.name, input.error_statistic)),
-            }
-        })
-        .collect();
-    for specification in &mut series {
-        if specification.x_error_column.is_some() && specification.y_error_column.is_none() {
-            let name = unique_name(
-                &format!("{} · zero error", specification.y_column),
-                &mut used_names,
-            );
-            columns.push(NumericColumn {
-                name: name.clone(),
-                values: vec![0.0; row_count],
-            });
-            specification.y_error_column = Some(name);
-        }
+    let plot_id = input.group_id.clone();
+    let mut series = ParsedManualSeries {
+        label: source_name.clone(),
+        x_column: x.name.clone(),
+        y_column: y.name.clone(),
+        x_error_column: x
+            .error
+            .as_ref()
+            .map(|_| error_name(&x.name, input.error_statistic)),
+        y_error_column: y
+            .error
+            .as_ref()
+            .map(|_| error_name(&y.name, input.error_statistic)),
+    };
+    if series.x_error_column.is_some() && series.y_error_column.is_none() {
+        let name = unique_name(
+            &format!("{} · zero error", series.y_column),
+            &mut used_names,
+        );
+        columns.push(NumericColumn {
+            name: name.clone(),
+            values: vec![0.0; row_count],
+        });
+        series.y_error_column = Some(name);
     }
-
-    Ok(ParsedManualData {
+    let recipe = ManualDataRecipe {
+        group_id: input.group_id.clone(),
+        name: source_name.clone(),
+        x: ManualMeasurementRecord {
+            name: x.name.clone(),
+            measurements: x.raw.clone(),
+        },
+        y: ManualMeasurementRecord {
+            name: y.name.clone(),
+            measurements: y.raw.clone(),
+        },
+        error_statistic: match input.error_statistic {
+            ErrorStatistic::StandardDeviation => ManualErrorStatistic::StandardDeviation,
+            ErrorStatistic::StandardError => ManualErrorStatistic::StandardError,
+        },
+        plot_style: input.plot_style,
+    };
+    Ok(ParsedManualGroup {
         dataset: DataSet {
             source,
             label: Some(source_name),
@@ -437,6 +473,7 @@ pub fn parse_manual_data(input: &ManualDataInput) -> Result<ParsedManualData, St
             alive: vec![true; row_count],
         },
         series,
+        recipe,
     })
 }
 
@@ -573,15 +610,6 @@ fn unique_name(requested: &str, used: &mut BTreeSet<String>) -> String {
     unreachable!()
 }
 
-fn padded(values: &[f64], length: usize) -> Vec<f64> {
-    values
-        .iter()
-        .copied()
-        .chain(std::iter::repeat(f64::NAN))
-        .take(length)
-        .collect()
-}
-
 fn nonempty(value: &str, fallback: &str) -> String {
     let value = value.trim();
     if value.is_empty() { fallback } else { value }.to_owned()
@@ -601,6 +629,17 @@ mod tests {
         }
     }
 
+    fn group(id: &str, name: &str, x: ManualAxisInput, y: ManualAxisInput) -> ManualDataGroupInput {
+        ManualDataGroupInput {
+            group_id: id.to_owned(),
+            source_name: name.to_owned(),
+            x,
+            y,
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }
+    }
+
     #[test]
     fn separate_columns_accept_common_paste_separators() {
         for text in ["1\t2\n3", "1,2,3", "1;2;3", "1 2 3"] {
@@ -611,29 +650,30 @@ mod tests {
     #[test]
     fn multiple_x_and_y_groups_keep_pairings_and_raw_measurements() {
         let parsed = parse_manual_data(&ManualDataInput {
-            source_name: "Trial".to_owned(),
-            x_inputs: vec![axis("Field A", &["0 1"]), axis("Field B", &["10 20 30"])],
-            y_inputs: vec![
-                ManualYInput {
-                    axis: axis("Signal A", &["2 4", "4 8"]),
-                    x_index: 0,
-                },
-                ManualYInput {
-                    axis: axis("Signal B", &["5 6 7"]),
-                    x_index: 1,
-                },
+            groups: vec![
+                group(
+                    "manual-a",
+                    "Trial A",
+                    axis("Field A", &["0 1"]),
+                    axis("Signal A", &["2 4", "4 8"]),
+                ),
+                group(
+                    "manual-b",
+                    "Trial B",
+                    axis("Field B", &["10 20 30"]),
+                    axis("Signal B", &["5 6 7"]),
+                ),
             ],
-            error_statistic: ErrorStatistic::StandardDeviation,
         })
         .unwrap();
-        assert_eq!(parsed.series.len(), 2);
-        assert_eq!(parsed.series[0].x_column, "Field A");
-        assert_eq!(parsed.series[1].x_column, "Field B");
+        assert_eq!(parsed.groups.len(), 2);
+        assert_eq!(parsed.groups[0].series.x_column, "Field A");
+        assert_eq!(parsed.groups[1].series.x_column, "Field B");
         assert_eq!(
-            parsed.series[0].y_error_column.as_deref(),
+            parsed.groups[0].series.y_error_column.as_deref(),
             Some("Signal A · SD")
         );
-        let mean = parsed
+        let mean = parsed.groups[0]
             .dataset
             .columns
             .iter()
@@ -641,7 +681,7 @@ mod tests {
             .unwrap();
         assert_eq!(&mean.values[..2], &[3.0, 6.0]);
         assert!(
-            parsed
+            parsed.groups[0]
                 .dataset
                 .columns
                 .iter()
@@ -652,17 +692,22 @@ mod tests {
     #[test]
     fn repeated_x_and_y_generate_both_error_columns() {
         let parsed = parse_manual_data(&ManualDataInput {
-            source_name: "Errors".to_owned(),
-            x_inputs: vec![axis("X", &["1 2", "3 4"])],
-            y_inputs: vec![ManualYInput {
-                axis: axis("Y", &["5 7", "9 11"]),
-                x_index: 0,
-            }],
-            error_statistic: ErrorStatistic::StandardDeviation,
+            groups: vec![group(
+                "manual-errors",
+                "Errors",
+                axis("X", &["1 2", "3 4"]),
+                axis("Y", &["5 7", "9 11"]),
+            )],
         })
         .unwrap();
-        assert_eq!(parsed.series[0].x_error_column.as_deref(), Some("X · SD"));
-        assert_eq!(parsed.series[0].y_error_column.as_deref(), Some("Y · SD"));
+        assert_eq!(
+            parsed.groups[0].series.x_error_column.as_deref(),
+            Some("X · SD")
+        );
+        assert_eq!(
+            parsed.groups[0].series.y_error_column.as_deref(),
+            Some("Y · SD")
+        );
     }
 
     #[test]
@@ -685,13 +730,12 @@ mod tests {
     #[test]
     fn mismatched_pair_lengths_name_the_affected_groups() {
         let error = parse_manual_data(&ManualDataInput {
-            source_name: String::new(),
-            x_inputs: vec![axis("Time", &["1 2 3"])],
-            y_inputs: vec![ManualYInput {
-                axis: axis("Signal", &["4 5"]),
-                x_index: 0,
-            }],
-            error_statistic: ErrorStatistic::StandardDeviation,
+            groups: vec![group(
+                "manual-mismatch",
+                "",
+                axis("Time", &["1 2 3"]),
+                axis("Signal", &["4 5"]),
+            )],
         })
         .unwrap_err();
         assert!(error.contains("Signal"));

@@ -76,6 +76,9 @@ fn source_and_fit_identity_survive_round_trip() {
             payload: embedded(),
             fit: None,
             origin_path: None,
+            origin: DataSourceOrigin::Imported,
+            manual_recipe: None,
+            managed_file: None,
         },
         DataSourceRecord {
             id: "fit-1".to_owned(),
@@ -90,6 +93,9 @@ fn source_and_fit_identity_survive_round_trip() {
                 display_equation: Some("y = a × x + b".to_owned()),
             }),
             origin_path: None,
+            origin: DataSourceOrigin::Imported,
+            manual_recipe: None,
+            managed_file: None,
         },
     ]);
     project.validate().unwrap();
@@ -185,7 +191,7 @@ fn legacy_schema_zero_migrates_with_ranges_and_audit_record() {
     assert_eq!(migrated.figure.axes[0].x.minimum, -4.0);
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_0_to_6"
+        "migrate_schema_0_to_7"
     );
 }
 
@@ -201,7 +207,7 @@ fn schema_one_migrates_artist_visibility_to_visible() {
     assert!(migrated.figure.artists.iter().all(|artist| artist.visible));
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_1_to_6"
+        "migrate_schema_1_to_7"
     );
 }
 
@@ -225,7 +231,7 @@ fn schema_two_migrates_axis_appearance_defaults() {
     );
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_2_to_6"
+        "migrate_schema_2_to_7"
     );
 }
 
@@ -247,7 +253,7 @@ fn old_legend_without_placement_keeps_its_manual_position() {
     assert_eq!(decoded.schema_version, PROJECT_SCHEMA_VERSION);
     assert_eq!(
         decoded.provenance.last().unwrap().operation,
-        "migrate_schema_3_to_6"
+        "migrate_schema_3_to_7"
     );
     let record = decoded
         .figure
@@ -284,7 +290,7 @@ fn schema_four_without_source_origin_migrates_without_losing_data() {
     );
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_4_to_6"
+        "migrate_schema_4_to_7"
     );
 }
 
@@ -308,7 +314,33 @@ fn schema_five_annotations_migrate_with_no_connectors() {
     )));
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_5_to_6"
+        "migrate_schema_5_to_7"
+    );
+}
+
+#[test]
+fn schema_six_distinguishes_legacy_manual_sources_without_inventing_a_recipe() {
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    value["schema_version"] = Value::from(6);
+    let source = value["data_sources"][0].as_object_mut().unwrap();
+    source.insert(
+        "origin_path".to_owned(),
+        Value::String("manual-data/手动数据 1.txt".to_owned()),
+    );
+    source.remove("origin");
+    source.remove("manual_recipe");
+    source.remove("managed_file");
+
+    let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+    assert_eq!(
+        migrated.data_sources[0].origin,
+        DataSourceOrigin::LegacyManual
+    );
+    assert!(migrated.data_sources[0].manual_recipe.is_none());
+    assert_eq!(
+        migrated.provenance.last().unwrap().operation,
+        "migrate_schema_6_to_7"
     );
 }
 
