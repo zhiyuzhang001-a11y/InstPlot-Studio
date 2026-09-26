@@ -320,11 +320,9 @@ fn reusable_shell_svg_event_reaches_the_atomic_export_transaction() {
     let (session, _) = StudioSession::from_project(document.project());
     let workspace = WorkspaceState::new("Untitled");
     let history = EditHistory::new(&document, true);
-    let path = std::env::temp_dir().join(format!(
-        "instplot-shell-svg-{}-{}.svg",
-        std::process::id(),
-        std::thread::current().name().unwrap_or("test")
-    ));
+    // Rust test names contain `::`, which is not a valid Windows filename.
+    // The process id is sufficient because this test writes only once per test binary.
+    let path = std::env::temp_dir().join(format!("instplot-shell-svg-{}.svg", std::process::id()));
     let outcome = ApplicationController::execute(
         AppTransactionState {
             document: &document,

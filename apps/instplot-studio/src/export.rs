@@ -220,11 +220,10 @@ mod tests {
 
     #[test]
     fn failed_export_does_not_replace_an_existing_file() {
-        let path = std::env::temp_dir().join(format!(
-            "instplot-export-atomic-{}-{}.png",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        // Rust test names contain `::`, which Windows rejects in filenames.
+        // This test writes only once per test process, so the process id is unique enough.
+        let path =
+            std::env::temp_dir().join(format!("instplot-export-atomic-{}.png", std::process::id()));
         std::fs::write(&path, b"existing-good-output").unwrap();
         let mut document = FigureDocument::fixed();
         document.set_figure_size_mm(500.0, 500.0).unwrap();
