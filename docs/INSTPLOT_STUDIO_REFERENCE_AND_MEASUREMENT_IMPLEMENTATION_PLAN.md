@@ -1,6 +1,6 @@
 # InstPlot Studio 双轴 Spine、参考线与测量箭头实施方案
 
-> 状态：`IMPLEMENTED / INDEPENDENT QA PASS / DELIVERY IN PROGRESS`
+> 状态：`COMPLETED / INDEPENDENT QA PASS`
 > 建立日期：2026-09-27
 > 产品与验收基准：[`INSTPLOT_STUDIO_REFERENCE_AND_MEASUREMENT_PLAN.md`](INSTPLOT_STUDIO_REFERENCE_AND_MEASUREMENT_PLAN.md)
 > 双轴基准：[`INSTPLOT_STUDIO_DUAL_AXES_DESIGN.md`](INSTPLOT_STUDIO_DUAL_AXES_DESIGN.md)、[`INSTPLOT_STUDIO_DUAL_AXES_IMPLEMENTATION_PLAN.md`](INSTPLOT_STUDIO_DUAL_AXES_IMPLEMENTATION_PLAN.md)
@@ -392,7 +392,7 @@ git diff --check
 
 ### Phase 9：用户确认后的安装与版本控制
 
-状态：`IN PROGRESS`
+状态：`DONE`
 
 只有用户明确要求替换 Spotlight 后执行：
 
@@ -460,4 +460,4 @@ python3 scripts/install_studio_macos.py
 - [x] Phase 6：文字连接线与独立测量箭头；
 - [x] Phase 7：跨功能回归与导出验收；
 - [x] Phase 8：独立 agent 真实窗口验收；
-- [ ] Phase 9：Spotlight 已安装验证，GitHub 上传待 Phase 8 通过后完成。
+- [x] Phase 9：Spotlight 唯一安装验证及 GitHub 源码上传完成；PR #2 已建立，未合并、未发布。

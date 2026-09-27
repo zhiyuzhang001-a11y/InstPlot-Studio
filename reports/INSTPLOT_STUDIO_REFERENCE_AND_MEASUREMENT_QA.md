@@ -1,6 +1,6 @@
 # InstPlot Studio 双轴轴线、参考线与测量箭头 QA 记录
 
-> 状态：`PASS / DELIVERY IN PROGRESS`
+> 状态：`PASS / COMPLETED`
 > 日期：2026-09-27
 > 分支：`codex/dual-axes`
 > 起始提交：`4d45bab76787b44d9a66a775bb5fd54fb73d380a`
@@ -55,4 +55,7 @@ git diff --check
 
 ## GitHub 范围
 
-Phase 8 通过后上传当前源码分支并建立 PR。按用户要求，本轮不合并、不创建 release、不打 tag、不执行 Windows 构建。
+- 提交：`6eec91d`（`feat(studio): add scientific guides and dual-axis spine styling`）。
+- 分支：`codex/dual-axes` 已推送至 `origin`。
+- Pull Request：[#2 Add scientific guides and dual-axis spine styling](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/pull/2)。
+- 按用户要求，本轮未合并、未创建 release、未打 tag、未执行 Windows 构建。
