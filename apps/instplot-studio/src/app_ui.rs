@@ -102,6 +102,10 @@ impl eframe::App for StudioApp {
         }) {
             self.undo();
         }
+        if context.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.drawing_tool = DrawingTool::Select;
+            self.tool_draft = None;
+        }
 
         egui::Panel::top("product_header")
             .frame(
@@ -224,6 +228,119 @@ impl eframe::App for StudioApp {
                     {
                         self.add_text_annotation();
                     }
+                    ui.menu_button(
+                        if matches!(self.drawing_tool, DrawingTool::Reference { .. }) {
+                            "参考线 ●"
+                        } else {
+                            "参考线"
+                        },
+                        |ui| {
+                            let mode = self.document.axis_mode();
+                            let mut choose =
+                                |ui: &mut egui::Ui,
+                                 label: &str,
+                                 orientation: ReferenceOrientation,
+                                 axes: AxisBinding| {
+                                    if ui.button(label).clicked() {
+                                        let candidate =
+                                            DrawingTool::Reference { orientation, axes };
+                                        self.drawing_tool = if self.drawing_tool == candidate {
+                                            DrawingTool::Select
+                                        } else {
+                                            candidate
+                                        };
+                                        self.tool_draft = None;
+                                        ui.close();
+                                    }
+                                };
+                            choose(
+                                ui,
+                                "竖直 · X1",
+                                ReferenceOrientation::Vertical,
+                                AxisBinding::PRIMARY,
+                            );
+                            if mode == AxisMode::DualX {
+                                choose(
+                                    ui,
+                                    "竖直 · X2",
+                                    ReferenceOrientation::Vertical,
+                                    AxisBinding {
+                                        x: XAxisSlot::X2,
+                                        y: YAxisSlot::Y1,
+                                    },
+                                );
+                            }
+                            choose(
+                                ui,
+                                "水平 · Y1",
+                                ReferenceOrientation::Horizontal,
+                                AxisBinding::PRIMARY,
+                            );
+                            if mode == AxisMode::DualY {
+                                choose(
+                                    ui,
+                                    "水平 · Y2",
+                                    ReferenceOrientation::Horizontal,
+                                    AxisBinding {
+                                        x: XAxisSlot::X1,
+                                        y: YAxisSlot::Y2,
+                                    },
+                                );
+                            }
+                        },
+                    );
+                    ui.menu_button(
+                        if matches!(self.drawing_tool, DrawingTool::Measurement { .. }) {
+                            "测量箭头 ●"
+                        } else {
+                            "测量箭头"
+                        },
+                        |ui| {
+                            let mut bindings = vec![("主轴 · X1 / Y1", AxisBinding::PRIMARY)];
+                            match self.document.axis_mode() {
+                                AxisMode::DualX => bindings.push((
+                                    "副轴 · X2 / Y1",
+                                    AxisBinding {
+                                        x: XAxisSlot::X2,
+                                        y: YAxisSlot::Y1,
+                                    },
+                                )),
+                                AxisMode::DualY => bindings.push((
+                                    "副轴 · X1 / Y2",
+                                    AxisBinding {
+                                        x: XAxisSlot::X1,
+                                        y: YAxisSlot::Y2,
+                                    },
+                                )),
+                                AxisMode::Single => {}
+                            }
+                            for (binding_label, binding) in bindings {
+                                ui.menu_button(binding_label, |ui| {
+                                    for (label, constraint, start_arrow, end_arrow) in [
+                                        ("普通指示", MeasurementConstraint::Free, false, true),
+                                        ("水平双向", MeasurementConstraint::Horizontal, true, true),
+                                        ("垂直双向", MeasurementConstraint::Vertical, true, true),
+                                    ] {
+                                        if ui.button(label).clicked() {
+                                            let candidate = DrawingTool::Measurement {
+                                                axes: binding,
+                                                constraint,
+                                                start_arrow,
+                                                end_arrow,
+                                            };
+                                            self.drawing_tool = if self.drawing_tool == candidate {
+                                                DrawingTool::Select
+                                            } else {
+                                                candidate
+                                            };
+                                            self.tool_draft = None;
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                    );
                     if features.manual_data
                         && ui.button(self.language.text(Text::EnterData)).clicked()
                     {
@@ -384,6 +501,7 @@ impl eframe::App for StudioApp {
                     self.fit_canvas(viewport);
                 }
                 let old_zoom = self.canvas_zoom;
+                let drawing_tool = self.drawing_tool;
                 let output = egui::ScrollArea::both()
                     .id_salt("figure-canvas-scroll")
                     .scroll_offset(self.canvas_scroll)
@@ -436,6 +554,28 @@ impl eframe::App for StudioApp {
                             old_zoom,
                             context.pixels_per_point(),
                         );
+                        if let Some(draft) = self.tool_draft
+                            && let Some((start, end)) = data_point_to_local(
+                                &self.document,
+                                self.resolved.layout.result.axes,
+                                draft.axes,
+                                draft.start,
+                            )
+                            .zip(data_point_to_local(
+                                &self.document,
+                                self.resolved.layout.result.axes,
+                                draft.axes,
+                                draft.end,
+                            ))
+                        {
+                            let start =
+                                origin + egui::vec2(start.0 as f32, start.1 as f32) * old_zoom;
+                            let end = origin + egui::vec2(end.0 as f32, end.1 as f32) * old_zoom;
+                            let stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+                            ui.painter().line_segment([start, end], stroke);
+                            ui.painter().circle_filled(start, 3.0, egui::Color32::BLACK);
+                            ui.painter().circle_filled(end, 3.0, egui::Color32::BLACK);
+                        }
 
                         if let Some(selected) = self.selected_canvas_node.as_deref() {
                             let dragging_legend = self
@@ -568,6 +708,28 @@ impl eframe::App for StudioApp {
                                     }
                                 }
                             }
+                            if self.active_artist_drag.as_ref().is_some_and(|drag| {
+                                drag.id == selected && drag.role == SelectableRole::ReferenceLine
+                            }) && let Some(record) = self.document.artist_record(selected)
+                                && let ArtistProperties::ReferenceLine { value, .. } =
+                                    record.properties
+                                && let Some(bounds) = selected_hit_bounds_for_role(
+                                    &self.resolved,
+                                    selected,
+                                    Some(SelectableRole::ReferenceLine),
+                                )
+                            {
+                                let anchor = origin
+                                    + egui::vec2(bounds.0 as f32, bounds.1 as f32) * old_zoom
+                                    + egui::vec2(7.0, -7.0);
+                                ui.painter().text(
+                                    anchor,
+                                    egui::Align2::LEFT_BOTTOM,
+                                    format!("{value:.6}"),
+                                    egui::FontId::monospace(12.0),
+                                    egui::Color32::from_rgb(56, 145, 225),
+                                );
+                            }
                         }
 
                         let quick_drag =
@@ -654,14 +816,23 @@ impl eframe::App for StudioApp {
                         if active_handle.is_none()
                             && matches!(
                                 hovered.as_ref().map(|hit| hit.role),
-                                Some(SelectableRole::Legend | SelectableRole::Annotation)
+                                Some(
+                                    SelectableRole::Legend
+                                        | SelectableRole::Annotation
+                                        | SelectableRole::ReferenceLine
+                                        | SelectableRole::MeasurementArrow
+                                        | SelectableRole::MeasurementArrowStart
+                                        | SelectableRole::MeasurementArrowEnd
+                                        | SelectableRole::MeasurementArrowLabel,
+                                )
                             )
                         {
                             ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::Grab);
                         }
-                        if response.drag_started()
-                            || (response.drag_stopped() && self.active_artist_drag.is_none())
-                            || (quick_drag.is_some() && self.active_artist_drag.is_none())
+                        if drawing_tool == DrawingTool::Select
+                            && (response.drag_started()
+                                || (response.drag_stopped() && self.active_artist_drag.is_none())
+                                || (quick_drag.is_some() && self.active_artist_drag.is_none()))
                         {
                             let press_origin = quick_drag.map(|(start, _)| start).or_else(|| {
                                 context.input(|input| {
@@ -717,6 +888,11 @@ impl eframe::App for StudioApp {
                                     SelectableRole::Legend
                                         | SelectableRole::Annotation
                                         | SelectableRole::AnnotationConnector
+                                        | SelectableRole::ReferenceLine
+                                        | SelectableRole::MeasurementArrow
+                                        | SelectableRole::MeasurementArrowStart
+                                        | SelectableRole::MeasurementArrowEnd
+                                        | SelectableRole::MeasurementArrowLabel
                                 )
                             }) && let Some(bounds) = selected_hit_bounds_for_role(
                                 &self.resolved,
@@ -744,6 +920,7 @@ impl eframe::App for StudioApp {
                                     started: true,
                                     stopped: response.drag_stopped() || quick_drag.is_some(),
                                     data_index: hit.data_index,
+                                    shift: context.input(|input| input.modifiers.shift),
                                 });
                             }
                         } else if (response.dragged() || response.drag_stopped())
@@ -751,13 +928,7 @@ impl eframe::App for StudioApp {
                         {
                             drag_event = Some(CanvasDragEvent {
                                 id: drag.id.clone(),
-                                role: if drag.legend.is_some() {
-                                    SelectableRole::Legend
-                                } else if drag.connector_index.is_some() {
-                                    SelectableRole::AnnotationConnector
-                                } else {
-                                    SelectableRole::Annotation
-                                },
+                                role: drag.role,
                                 bounds: drag.bounds,
                                 delta: response.drag_delta(),
                                 pointer: pointer.map(|point| {
@@ -771,6 +942,7 @@ impl eframe::App for StudioApp {
                                 started: false,
                                 stopped: response.drag_stopped(),
                                 data_index: drag.connector_index,
+                                shift: context.input(|input| input.modifiers.shift),
                             });
                         }
                         let fit_requested = response.double_clicked() && hovered.is_none();
@@ -813,6 +985,43 @@ impl eframe::App for StudioApp {
                                 old_zoom,
                             )
                         });
+                        let press_screen = quick_drag
+                            .map(|(start, _)| start)
+                            .or_else(|| context.input(|input| input.pointer.press_origin()));
+                        let shift = context.input(|input| input.modifiers.shift);
+                        let tool_pointer = if shift {
+                            press_screen
+                                .zip(pointer)
+                                .map(|(start, end)| snap_pointer_to_special_angle(start, end))
+                                .or(pointer)
+                        } else {
+                            pointer
+                        };
+                        let tool_event =
+                            (drawing_tool != DrawingTool::Select).then(|| CanvasToolEvent {
+                                clicked: response.clicked(),
+                                started: response.drag_started() || quick_drag.is_some(),
+                                stopped: response.drag_stopped() || quick_drag.is_some(),
+                                press: press_screen.and_then(|point| {
+                                    active_data_coordinates_at(
+                                        &self.resolved,
+                                        &self.document,
+                                        point,
+                                        origin,
+                                        old_zoom,
+                                    )
+                                }),
+                                current: tool_pointer.and_then(|point| {
+                                    active_data_coordinates_at(
+                                        &self.resolved,
+                                        &self.document,
+                                        point,
+                                        origin,
+                                        old_zoom,
+                                    )
+                                }),
+                                shift,
+                            });
                         (
                             clicked,
                             zoom_anchor,
@@ -824,6 +1033,7 @@ impl eframe::App for StudioApp {
                             pan,
                             next_trackpad_scroll_active,
                             data_coordinates,
+                            tool_event,
                         )
                     });
                 self.canvas_scroll = output.state.offset;
@@ -833,10 +1043,17 @@ impl eframe::App for StudioApp {
                     self.canvas_scroll =
                         (self.canvas_scroll - output.inner.7).max(egui::Vec2::ZERO);
                 }
-                if let Some(event) = output.inner.4 {
+                if let Some(tool_event) = output.inner.10 {
+                    self.handle_drawing_tool_event(tool_event);
+                }
+                if drawing_tool == DrawingTool::Select
+                    && let Some(event) = output.inner.4
+                {
                     self.handle_artist_drag(event, old_zoom);
                 }
-                if let Some(clicked) = output.inner.0 {
+                if drawing_tool == DrawingTool::Select
+                    && let Some(clicked) = output.inner.0
+                {
                     self.selection_candidates = output.inner.5;
                     self.selected_canvas_node = clicked.as_ref().map(|hit| hit.project_id.clone());
                     self.selected_canvas_role = clicked.as_ref().map(|hit| hit.role);

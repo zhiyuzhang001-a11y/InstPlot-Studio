@@ -114,7 +114,10 @@ pub fn compute_axis_data_bounds(
                 }
             }
             ArtistProperties::ReferenceLine {
-                orientation, value, ..
+                orientation,
+                value,
+                include_in_autoscale: true,
+                ..
             } if policy.include_reference_lines
                 && matches!(
                     (identity, orientation),

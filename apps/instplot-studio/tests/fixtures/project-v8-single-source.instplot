@@ -1,0 +1,393 @@
+{
+  "schema_version": 8,
+  "producer_version": "0.1.0",
+  "figure": {
+    "id": "node-1",
+    "width_mm": 85.0,
+    "height_mm": 65.0,
+    "axes": [
+      {
+        "id": "node-2",
+        "x": {
+          "id": "node-3",
+          "label_id": "label-x",
+          "minimum": 0.9,
+          "maximum": 3.1,
+          "scale": "linear",
+          "locator": {
+            "kind": "auto",
+            "target_count": 6
+          },
+          "formatter": {
+            "kind": "auto"
+          },
+          "autoscale": true,
+          "appearance": {
+            "near_spine": true,
+            "far_spine": true,
+            "near_ticks": true,
+            "far_ticks": true,
+            "near_tick_labels": true,
+            "far_tick_labels": false,
+            "major_ticks": true,
+            "minor_ticks": true,
+            "tick_direction": "in",
+            "grid_major": false,
+            "grid_minor": false,
+            "tick_label_pad_pt": 4.0,
+            "label_edge_pad_pt": 6.0,
+            "label_tick_pad_pt": 4.0
+          }
+        },
+        "y": {
+          "id": "node-4",
+          "label_id": "label-y",
+          "minimum": 1.7,
+          "maximum": 8.3,
+          "scale": "linear",
+          "locator": {
+            "kind": "auto",
+            "target_count": 6
+          },
+          "formatter": {
+            "kind": "auto"
+          },
+          "autoscale": true,
+          "appearance": {
+            "near_spine": true,
+            "far_spine": true,
+            "near_ticks": true,
+            "far_ticks": true,
+            "near_tick_labels": true,
+            "far_tick_labels": false,
+            "major_ticks": true,
+            "minor_ticks": true,
+            "tick_direction": "in",
+            "grid_major": false,
+            "grid_minor": false,
+            "tick_label_pad_pt": 4.0,
+            "label_edge_pad_pt": 6.0,
+            "label_tick_pad_pt": 4.0
+          }
+        },
+        "mode": "single",
+        "series_groups": [
+          {
+            "id": "series-group-handoff-instplot-8610dbb120fda1b0",
+            "artist_ids": [
+              "handoff-artist-instplot-8610dbb120fda1b0"
+            ],
+            "axes": {
+              "x": "x1",
+              "y": "y1"
+            }
+          }
+        ],
+        "artist_ids": [
+          "handoff-artist-instplot-8610dbb120fda1b0",
+          "handoff-legend"
+        ]
+      }
+    ],
+    "artists": [
+      {
+        "id": "handoff-artist-instplot-8610dbb120fda1b0",
+        "kind": "scatter",
+        "role": "data",
+        "visible": true,
+        "properties": {
+          "kind": "scatter",
+          "binding": {
+            "data_source_id": "instplot-8610dbb120fda1b0",
+            "x_column": "field",
+            "y_column": "response"
+          },
+          "marker": {
+            "color_id": "blue",
+            "shape": "circle",
+            "size_pt": 4.0,
+            "filled": true,
+            "interval": 1
+          }
+        }
+      },
+      {
+        "id": "handoff-legend",
+        "kind": "legend",
+        "role": "legend",
+        "visible": true,
+        "properties": {
+          "kind": "legend",
+          "entries": [
+            {
+              "artist_id": "handoff-artist-instplot-8610dbb120fda1b0",
+              "label_id": "handoff-label-instplot-8610dbb120fda1b0",
+              "visible": true
+            }
+          ],
+          "x_pt": 110.0,
+          "y_pt": 12.0,
+          "placement": "auto",
+          "grid": "auto",
+          "position_custom": false
+        }
+      }
+    ]
+  },
+  "data_sources": [
+    {
+      "id": "instplot-8610dbb120fda1b0",
+      "label": "smoke.csv",
+      "kind": "source",
+      "payload": {
+        "storage": "embedded",
+        "columns": [
+          {
+            "name": "field",
+            "values": [
+              1.0,
+              2.0,
+              3.0
+            ]
+          },
+          {
+            "name": "response",
+            "values": [
+              2.0,
+              4.0,
+              8.0
+            ]
+          }
+        ],
+        "row_count": 3,
+        "alive": [
+          true,
+          true,
+          true
+        ],
+        "sha256": "acf6e774265a2ca72233ec7fd9fe325bc4b7d79f61241e449a3db54c9608c6b2"
+      },
+      "fit": null,
+      "origin_path": "/Users/zhiyu/Downloads/SciPlot/apps/instplot-studio/tests/fixtures/smoke.csv",
+      "origin": "imported"
+    }
+  ],
+  "semantic_registry": [
+    {
+      "id": "label-x",
+      "nodes": [
+        {
+          "kind": "text",
+          "value": "field"
+        }
+      ]
+    },
+    {
+      "id": "label-temperature",
+      "nodes": [
+        {
+          "kind": "variable",
+          "value": "T"
+        },
+        {
+          "kind": "text",
+          "value": " "
+        },
+        {
+          "kind": "operator",
+          "value": "≤"
+        },
+        {
+          "kind": "text",
+          "value": " "
+        },
+        {
+          "kind": "number",
+          "value": "300"
+        },
+        {
+          "kind": "text",
+          "value": " "
+        },
+        {
+          "kind": "unit",
+          "value": "K"
+        }
+      ]
+    },
+    {
+      "id": "label-experiment",
+      "nodes": [
+        {
+          "kind": "text",
+          "value": "Experiment"
+        }
+      ]
+    },
+    {
+      "id": "label-fit",
+      "nodes": [
+        {
+          "kind": "text",
+          "value": "Fit"
+        }
+      ]
+    },
+    {
+      "id": "label-y",
+      "nodes": [
+        {
+          "kind": "text",
+          "value": "response"
+        }
+      ]
+    },
+    {
+      "id": "handoff-label-instplot-8610dbb120fda1b0",
+      "nodes": [
+        {
+          "kind": "text",
+          "value": "smoke.csv"
+        }
+      ]
+    }
+  ],
+  "palette": {
+    "id": "publication-default-v1",
+    "colors": [
+      {
+        "id": "blue",
+        "rgba": [
+          68,
+          119,
+          170,
+          255
+        ]
+      },
+      {
+        "id": "gray",
+        "rgba": [
+          102,
+          102,
+          102,
+          255
+        ]
+      },
+      {
+        "id": "object-black",
+        "rgba": [
+          0,
+          0,
+          0,
+          255
+        ]
+      },
+      {
+        "id": "object-red",
+        "rgba": [
+          238,
+          102,
+          119,
+          255
+        ]
+      },
+      {
+        "id": "object-green",
+        "rgba": [
+          34,
+          136,
+          51,
+          255
+        ]
+      },
+      {
+        "id": "object-yellow",
+        "rgba": [
+          204,
+          187,
+          68,
+          255
+        ]
+      },
+      {
+        "id": "object-cyan",
+        "rgba": [
+          102,
+          204,
+          238,
+          255
+        ]
+      },
+      {
+        "id": "object-purple",
+        "rgba": [
+          170,
+          51,
+          119,
+          255
+        ]
+      },
+      {
+        "id": "object-light-gray",
+        "rgba": [
+          187,
+          187,
+          187,
+          255
+        ]
+      }
+    ]
+  },
+  "typography": {
+    "id": "instplot-publication-v1",
+    "family": "TeX Gyre Heros",
+    "font_version": "2.501",
+    "faces": [
+      {
+        "style": "regular",
+        "postscript_name": "TeXGyreHeros-Regular",
+        "sha256": "6ae1a09d5a940367b7aaaa91ee8bd8a2c333bfe193e7096e23f931357d62081f"
+      },
+      {
+        "style": "italic",
+        "postscript_name": "TeXGyreHeros-Italic",
+        "sha256": "6473df7fa107b3fb4be38973710afe22b0640c2ac076d5337cf126bed9aa108c"
+      },
+      {
+        "style": "bold",
+        "postscript_name": "TeXGyreHeros-Bold",
+        "sha256": "b170162835f4efc288886dd4231406dc47e19b614cf4416836635599d44a7d60"
+      },
+      {
+        "style": "bold_italic",
+        "postscript_name": "TeXGyreHeros-BoldItalic",
+        "sha256": "166fc6d068d9c9974281555cb3d730365537a9b676ab269bb5163f5a75496505"
+      }
+    ],
+    "subscript_scale": 0.72,
+    "superscript_scale": 0.72
+  },
+  "overrides": [],
+  "export_preferences": {
+    "vector_format": "pdf",
+    "raster_dpi": [
+      300,
+      600,
+      1200
+    ],
+    "selected_raster_dpi": 300,
+    "transparent_background": false
+  },
+  "provenance": [
+    {
+      "id": "provenance-lite-handoff",
+      "operation": "import_lite_datasets_embedded",
+      "input_ids": [
+        "instplot-8610dbb120fda1b0"
+      ],
+      "parameters": {
+        "dataset_count": 1
+      }
+    }
+  ]
+}

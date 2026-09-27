@@ -1,6 +1,7 @@
 use crate::{
     ArtistRecord, AxisBinding, AxisDimension, AxisIdentity, AxisMode, AxisRanges, AxisRecord,
-    DocumentLayout, ExportPreferences, FigureDocument, LabelNode, MoveDirection, ProjectDocument,
+    DocumentLayout, ExportPreferences, FigureDocument, LabelNode, MeasurementArrowSpec,
+    MeasurementConstraint, MoveDirection, ProjectDocument, ReferenceOrientation,
     SeriesCreationStyle,
 };
 
@@ -22,8 +23,30 @@ pub enum EditGroup {
 
 pub enum EditCommand {
     SetAxisRanges(AxisRanges),
+    RefreshAutoscale,
     AddAnnotation {
         nodes: Vec<LabelNode>,
+    },
+    AddReferenceLine {
+        orientation: ReferenceOrientation,
+        value: f64,
+        axes: AxisBinding,
+    },
+    AddMeasurementArrow {
+        start: (f64, f64),
+        end: (f64, f64),
+        axes: AxisBinding,
+        constraint: MeasurementConstraint,
+        start_arrow: bool,
+        end_arrow: bool,
+        label_nodes: Option<Vec<LabelNode>>,
+    },
+    DeleteDrawingObject {
+        artist_id: String,
+    },
+    SetMeasurementArrowLabel {
+        artist_id: String,
+        nodes: Option<Vec<LabelNode>>,
     },
     CreateSeries {
         data_source_id: String,
@@ -121,7 +144,12 @@ impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
             Self::SetAxisRanges(_) => "Change axes ranges",
+            Self::RefreshAutoscale => "Refresh automatic ranges",
             Self::AddAnnotation { .. } => "Add text annotation",
+            Self::AddReferenceLine { .. } => "Add reference line",
+            Self::AddMeasurementArrow { .. } => "Add measurement arrow",
+            Self::DeleteDrawingObject { .. } => "Delete drawing object",
+            Self::SetMeasurementArrowLabel { .. } => "Change measurement label",
             Self::CreateSeries { .. } => "Create series",
             Self::DuplicateSeries { .. } => "Duplicate series",
             Self::DeleteSeries { .. } => "Delete series",
@@ -156,7 +184,38 @@ impl EditCommand {
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }
+            Self::RefreshAutoscale => document.refresh_autoscale(),
             Self::AddAnnotation { nodes } => document.add_annotation(nodes).map(|_| ()),
+            Self::AddReferenceLine {
+                orientation,
+                value,
+                axes,
+            } => document
+                .add_reference_line(orientation, value, axes)
+                .map(|_| ()),
+            Self::AddMeasurementArrow {
+                start,
+                end,
+                axes,
+                constraint,
+                start_arrow,
+                end_arrow,
+                label_nodes,
+            } => document
+                .add_measurement_arrow(MeasurementArrowSpec {
+                    start,
+                    end,
+                    axes,
+                    constraint,
+                    start_arrow,
+                    end_arrow,
+                    label_nodes,
+                })
+                .map(|_| ()),
+            Self::DeleteDrawingObject { artist_id } => document.delete_drawing_object(&artist_id),
+            Self::SetMeasurementArrowLabel { artist_id, nodes } => {
+                document.set_measurement_arrow_label(&artist_id, nodes)
+            }
             Self::CreateSeries {
                 data_source_id,
                 x_column,
@@ -825,5 +884,41 @@ mod tests {
         assert_eq!(document.project(), &original);
         history.redo(&mut document).unwrap();
         assert_eq!(document.palette_id(), "tol-burd-v1");
+    }
+
+    #[test]
+    fn scientific_guide_creation_and_deletion_are_single_undo_steps() {
+        let mut document = FigureDocument::fixed();
+        let original = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::AddReferenceLine {
+                    orientation: ReferenceOrientation::Vertical,
+                    value: 0.5,
+                    axes: AxisBinding::PRIMARY,
+                },
+                None,
+            )
+            .unwrap();
+        let reference_id = document.project().figure.artists.last().unwrap().id.clone();
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &original);
+        history.redo(&mut document).unwrap();
+        assert!(document.artist_record(&reference_id).is_some());
+
+        history
+            .execute(
+                &mut document,
+                EditCommand::DeleteDrawingObject {
+                    artist_id: reference_id.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record(&reference_id).is_none());
+        history.undo(&mut document).unwrap();
+        assert!(document.artist_record(&reference_id).is_some());
     }
 }

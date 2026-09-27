@@ -608,7 +608,7 @@ fn project_id(resolved: &ResolvedFigure, node: instplot_render::NodeId) -> Optio
     resolved.layout.project_ids.get(&node).cloned()
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct VisualSeriesEncoding {
     id: String,
     color: [u8; 4],
@@ -670,8 +670,10 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
                     |group| group.id.clone(),
                 )
             }
-            ArtistProperties::ReferenceLine { .. } => format!("reference:{}", artist.id),
-            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
+            ArtistProperties::ReferenceLine { .. }
+            | ArtistProperties::MeasurementArrow { .. }
+            | ArtistProperties::Annotation { .. }
+            | ArtistProperties::Legend { .. } => continue,
         };
         let rank = legend_ranks.get(&artist.id).copied().unwrap_or(usize::MAX);
         let builder = builders.entry(key).or_insert_with(|| VisualSeriesBuilder {
@@ -687,8 +689,7 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
             builder.representative_rank = rank;
         }
         match &artist.properties {
-            ArtistProperties::Line { stroke, .. }
-            | ArtistProperties::ReferenceLine { stroke, .. } => {
+            ArtistProperties::Line { stroke, .. } => {
                 builder
                     .line_signatures
                     .insert(format!("{:?}", stroke.dash_pt));
@@ -698,8 +699,10 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
                     .marker_signatures
                     .insert(format!("{:?}:{}", marker.shape, marker.filled));
             }
-            ArtistProperties::ErrorBar { .. }
+            ArtistProperties::ReferenceLine { .. }
+            | ArtistProperties::ErrorBar { .. }
             | ArtistProperties::Annotation { .. }
+            | ArtistProperties::MeasurementArrow { .. }
             | ArtistProperties::Legend { .. } => {}
         }
     }
@@ -858,6 +861,31 @@ mod tests {
                     .any(|finding| finding.rule_id == rule)
             );
         }
+    }
+
+    #[test]
+    fn scientific_guides_do_not_create_color_only_series_findings() {
+        let mut document = FigureDocument::fixed();
+        let before = visual_series_encodings(document.project());
+        document
+            .add_reference_line(
+                crate::ReferenceOrientation::Vertical,
+                0.5,
+                crate::AxisBinding::PRIMARY,
+            )
+            .unwrap();
+        document
+            .add_measurement_arrow(crate::MeasurementArrowSpec {
+                start: (-1.0, 0.0),
+                end: (1.0, 0.0),
+                axes: crate::AxisBinding::PRIMARY,
+                constraint: crate::MeasurementConstraint::Horizontal,
+                start_arrow: true,
+                end_arrow: true,
+                label_nodes: None,
+            })
+            .unwrap();
+        assert_eq!(visual_series_encodings(document.project()), before);
     }
 
     #[test]

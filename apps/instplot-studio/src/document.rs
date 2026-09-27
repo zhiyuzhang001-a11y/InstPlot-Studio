@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 use instplot_core::{DataSet, DataSetKind, NumericColumn};
 use instplot_io::save_retained_rows_selected_with_fits;
 use instplot_layout::{
-    Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance as LayoutAxisAppearance,
-    AxisPair as LayoutAxisPair, AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar,
-    ErrorStyle, Formatter, GridSpec, LayoutError, LayoutResult, LegendErrorStyle,
-    LegendGrid as LayoutLegendGrid, LegendPosition, LegendSpec, LineStyle, Locator,
-    MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle, Scale, Series,
+    Annotation, AnnotationConnector, AnnotationPosition, ArrowHead as LayoutArrowHead,
+    AxisAppearance as LayoutAxisAppearance, AxisPair as LayoutAxisPair, AxisSpec, Bounds, Chart,
+    DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec, LayoutError, LayoutResult,
+    LegendErrorStyle, LegendGrid as LayoutLegendGrid, LegendPosition, LegendSpec, LineStyle,
+    Locator, MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle,
+    MeasurementArrow as LayoutMeasurementArrow,
+    MeasurementConstraint as LayoutMeasurementConstraint, ReferenceLine as LayoutReferenceLine,
+    ReferenceOrientation as LayoutReferenceOrientation, Scale, Series,
     TickDirection as LayoutTickDirection, layout,
 };
 use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
@@ -17,15 +20,15 @@ use instplot_text::Label;
 
 use crate::project::fingerprint;
 use crate::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisIdentity, AxisMode,
-    AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding,
-    DataSourceKind, DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn,
-    FitIdentity, FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
-    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
-    OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
-    ProvenanceRecord, ReferenceOrientation, SemanticLabel, SeriesGroupRecord, StrokeStyle,
-    XAxisSlot, YAxisSlot, builtin_palette_registry, open_project, palette_series_color_ids,
-    save_project,
+    ArrowHead, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisIdentity,
+    AxisMode, AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT,
+    DataBinding, DataSourceKind, DataSourceOrigin, DataSourcePayload, DataSourceRecord,
+    EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode, LegendEntry, LegendGrid,
+    LegendPlacement, LocatorSpec, ManagedDataFile, ManagedDataFormat, ManualDataRecipe,
+    MarkerShape, MarkerStyle, MeasurementConstraint, OpenProjectReport, PaletteColor,
+    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
+    SemanticLabel, SeriesGroupRecord, StrokeStyle, XAxisSlot, YAxisSlot, builtin_palette_registry,
+    open_project, palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -40,6 +43,17 @@ pub struct AxisRanges {
     pub x_max: f64,
     pub y_min: f64,
     pub y_max: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeasurementArrowSpec {
+    pub start: (f64, f64),
+    pub end: (f64, f64),
+    pub axes: AxisBinding,
+    pub constraint: MeasurementConstraint,
+    pub start_arrow: bool,
+    pub end_arrow: bool,
+    pub label_nodes: Option<Vec<LabelNode>>,
 }
 
 /// The deterministic B3.2 axes result and the project identities used to produce it.
@@ -396,17 +410,19 @@ impl FigureDocument {
         let height_pt = self.project.figure.height_mm * 72.0 / 25.4;
         let mut project_ids = BTreeMap::new();
         let axes_id = register_node_id(&stored.id, &mut project_ids)?;
-        let x = axis_spec(
+        let mut x = axis_spec(
             &stored.x,
             width_pt,
             &self.project.semantic_registry,
+            &self.project.palette,
             &mut project_ids,
             true,
         )?;
-        let y = axis_spec(
+        let mut y = axis_spec(
             &stored.y,
             height_pt,
             &self.project.semantic_registry,
+            &self.project.palette,
             &mut project_ids,
             true,
         )?;
@@ -419,6 +435,7 @@ impl FigureDocument {
                         axis,
                         width_pt,
                         &self.project.semantic_registry,
+                        &self.project.palette,
                         &mut project_ids,
                         compute_axis_data_bounds(
                             &self.project,
@@ -441,6 +458,7 @@ impl FigureDocument {
                         axis,
                         height_pt,
                         &self.project.semantic_registry,
+                        &self.project.palette,
                         &mut project_ids,
                         compute_axis_data_bounds(
                             &self.project,
@@ -454,6 +472,15 @@ impl FigureDocument {
         } else {
             None
         };
+        let black = Color(0, 0, 0, 255);
+        match stored.mode {
+            AxisMode::Single => {
+                x.appearance.spine_color = black;
+                y.appearance.spine_color = black;
+            }
+            AxisMode::DualX => y.appearance.spine_color = black,
+            AxisMode::DualY => x.appearance.spine_color = black,
+        }
         let (legend, legend_labels) = if include_artists {
             legend_spec(stored, &self.project, &mut project_ids)?
         } else {
@@ -463,6 +490,16 @@ impl FigureDocument {
             formal_series(stored, &self.project, &legend_labels, &mut project_ids)?
         } else {
             (Vec::new(), BTreeMap::new())
+        };
+        let reference_lines = if include_artists {
+            formal_reference_lines(stored, &self.project, &mut project_ids)?
+        } else {
+            Vec::new()
+        };
+        let measurement_arrows = if include_artists {
+            formal_measurement_arrows(stored, &self.project, &mut project_ids)?
+        } else {
+            Vec::new()
         };
         let annotations = if include_artists {
             formal_annotations(stored, &self.project, &mut project_ids)?
@@ -478,7 +515,9 @@ impl FigureDocument {
             x2,
             y2,
             series_axes,
+            reference_lines,
             series,
+            measurement_arrows,
             annotations,
             legend,
         })
@@ -1169,57 +1208,10 @@ fn formal_series(
                     stroke.color_id.as_str(),
                 )
             }
-            ArtistProperties::ReferenceLine {
-                orientation,
-                value,
-                axes: binding,
-                stroke,
-            } => {
-                let x_axis = match binding.x {
-                    XAxisSlot::X1 => Some(&axes.x),
-                    XAxisSlot::X2 => axes.x2.as_ref(),
-                }
-                .ok_or(DocumentLayoutError::MissingAxes)?;
-                let y_axis = match binding.y {
-                    YAxisSlot::Y1 => Some(&axes.y),
-                    YAxisSlot::Y2 => axes.y2.as_ref(),
-                }
-                .ok_or(DocumentLayoutError::MissingAxes)?;
-                let points = match orientation {
-                    ReferenceOrientation::Horizontal => vec![
-                        DataPoint {
-                            x: x_axis.minimum,
-                            y: *value,
-                        },
-                        DataPoint {
-                            x: x_axis.maximum,
-                            y: *value,
-                        },
-                    ],
-                    ReferenceOrientation::Vertical => vec![
-                        DataPoint {
-                            x: *value,
-                            y: y_axis.minimum,
-                        },
-                        DataPoint {
-                            x: *value,
-                            y: y_axis.maximum,
-                        },
-                    ],
-                };
-                (
-                    points,
-                    Some(LineStyle {
-                        width: stroke.width_pt,
-                        dash: dash_style(stroke),
-                    }),
-                    None,
-                    Vec::new(),
-                    None,
-                    stroke.color_id.as_str(),
-                )
-            }
-            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
+            ArtistProperties::ReferenceLine { .. }
+            | ArtistProperties::MeasurementArrow { .. }
+            | ArtistProperties::Annotation { .. }
+            | ArtistProperties::Legend { .. } => continue,
         };
         let legend_label = legend_labels.get(&artist.id).cloned();
         let label = legend_label
@@ -1314,6 +1306,126 @@ fn formal_series(
     Ok((output, series_axes))
 }
 
+fn formal_reference_lines(
+    axes: &crate::AxesRecord,
+    project: &ProjectDocument,
+    project_ids: &mut BTreeMap<NodeId, String>,
+) -> Result<Vec<LayoutReferenceLine>, DocumentLayoutError> {
+    let mut output = Vec::new();
+    for artist_id in &axes.artist_ids {
+        let artist = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == *artist_id)
+            .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
+        if !project.artist_effectively_visible(artist) {
+            continue;
+        }
+        let ArtistProperties::ReferenceLine {
+            orientation,
+            value,
+            axes,
+            stroke,
+            ..
+        } = &artist.properties
+        else {
+            continue;
+        };
+        output.push(LayoutReferenceLine {
+            id: register_node_id(&artist.id, project_ids)?,
+            orientation: match orientation {
+                ReferenceOrientation::Horizontal => LayoutReferenceOrientation::Horizontal,
+                ReferenceOrientation::Vertical => LayoutReferenceOrientation::Vertical,
+            },
+            value: *value,
+            axes: layout_axis_pair(*axes),
+            stroke: LineStyle {
+                width: stroke.width_pt,
+                dash: dash_style(stroke),
+            },
+            color: palette_color(&stroke.color_id, &project.palette)?,
+        });
+    }
+    Ok(output)
+}
+
+fn formal_measurement_arrows(
+    axes: &crate::AxesRecord,
+    project: &ProjectDocument,
+    project_ids: &mut BTreeMap<NodeId, String>,
+) -> Result<Vec<LayoutMeasurementArrow>, DocumentLayoutError> {
+    let mut output = Vec::new();
+    for artist_id in &axes.artist_ids {
+        let artist = project
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == *artist_id)
+            .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
+        if !project.artist_effectively_visible(artist) {
+            continue;
+        }
+        let ArtistProperties::MeasurementArrow {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            axes,
+            stroke,
+            start_arrow,
+            end_arrow,
+            arrow_head,
+            arrow_size_pt,
+            constraint,
+            label_id,
+            label_offset_x_pt,
+            label_offset_y_pt,
+        } = &artist.properties
+        else {
+            continue;
+        };
+        let labels = label_id
+            .as_ref()
+            .map(|label_id| semantic_label(label_id, &project.semantic_registry))
+            .transpose()?
+            .map(split_layout_label_lines)
+            .unwrap_or_default();
+        output.push(LayoutMeasurementArrow {
+            id: register_node_id(&artist.id, project_ids)?,
+            start: DataPoint {
+                x: *start_x,
+                y: *start_y,
+            },
+            end: DataPoint {
+                x: *end_x,
+                y: *end_y,
+            },
+            axes: layout_axis_pair(*axes),
+            stroke: LineStyle {
+                width: stroke.width_pt,
+                dash: dash_style(stroke),
+            },
+            color: palette_color(&stroke.color_id, &project.palette)?,
+            start_arrow: *start_arrow,
+            end_arrow: *end_arrow,
+            arrow_head: match arrow_head {
+                ArrowHead::Open => LayoutArrowHead::Open,
+                ArrowHead::Filled => LayoutArrowHead::Filled,
+            },
+            arrow_size: *arrow_size_pt,
+            constraint: match constraint {
+                MeasurementConstraint::Free => LayoutMeasurementConstraint::Free,
+                MeasurementConstraint::Horizontal => LayoutMeasurementConstraint::Horizontal,
+                MeasurementConstraint::Vertical => LayoutMeasurementConstraint::Vertical,
+            },
+            labels,
+            label_offset_pt: (*label_offset_x_pt, *label_offset_y_pt),
+        });
+    }
+    Ok(output)
+}
+
 fn formal_annotations(
     axes: &crate::AxesRecord,
     project: &ProjectDocument,
@@ -1360,6 +1472,10 @@ fn formal_annotations(
                         color: palette_color(&connector.stroke.color_id, &project.palette)?,
                         start_arrow: connector.start_arrow,
                         end_arrow: connector.end_arrow,
+                        arrow_head: match connector.arrow_head {
+                            ArrowHead::Open => LayoutArrowHead::Open,
+                            ArrowHead::Filled => LayoutArrowHead::Filled,
+                        },
                         arrow_size: connector.arrow_size_pt,
                         axes: layout_axis_pair(connector.axes),
                     })
@@ -1695,6 +1811,7 @@ fn axis_spec(
     axis: &AxisRecord,
     available_pt: f64,
     labels: &[SemanticLabel],
+    palette: &PaletteRegistry,
     project_ids: &mut BTreeMap<NodeId, String>,
     has_data: bool,
 ) -> Result<AxisSpec, DocumentLayoutError> {
@@ -1740,6 +1857,7 @@ fn axis_spec(
             minor: false,
         },
         appearance: LayoutAxisAppearance {
+            spine_color: palette_color(&axis.appearance.spine_color_id, palette)?,
             near_spine: axis.appearance.near_spine,
             far_spine: axis.appearance.far_spine,
             near_ticks: axis.appearance.near_ticks,

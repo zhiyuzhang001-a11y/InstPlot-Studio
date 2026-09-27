@@ -117,6 +117,7 @@ impl FigureDocument {
                     crate::ArtistKind::Scatter => SeriesKind::Scatter,
                     crate::ArtistKind::ErrorBar => SeriesKind::ErrorBar,
                     crate::ArtistKind::ReferenceLine => SeriesKind::ReferenceLine,
+                    crate::ArtistKind::MeasurementArrow => SeriesKind::Annotation,
                     crate::ArtistKind::Annotation => SeriesKind::Annotation,
                     crate::ArtistKind::Legend => SeriesKind::Legend,
                 };

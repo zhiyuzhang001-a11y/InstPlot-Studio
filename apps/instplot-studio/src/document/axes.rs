@@ -199,6 +199,7 @@ fn ensure_secondary_axis(project: &mut ProjectDocument, mode: AxisMode) {
     record.id = axis_id;
     record.label_id = label_id.clone();
     record.autoscale = true;
+    record.appearance.spine_color_id = "object-black".to_owned();
     project.semantic_registry.push(SemanticLabel {
         id: label_id,
         nodes: vec![LabelNode::Text(String::new())],

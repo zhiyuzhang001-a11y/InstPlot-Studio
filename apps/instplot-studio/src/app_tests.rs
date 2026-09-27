@@ -1789,6 +1789,9 @@ fn legend_and_annotation_drag_accumulate_frame_deltas() {
             candidate_grid: None,
             candidate_placement: None,
             connector_index: None,
+            connector_text_bounds: None,
+            role: SelectableRole::Annotation,
+            measurement: None,
         };
         assert_eq!(
             drag.position_after(egui::vec2(10.0, 4.0), 2.0, 200.0, 150.0),
@@ -1814,9 +1817,17 @@ fn annotation_connector_endpoint_drag_updates_data_coordinates() {
         .add_annotation(vec![LabelNode::Text("target".to_owned())])
         .unwrap();
     let mut record = app.document.artist_record(&annotation_id).unwrap();
-    let ArtistProperties::Annotation { connectors, .. } = &mut record.properties else {
+    let ArtistProperties::Annotation {
+        x_pt,
+        y_pt,
+        connectors,
+        ..
+    } = &mut record.properties
+    else {
         unreachable!()
     };
+    *x_pt = 120.0;
+    *y_pt = 100.0;
     connectors.push(AnnotationConnectorRecord {
         target_x: 0.0,
         target_y: 0.0,
@@ -1828,6 +1839,7 @@ fn annotation_connector_endpoint_drag_updates_data_coordinates() {
         },
         start_arrow: false,
         end_arrow: true,
+        arrow_head: ArrowHead::Open,
         arrow_size_pt: 5.0,
     });
     app.document.set_artist_record(record).unwrap();
@@ -1852,6 +1864,7 @@ fn annotation_connector_endpoint_drag_updates_data_coordinates() {
             started: true,
             stopped: true,
             data_index: Some(0),
+            shift: false,
         },
         1.0,
     );
@@ -1862,6 +1875,328 @@ fn annotation_connector_endpoint_drag_updates_data_coordinates() {
     let expected = data_coordinates_from_local(&app.document, axes, target.0, target.1).unwrap();
     assert!((connectors[0].target_x - expected.0).abs() < 1.0e-9);
     assert!((connectors[0].target_y - expected.1).abs() < 1.0e-9);
+
+    let node = app
+        .resolved
+        .layout
+        .project_ids
+        .iter()
+        .find_map(|(node, id)| (id == &annotation_id).then_some(*node))
+        .unwrap();
+    let connector_path = app
+        .resolved
+        .layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == node
+                && item.role == SelectableRole::AnnotationConnector
+                && item.data_index == Some(0)
+        })
+        .unwrap()
+        .path_proximity
+        .clone();
+    let bounds = selected_hit_bounds_for_role(
+        &app.resolved,
+        &annotation_id,
+        Some(SelectableRole::AnnotationConnector),
+    )
+    .unwrap();
+    let text_bounds = selected_hit_bounds_for_role(
+        &app.resolved,
+        &annotation_id,
+        Some(SelectableRole::Annotation),
+    )
+    .unwrap();
+    let press = connector_path[1];
+    app.handle_artist_drag(
+        CanvasDragEvent {
+            id: annotation_id.clone(),
+            role: SelectableRole::AnnotationConnector,
+            bounds,
+            delta: egui::Vec2::ZERO,
+            pointer: Some((text_bounds.0 - 40.0, text_bounds.3 + 40.0)),
+            press_pointer: Some(press),
+            mode: ArtistDragMode::Move,
+            started: true,
+            stopped: true,
+            data_index: Some(0),
+            shift: true,
+        },
+        1.0,
+    );
+    let snapped_path = app
+        .resolved
+        .layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == node
+                && item.role == SelectableRole::AnnotationConnector
+                && item.data_index == Some(0)
+        })
+        .unwrap()
+        .path_proximity
+        .as_slice();
+    let dx = (snapped_path[1].0 - snapped_path[0].0).abs();
+    let dy = (snapped_path[1].1 - snapped_path[0].1).abs();
+    assert!((dx - dy).abs() < 1.0e-3);
+}
+
+#[test]
+fn shift_snap_uses_screen_space_and_preserves_drag_length() {
+    let start = egui::pos2(20.0, 30.0);
+    let horizontal = snap_pointer_to_special_angle(start, egui::pos2(91.0, 38.0));
+    assert!((horizontal.y - start.y).abs() < 1.0e-4);
+    assert!((horizontal.distance(start) - egui::pos2(91.0, 38.0).distance(start)).abs() < 1.0e-4);
+
+    let diagonal = snap_pointer_to_special_angle(start, egui::pos2(83.0, 78.0));
+    let delta = diagonal - start;
+    assert!((delta.x.abs() - delta.y.abs()).abs() < 1.0e-4);
+}
+
+#[test]
+fn measurement_endpoint_shift_snap_is_transient_and_uses_the_opposite_endpoint() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let arrow_id = app
+        .document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 0.0),
+            end: (0.0, 0.4),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Free,
+            start_arrow: false,
+            end_arrow: true,
+            label_nodes: None,
+        })
+        .unwrap();
+    app.resolved = resolved_preview(&app.document).unwrap();
+
+    let axes = app.resolved.layout.result.axes;
+    let fixed =
+        data_point_to_local(&app.document, axes, AxisBinding::PRIMARY, (-1.0, 0.0)).unwrap();
+    let bounds = selected_hit_bounds_for_role(
+        &app.resolved,
+        &arrow_id,
+        Some(SelectableRole::MeasurementArrowEnd),
+    )
+    .unwrap();
+    let press = ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0);
+    app.handle_artist_drag(
+        CanvasDragEvent {
+            id: arrow_id.clone(),
+            role: SelectableRole::MeasurementArrowEnd,
+            bounds,
+            delta: egui::Vec2::ZERO,
+            pointer: Some((fixed.0 + 80.0, fixed.1 + 50.0)),
+            press_pointer: Some(press),
+            mode: ArtistDragMode::Move,
+            started: true,
+            stopped: true,
+            data_index: None,
+            shift: true,
+        },
+        1.0,
+    );
+    let ArtistProperties::MeasurementArrow { end_x, end_y, .. } =
+        app.document.artist_record(&arrow_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    let snapped = data_point_to_local(
+        &app.document,
+        app.resolved.layout.result.axes,
+        AxisBinding::PRIMARY,
+        (end_x, end_y),
+    )
+    .unwrap();
+    assert!(((snapped.0 - fixed.0).abs() - (snapped.1 - fixed.1).abs()).abs() < 1.0e-3);
+
+    let bounds = selected_hit_bounds_for_role(
+        &app.resolved,
+        &arrow_id,
+        Some(SelectableRole::MeasurementArrowEnd),
+    )
+    .unwrap();
+    let press = ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0);
+    app.handle_artist_drag(
+        CanvasDragEvent {
+            id: arrow_id.clone(),
+            role: SelectableRole::MeasurementArrowEnd,
+            bounds,
+            delta: egui::Vec2::ZERO,
+            pointer: Some((fixed.0 + 80.0, fixed.1 + 20.0)),
+            press_pointer: Some(press),
+            mode: ArtistDragMode::Move,
+            started: true,
+            stopped: true,
+            data_index: None,
+            shift: false,
+        },
+        1.0,
+    );
+    let ArtistProperties::MeasurementArrow { end_x, end_y, .. } =
+        app.document.artist_record(&arrow_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    let unsnapped = data_point_to_local(
+        &app.document,
+        app.resolved.layout.result.axes,
+        AxisBinding::PRIMARY,
+        (end_x, end_y),
+    )
+    .unwrap();
+    assert!(((unsnapped.0 - fixed.0).abs() - (unsnapped.1 - fixed.1).abs()).abs() > 10.0);
+}
+
+#[test]
+fn measurement_label_drag_updates_only_its_saved_point_offset() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let arrow_id = app
+        .document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 0.0),
+            end: (1.0, 0.0),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δt".to_owned())]),
+        })
+        .unwrap();
+    app.resolved = resolved_preview(&app.document).unwrap();
+    let bounds = selected_hit_bounds_for_role(
+        &app.resolved,
+        &arrow_id,
+        Some(SelectableRole::MeasurementArrowLabel),
+    )
+    .unwrap();
+    let press = ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0);
+    app.handle_artist_drag(
+        CanvasDragEvent {
+            id: arrow_id.clone(),
+            role: SelectableRole::MeasurementArrowLabel,
+            bounds,
+            delta: egui::Vec2::ZERO,
+            pointer: Some((press.0 + 12.0, press.1 - 8.0)),
+            press_pointer: Some(press),
+            mode: ArtistDragMode::Move,
+            started: true,
+            stopped: true,
+            data_index: None,
+            shift: false,
+        },
+        1.0,
+    );
+
+    let ArtistProperties::MeasurementArrow {
+        start_x,
+        start_y,
+        end_x,
+        end_y,
+        label_offset_x_pt,
+        label_offset_y_pt,
+        ..
+    } = app.document.artist_record(&arrow_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    assert_eq!((start_x, start_y, end_x, end_y), (-1.0, 0.0, 1.0, 0.0));
+    assert!((label_offset_x_pt - 12.0).abs() < 1.0e-9);
+    assert!((label_offset_y_pt + 16.0).abs() < 1.0e-9);
+    assert!(app.active_artist_drag.is_none());
+}
+
+#[test]
+fn reference_tool_adds_continuously_and_measurement_tool_commits_once() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let before = app.document.project().figure.artists.len();
+    app.drawing_tool = DrawingTool::Reference {
+        orientation: ReferenceOrientation::Vertical,
+        axes: AxisBinding::PRIMARY,
+    };
+    app.handle_drawing_tool_event(CanvasToolEvent {
+        clicked: true,
+        started: false,
+        stopped: false,
+        press: None,
+        current: Some(HoverDataCoordinates {
+            x1: 0.75,
+            y1: 0.25,
+            x2: None,
+            y2: None,
+        }),
+        shift: false,
+    });
+    app.handle_drawing_tool_event(CanvasToolEvent {
+        clicked: true,
+        started: false,
+        stopped: false,
+        press: None,
+        current: Some(HoverDataCoordinates {
+            x1: 1.25,
+            y1: 0.25,
+            x2: None,
+            y2: None,
+        }),
+        shift: false,
+    });
+    assert_eq!(app.document.project().figure.artists.len(), before + 2);
+    assert!(matches!(app.drawing_tool, DrawingTool::Reference { .. }));
+
+    app.drawing_tool = DrawingTool::Measurement {
+        axes: AxisBinding::PRIMARY,
+        constraint: MeasurementConstraint::Horizontal,
+        start_arrow: true,
+        end_arrow: true,
+    };
+    app.handle_drawing_tool_event(CanvasToolEvent {
+        clicked: false,
+        started: true,
+        stopped: true,
+        press: Some(HoverDataCoordinates {
+            x1: -1.0,
+            y1: 1.0,
+            x2: None,
+            y2: None,
+        }),
+        current: Some(HoverDataCoordinates {
+            x1: 1.0,
+            y1: 1.2,
+            x2: None,
+            y2: None,
+        }),
+        shift: false,
+    });
+    assert_eq!(app.document.project().figure.artists.len(), before + 3);
+    assert_eq!(app.drawing_tool, DrawingTool::Select);
+    let ArtistProperties::MeasurementArrow {
+        start_y,
+        end_y,
+        start_arrow,
+        end_arrow,
+        ..
+    } = &app
+        .document
+        .project()
+        .figure
+        .artists
+        .last()
+        .unwrap()
+        .properties
+    else {
+        panic!("measurement arrow was not created");
+    };
+    assert_eq!(start_y, end_y);
+    assert!(*start_arrow && *end_arrow);
 }
 
 #[test]
@@ -1968,6 +2303,7 @@ fn legend_drag_across_all_placements_round_trips_and_exports() {
                 started: true,
                 stopped: true,
                 data_index: None,
+                shift: false,
             },
             1.0,
         );
@@ -2076,6 +2412,9 @@ fn one_frame_drag_uses_release_pointer_even_without_intermediate_delta() {
         candidate_grid: None,
         candidate_placement: None,
         connector_index: None,
+        connector_text_bounds: None,
+        role: SelectableRole::Legend,
+        measurement: None,
     };
     assert_eq!(
         drag.frame_delta(Some((50.0, 120.0)), egui::Vec2::ZERO, 1.5),
@@ -2137,6 +2476,45 @@ fn canvas_click_does_not_close_an_existing_editor() {
         ]
     );
     assert_eq!(app.context_editor_focus_target, Some(legend));
+}
+
+#[test]
+fn one_drawing_object_has_one_context_editor_across_all_hit_roles() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let arrow_id = app
+        .document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 0.0),
+            end: (1.0, 0.0),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δt".to_owned())]),
+        })
+        .unwrap();
+    for role in [
+        SelectableRole::MeasurementArrowStart,
+        SelectableRole::MeasurementArrowEnd,
+        SelectableRole::MeasurementArrowLabel,
+        SelectableRole::MeasurementArrow,
+    ] {
+        app.open_context_editor(CanvasHit {
+            project_id: arrow_id.clone(),
+            role,
+            data_index: Some(0),
+        });
+    }
+    assert_eq!(app.context_editor_targets.len(), 1);
+    assert_eq!(
+        app.context_editor_targets[0],
+        CanvasHit {
+            project_id: arrow_id,
+            role: SelectableRole::MeasurementArrow,
+            data_index: None,
+        }
+    );
 }
 
 #[test]

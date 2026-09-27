@@ -27,21 +27,21 @@ use instplot_core::{DataSet, DataSetKind};
 use instplot_export::{ResolvedItem, ResolvedText};
 use instplot_layout::SelectableRole;
 use instplot_render::{DisplayItem, PathVerb};
-#[cfg(test)]
-use instplot_studio::ManualAxisInput;
 use instplot_studio::label_input;
 use instplot_studio::{
-    AnnotationConnectorRecord, ArtistProperties, ArtistRole, AxisBinding, AxisDimension,
+    AnnotationConnectorRecord, ArrowHead, ArtistProperties, ArtistRole, AxisBinding, AxisDimension,
     AxisIdentity, AxisMode, AxisRanges, AxisRecord, AxisScale, CheckSeverity,
     DATA_FORMAT_CAPABILITIES, DataImporter, EditCommand, EditGroup, EditHistory,
     EguiPreviewAdapter, ErrorStatistic, FigureDocument, FormatterSpec, HandoffImport, LabelNode,
     LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFormat, ManualDataGroupInput,
-    ManualDataInput, ManualPlotStyle, MarkerShape, OpenProjectSource, PRODUCT_NAME, PaletteKind,
-    PreviewAdapter, PublicationReport, ReferenceOrientation, ResolvedFigure, SeriesCreationStyle,
-    SeriesDescriptor, SeriesKind, StrokeStyle, StudioSession, USER_PALETTE_IDS, XAxisSlot,
-    YAxisSlot, builtin_palette, builtin_palette_registry, check_publication,
-    palette_series_color_ids, resolve_document,
+    ManualDataInput, ManualPlotStyle, MarkerShape, MeasurementConstraint, OpenProjectSource,
+    PRODUCT_NAME, PaletteKind, PreviewAdapter, PublicationReport, ReferenceOrientation,
+    ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind, StrokeStyle, StudioSession,
+    USER_PALETTE_IDS, XAxisSlot, YAxisSlot, builtin_palette, builtin_palette_registry,
+    check_publication, palette_series_color_ids, resolve_document,
 };
+#[cfg(test)]
+use instplot_studio::{ManualAxisInput, MeasurementArrowSpec};
 use ui_chrome::*;
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;

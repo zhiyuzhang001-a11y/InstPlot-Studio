@@ -103,6 +103,7 @@ impl ProjectDocument {
                                 width_pt: 0.7,
                                 dash_pt: vec![1.4, 1.4],
                             },
+                            include_in_autoscale: true,
                         },
                     },
                     ArtistRecord {

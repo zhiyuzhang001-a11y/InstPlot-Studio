@@ -103,6 +103,7 @@ pub fn publication_fixture() -> Chart {
         x2: None,
         y2: None,
         series_axes: BTreeMap::new(),
+        reference_lines: Vec::new(),
         series: vec![
             Series {
                 id: NodeId(10),
@@ -211,6 +212,7 @@ pub fn publication_fixture() -> Chart {
                 color: orange,
             },
         ],
+        measurement_arrows: Vec::new(),
         annotations: vec![Annotation {
             id: NodeId(20),
             labels: vec![Label::Text("T ≤ 300 K".into())],

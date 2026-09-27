@@ -55,6 +55,8 @@ pub(super) struct StudioApp {
     pub(super) context_editor_focus_target: Option<CanvasHit>,
     pub(super) context_editor_targets: Vec<CanvasHit>,
     pub(super) active_artist_drag: Option<ArtistDrag>,
+    pub(super) drawing_tool: DrawingTool,
+    pub(super) tool_draft: Option<ToolDraft>,
     pub(super) messages: Vec<AppMessage>,
     pub(super) status: Option<(String, Instant)>,
     pub(super) manual_data: ManualDataState,
@@ -66,6 +68,42 @@ pub(super) struct StudioApp {
     pub(super) macos_open_files: Option<crate::macos_open_files::MacOpenFiles>,
     pub(super) first_frame: bool,
     pub(super) started: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum DrawingTool {
+    #[default]
+    Select,
+    Reference {
+        orientation: ReferenceOrientation,
+        axes: AxisBinding,
+    },
+    Measurement {
+        axes: AxisBinding,
+        constraint: MeasurementConstraint,
+        start_arrow: bool,
+        end_arrow: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ToolDraft {
+    pub(super) start: (f64, f64),
+    pub(super) end: (f64, f64),
+    pub(super) axes: AxisBinding,
+    pub(super) constraint: MeasurementConstraint,
+    pub(super) start_arrow: bool,
+    pub(super) end_arrow: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct CanvasToolEvent {
+    pub(super) clicked: bool,
+    pub(super) started: bool,
+    pub(super) stopped: bool,
+    pub(super) press: Option<HoverDataCoordinates>,
+    pub(super) current: Option<HoverDataCoordinates>,
+    pub(super) shift: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,6 +155,18 @@ pub(super) struct ArtistDrag {
     pub(super) candidate_grid: Option<LegendGrid>,
     pub(super) candidate_placement: Option<LegendPlacement>,
     pub(super) connector_index: Option<usize>,
+    pub(super) connector_text_bounds: Option<(f64, f64, f64, f64)>,
+    pub(super) role: SelectableRole,
+    pub(super) measurement: Option<MeasurementDragContext>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct MeasurementDragContext {
+    pub(super) start: (f64, f64),
+    pub(super) end: (f64, f64),
+    pub(super) press: (f64, f64),
+    pub(super) label_offset: (f64, f64),
+    pub(super) axes: AxisBinding,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +293,7 @@ pub(super) struct CanvasDragEvent {
     pub(super) started: bool,
     pub(super) stopped: bool,
     pub(super) data_index: Option<usize>,
+    pub(super) shift: bool,
 }
 
 #[derive(Clone, Debug)]

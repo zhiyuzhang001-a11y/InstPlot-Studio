@@ -1,8 +1,9 @@
 use instplot_export::{FontOrigin, resolve};
 use layout_engine_spike::{
-    AnnotationPosition, AxisPair, Bounds, DashStyle, DataPoint, Formatter, HitItem, HitMap,
-    LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape, MarkerStyle, Scale,
-    SelectableRole, TextMeasurer, TextSize, TickDirection, layout, layout_with_measurer,
+    AnnotationPosition, ArrowHead, AxisPair, Bounds, DashStyle, DataPoint, Formatter, HitItem,
+    HitMap, LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape,
+    MarkerStyle, MeasurementArrow, MeasurementConstraint, ReferenceLine, ReferenceOrientation,
+    Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout, layout_with_measurer,
     marker_gallery_fixture, publication_fixture,
 };
 
@@ -1005,4 +1006,98 @@ fn an_enabled_secondary_axis_without_data_owns_its_edge_without_fake_ticks() {
         .map(|item| item.node)
         .collect::<Vec<_>>();
     assert_eq!(top_edge_owners, vec![NodeId(31)]);
+}
+
+#[test]
+fn scientific_guides_have_distinct_layers_and_hit_roles() {
+    let mut chart = publication_fixture();
+    chart.reference_lines.push(ReferenceLine {
+        id: NodeId(700),
+        orientation: ReferenceOrientation::Vertical,
+        value: 0.25,
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 0.9,
+            dash: DashStyle::Dashed,
+        },
+        color: Color(0, 0, 0, 255),
+    });
+    chart.measurement_arrows.push(MeasurementArrow {
+        id: NodeId(701),
+        start: DataPoint { x: -1.0, y: 1.0 },
+        end: DataPoint { x: 1.0, y: 1.0 },
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 0.9,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: true,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 5.0,
+        constraint: MeasurementConstraint::Horizontal,
+        labels: vec![Label::Text("Δx".into())],
+        label_offset_pt: (0.0, -8.0),
+    });
+    let placed = layout(&chart).unwrap();
+    assert!(placed.hit_map.items.iter().any(|item| {
+        item.node == NodeId(700) && item.role == SelectableRole::ReferenceLine
+    }));
+    for role in [
+        SelectableRole::MeasurementArrow,
+        SelectableRole::MeasurementArrowStart,
+        SelectableRole::MeasurementArrowEnd,
+        SelectableRole::MeasurementArrowLabel,
+    ] {
+        assert!(placed
+            .hit_map
+            .items
+            .iter()
+            .any(|item| item.node == NodeId(701) && item.role == role));
+    }
+    let reference_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if *source == NodeId(700)))
+        .unwrap();
+    let first_data_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if chart.series.iter().any(|series| series.id == *source)))
+        .unwrap();
+    let measurement_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if *source == NodeId(701)))
+        .unwrap();
+    assert!(reference_item < first_data_item);
+    assert!(measurement_item > first_data_item);
+}
+
+#[test]
+fn axis_ink_is_black_while_secondary_spines_can_use_distinct_colors() {
+    let mut chart = publication_fixture();
+    chart.x.appearance.spine_color = Color(0, 0, 0, 255);
+    chart.y.appearance.spine_color = Color(0, 0, 0, 255);
+    let mut y2 = chart.y.clone();
+    y2.id = NodeId(702);
+    y2.appearance.spine_color = Color(204, 0, 0, 255);
+    chart.y2 = Some(y2);
+    let placed = layout(&chart).unwrap();
+    assert!(placed.display_list.items.iter().any(|item| matches!(
+        item,
+        DisplayItem::Path {
+            source,
+            stroke: Some(stroke),
+            ..
+        } if *source == NodeId(702) && stroke.color == Color(204, 0, 0, 255)
+    )));
+    assert!(placed.display_list.items.iter().filter_map(|item| match item {
+        DisplayItem::GlyphRun(run) => Some(run.color),
+        _ => None,
+    }).all(|color| color == Color(0, 0, 0, 255)));
 }

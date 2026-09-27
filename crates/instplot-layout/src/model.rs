@@ -15,7 +15,9 @@ pub struct Chart {
     pub x2: Option<AxisSpec>,
     pub y2: Option<AxisSpec>,
     pub series_axes: BTreeMap<NodeId, AxisPair>,
+    pub reference_lines: Vec<ReferenceLine>,
     pub series: Vec<Series>,
+    pub measurement_arrows: Vec<MeasurementArrow>,
     pub annotations: Vec<Annotation>,
     pub legend: Option<LegendSpec>,
 }
@@ -53,6 +55,7 @@ pub enum TickDirection {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxisAppearance {
+    pub spine_color: Color,
     pub near_spine: bool,
     pub far_spine: bool,
     pub near_ticks: bool,
@@ -70,6 +73,7 @@ pub struct AxisAppearance {
 impl Default for AxisAppearance {
     fn default() -> Self {
         Self {
+            spine_color: Color(0, 0, 0, 255),
             near_spine: true,
             far_spine: true,
             near_ticks: true,
@@ -84,6 +88,22 @@ impl Default for AxisAppearance {
             label_tick_pad_pt: 4.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReferenceOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ReferenceLine {
+    pub id: NodeId,
+    pub orientation: ReferenceOrientation,
+    pub value: f64,
+    pub axes: AxisPair,
+    pub stroke: LineStyle,
+    pub color: Color,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -192,8 +212,39 @@ pub struct AnnotationConnector {
     pub color: Color,
     pub start_arrow: bool,
     pub end_arrow: bool,
+    pub arrow_head: ArrowHead,
     pub arrow_size: f64,
     pub axes: AxisPair,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrowHead {
+    Open,
+    Filled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasurementConstraint {
+    Free,
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Debug)]
+pub struct MeasurementArrow {
+    pub id: NodeId,
+    pub start: DataPoint,
+    pub end: DataPoint,
+    pub axes: AxisPair,
+    pub stroke: LineStyle,
+    pub color: Color,
+    pub start_arrow: bool,
+    pub end_arrow: bool,
+    pub arrow_head: ArrowHead,
+    pub arrow_size: f64,
+    pub constraint: MeasurementConstraint,
+    pub labels: Vec<Label>,
+    pub label_offset_pt: (f64, f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

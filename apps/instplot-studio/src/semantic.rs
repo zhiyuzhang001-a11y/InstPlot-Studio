@@ -59,11 +59,14 @@ pub fn policy_for(role: ArtistRole) -> SemanticPolicy {
 
 pub fn color_id(artist: &ArtistRecord) -> Option<&str> {
     match &artist.properties {
-        ArtistProperties::Line { stroke, .. }
-        | ArtistProperties::ErrorBar { stroke, .. }
-        | ArtistProperties::ReferenceLine { stroke, .. } => Some(&stroke.color_id),
+        ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
+            Some(&stroke.color_id)
+        }
         ArtistProperties::Scatter { marker, .. } => Some(&marker.color_id),
-        ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => None,
+        ArtistProperties::ReferenceLine { .. }
+        | ArtistProperties::MeasurementArrow { .. }
+        | ArtistProperties::Annotation { .. }
+        | ArtistProperties::Legend { .. } => None,
     }
 }
 
@@ -87,10 +90,9 @@ pub fn non_color_signature(artist: &ArtistRecord) -> String {
         ArtistProperties::ErrorBar { cap_width_pt, .. } => {
             format!("error-bar:{cap_width_pt:.3}")
         }
-        ArtistProperties::ReferenceLine { stroke, .. } => {
-            format!("reference:{:?}", stroke.dash_pt)
-        }
+        ArtistProperties::ReferenceLine { .. } => "reference-not-applicable".to_owned(),
         ArtistProperties::Annotation { .. } => "annotation-position".to_owned(),
+        ArtistProperties::MeasurementArrow { .. } => "measurement-arrow".to_owned(),
         ArtistProperties::Legend { .. } => "legend".to_owned(),
     }
 }

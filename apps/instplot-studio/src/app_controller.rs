@@ -87,6 +87,8 @@ impl StudioApp {
             context_editor_focus_target: None,
             context_editor_targets: Vec::new(),
             active_artist_drag: None,
+            drawing_tool: DrawingTool::Select,
+            tool_draft: None,
             messages: Vec::new(),
             status: Some((status, Instant::now())),
             manual_data: ManualDataState::default(),
@@ -1534,6 +1536,30 @@ impl StudioApp {
             continuous |= minor_edit.continuous;
             finish |= minor_edit.finish;
         }
+        let mode = self.document.axis_mode();
+        let spine_color_visible = matches!(
+            (mode, identity),
+            (AxisMode::DualX, AxisIdentity::X1 | AxisIdentity::X2)
+                | (AxisMode::DualY, AxisIdentity::Y1 | AxisIdentity::Y2)
+        );
+        if spine_color_visible {
+            ui.add_space(6.0);
+            ui.separator();
+            ui.strong(match identity {
+                AxisIdentity::X1 => "下方 X1 spine",
+                AxisIdentity::X2 => "上方 X2 spine",
+                AxisIdentity::Y1 => "左侧 Y1 spine",
+                AxisIdentity::Y2 => "右侧 Y2 spine",
+            });
+            let palette = self.document.palette_colors().to_vec();
+            changed |= color_editor(
+                ui,
+                self.language,
+                &format!("axis-spine-{identity:?}"),
+                &mut record.appearance.spine_color_id,
+                &palette,
+            );
+        }
         if changed {
             self.execute_document_edit_with_group(
                 EditCommand::SetAxisRecordByIdentity { identity, record },
@@ -1639,10 +1665,25 @@ impl StudioApp {
     }
 
     pub(super) fn open_context_editor(&mut self, target: CanvasHit) {
+        let target = self.canonical_context_editor_target(target);
         if !self.context_editor_targets.contains(&target) {
             self.context_editor_targets.push(target.clone());
         }
         self.context_editor_focus_target = Some(target);
+    }
+
+    fn canonical_context_editor_target(&self, mut target: CanvasHit) -> CanvasHit {
+        if let Some(record) = self.document.artist_record(&target.project_id) {
+            target.data_index = None;
+            target.role = match record.properties {
+                ArtistProperties::MeasurementArrow { .. } => SelectableRole::MeasurementArrow,
+                ArtistProperties::Annotation { .. } => SelectableRole::Annotation,
+                ArtistProperties::ReferenceLine { .. } => SelectableRole::ReferenceLine,
+                ArtistProperties::Legend { .. } => SelectableRole::Legend,
+                _ => target.role,
+            };
+        }
+        target
     }
 
     pub(super) fn request_palette_window(&mut self) {
@@ -1664,6 +1705,21 @@ impl StudioApp {
             .find_map(|artist| match &artist.properties {
                 ArtistProperties::Annotation {
                     label_id: candidate,
+                    ..
+                } if candidate == label_id => Some(artist.id.clone()),
+                _ => None,
+            })
+    }
+
+    pub(super) fn measurement_artist_for_label(&self, label_id: &str) -> Option<String> {
+        self.document
+            .project()
+            .figure
+            .artists
+            .iter()
+            .find_map(|artist| match &artist.properties {
+                ArtistProperties::MeasurementArrow {
+                    label_id: Some(candidate),
                     ..
                 } if candidate == label_id => Some(artist.id.clone()),
                 _ => None,
@@ -2939,6 +2995,7 @@ impl StudioApp {
                         (250.0 + entries.len() as f32 * 84.0).min(620.0)
                     }
                     ArtistProperties::Annotation { .. } => 350.0,
+                    ArtistProperties::MeasurementArrow { .. } => 520.0,
                     _ => 380.0,
                 },
                 None => 390.0,
@@ -2962,6 +3019,8 @@ impl StudioApp {
                         this.axis_ranges_editor(ui);
                     } else if this.document.semantic_label_nodes(&selected_id).is_some() {
                         this.semantic_label_editor(ui, &selected_id);
+                    } else if this.document.artist_record(&selected_id).is_some() {
+                        this.artist_editor(ui, &selected_id, true);
                     } else {
                         ui.weak(this.language.text(Text::ClickToEdit));
                     }
@@ -3008,6 +3067,89 @@ impl StudioApp {
         !close_requested
     }
 
+    pub(super) fn handle_drawing_tool_event(&mut self, event: CanvasToolEvent) {
+        match self.drawing_tool {
+            DrawingTool::Select => {}
+            DrawingTool::Reference { orientation, axes } if event.clicked => {
+                let Some((x, y)) = event
+                    .current
+                    .and_then(|point| coordinates_for_binding(point, axes))
+                else {
+                    return;
+                };
+                let value = match orientation {
+                    ReferenceOrientation::Vertical => x,
+                    ReferenceOrientation::Horizontal => y,
+                };
+                self.execute_document_edit(
+                    EditCommand::AddReferenceLine {
+                        orientation,
+                        value,
+                        axes,
+                    },
+                    "添加参考线",
+                );
+            }
+            DrawingTool::Reference { .. } => {}
+            DrawingTool::Measurement {
+                axes,
+                constraint,
+                start_arrow,
+                end_arrow,
+            } => {
+                if event.started {
+                    let Some(start) = event
+                        .press
+                        .or(event.current)
+                        .and_then(|point| coordinates_for_binding(point, axes))
+                    else {
+                        return;
+                    };
+                    self.tool_draft = Some(ToolDraft {
+                        start,
+                        end: start,
+                        axes,
+                        constraint,
+                        start_arrow,
+                        end_arrow,
+                    });
+                }
+                if let Some(end) = event
+                    .current
+                    .and_then(|point| coordinates_for_binding(point, axes))
+                    && let Some(draft) = &mut self.tool_draft
+                {
+                    draft.end = match constraint {
+                        MeasurementConstraint::Free => end,
+                        MeasurementConstraint::Horizontal => (end.0, draft.start.1),
+                        MeasurementConstraint::Vertical => (draft.start.0, end.1),
+                    };
+                }
+                if event.stopped
+                    && let Some(draft) = self.tool_draft.take()
+                {
+                    let length = (draft.end.0 - draft.start.0).hypot(draft.end.1 - draft.start.1);
+                    if length > f64::EPSILON {
+                        self.execute_document_edit(
+                            EditCommand::AddMeasurementArrow {
+                                start: draft.start,
+                                end: draft.end,
+                                axes: draft.axes,
+                                constraint: draft.constraint,
+                                start_arrow: draft.start_arrow,
+                                end_arrow: draft.end_arrow,
+                                label_nodes: None,
+                            },
+                            "添加测量箭头",
+                        );
+                    }
+                    self.drawing_tool = DrawingTool::Select;
+                }
+                let _ = event.shift;
+            }
+        }
+    }
+
     pub(super) fn handle_artist_drag(&mut self, event: CanvasDragEvent, zoom: f32) {
         let (base_width_mm, base_height_mm) = self.document.figure_size_mm();
         let base_width = base_width_mm * 72.0 / 25.4;
@@ -3030,6 +3172,10 @@ impl StudioApp {
             let connector_index = (event.role == SelectableRole::AnnotationConnector)
                 .then_some(event.data_index)
                 .flatten();
+            let connector_text_bounds = connector_index.and_then(|_| {
+                layout_hit_bounds_for_role(&self.resolved, &event.id, SelectableRole::Annotation)
+            });
+            let mut measurement_drag = None;
             let (start_x, start_y) = match &record.properties {
                 ArtistProperties::Annotation { x_pt, y_pt, .. }
                     if event.role == SelectableRole::Annotation =>
@@ -3077,6 +3223,54 @@ impl StudioApp {
                     });
                     (bounds.0, bounds.1)
                 }
+                ArtistProperties::ReferenceLine { value, .. }
+                    if event.role == SelectableRole::ReferenceLine =>
+                {
+                    (*value, *value)
+                }
+                ArtistProperties::MeasurementArrow {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    axes,
+                    label_offset_x_pt,
+                    label_offset_y_pt,
+                    ..
+                } if matches!(
+                    event.role,
+                    SelectableRole::MeasurementArrow
+                        | SelectableRole::MeasurementArrowStart
+                        | SelectableRole::MeasurementArrowEnd
+                        | SelectableRole::MeasurementArrowLabel
+                ) =>
+                {
+                    let Some(press_pointer) = event.press_pointer else {
+                        return;
+                    };
+                    let press = if event.role == SelectableRole::MeasurementArrowLabel {
+                        (0.0, 0.0)
+                    } else {
+                        let Some(press) = active_data_coordinates_from_local(
+                            &self.document,
+                            self.resolved.layout.result.axes,
+                            press_pointer.0,
+                            press_pointer.1,
+                        )
+                        .and_then(|coordinates| coordinates_for_binding(coordinates, *axes)) else {
+                            return;
+                        };
+                        press
+                    };
+                    measurement_drag = Some(MeasurementDragContext {
+                        start: (*start_x, *start_y),
+                        end: (*end_x, *end_y),
+                        press,
+                        label_offset: (*label_offset_x_pt, *label_offset_y_pt),
+                        axes: *axes,
+                    });
+                    (*start_x, *start_y)
+                }
                 _ => return,
             };
             self.edit_history.finish_coalescing();
@@ -3093,6 +3287,9 @@ impl StudioApp {
                 candidate_grid: None,
                 candidate_placement: None,
                 connector_index,
+                connector_text_bounds,
+                role: event.role,
+                measurement: measurement_drag,
             });
             self.selected_canvas_node = Some(event.id.clone());
             self.selected_canvas_role = Some(event.role);
@@ -3106,25 +3303,168 @@ impl StudioApp {
         };
         let frame_delta = drag.frame_delta(event.pointer, event.delta, zoom);
         if frame_delta != egui::Vec2::ZERO && zoom > 0.0 {
-            if let Some(connector_index) = drag.connector_index {
+            if event.role == SelectableRole::ReferenceLine {
                 if let Some((pointer_x, pointer_y)) = event.pointer
-                    && let Some((target_x, target_y)) = data_coordinates_from_local(
+                    && let Some(mut record) = self.document.artist_record(&event.id)
+                    && let ArtistProperties::ReferenceLine {
+                        orientation,
+                        value,
+                        axes,
+                        ..
+                    } = &mut record.properties
+                    && let Some(coordinates) = active_data_coordinates_from_local(
                         &self.document,
                         self.resolved.layout.result.axes,
                         pointer_x,
                         pointer_y,
                     )
-                    && let Some(mut record) = self.document.artist_record(&event.id)
-                    && let ArtistProperties::Annotation { connectors, .. } = &mut record.properties
-                    && let Some(connector) = connectors.get_mut(connector_index)
+                    && let Some((x, y)) = coordinates_for_binding(coordinates, *axes)
                 {
-                    connector.target_x = target_x;
-                    connector.target_y = target_y;
+                    *value = match orientation {
+                        ReferenceOrientation::Vertical => x,
+                        ReferenceOrientation::Horizontal => y,
+                    };
                     self.execute_document_edit_with_group(
                         EditCommand::SetArtistRecord(record),
                         self.language.text(Text::ArtistProperties),
                         Some(EditGroup::ArtistProperties),
                     );
+                }
+            } else if let Some(measurement) = drag.measurement {
+                if event.role == SelectableRole::MeasurementArrowLabel {
+                    if let (Some(pointer), Some(press_pointer)) =
+                        (event.pointer, drag.press_pointer)
+                        && let Some(mut record) = self.document.artist_record(&event.id)
+                        && let ArtistProperties::MeasurementArrow {
+                            label_offset_x_pt,
+                            label_offset_y_pt,
+                            ..
+                        } = &mut record.properties
+                    {
+                        *label_offset_x_pt =
+                            measurement.label_offset.0 + pointer.0 - press_pointer.0;
+                        *label_offset_y_pt =
+                            measurement.label_offset.1 + pointer.1 - press_pointer.1;
+                        self.execute_document_edit_with_group(
+                            EditCommand::SetArtistRecord(record),
+                            self.language.text(Text::ArtistProperties),
+                            Some(EditGroup::ArtistProperties),
+                        );
+                    }
+                    if event.stopped {
+                        self.edit_history.finish_coalescing();
+                        self.active_artist_drag = None;
+                    }
+                    return;
+                }
+                let pointer = event.pointer.map(|(mut pointer_x, mut pointer_y)| {
+                    if event.shift
+                        && matches!(
+                            event.role,
+                            SelectableRole::MeasurementArrowStart
+                                | SelectableRole::MeasurementArrowEnd
+                        )
+                    {
+                        let fixed_endpoint = if event.role == SelectableRole::MeasurementArrowStart
+                        {
+                            measurement.end
+                        } else {
+                            measurement.start
+                        };
+                        if let Some((fixed_x, fixed_y)) = data_point_to_local(
+                            &self.document,
+                            self.resolved.layout.result.axes,
+                            measurement.axes,
+                            fixed_endpoint,
+                        ) {
+                            let snapped = snap_pointer_to_special_angle(
+                                egui::pos2(fixed_x as f32, fixed_y as f32),
+                                egui::pos2(pointer_x as f32, pointer_y as f32),
+                            );
+                            pointer_x = f64::from(snapped.x);
+                            pointer_y = f64::from(snapped.y);
+                        }
+                    }
+                    (pointer_x, pointer_y)
+                });
+                if let Some((pointer_x, pointer_y)) = pointer
+                    && let Some(current) = active_data_coordinates_from_local(
+                        &self.document,
+                        self.resolved.layout.result.axes,
+                        pointer_x,
+                        pointer_y,
+                    )
+                    .and_then(|coordinates| coordinates_for_binding(coordinates, measurement.axes))
+                    && let Some(mut record) = self.document.artist_record(&event.id)
+                    && let ArtistProperties::MeasurementArrow {
+                        start_x,
+                        start_y,
+                        end_x,
+                        end_y,
+                        constraint,
+                        ..
+                    } = &mut record.properties
+                {
+                    match event.role {
+                        SelectableRole::MeasurementArrowStart => {
+                            *start_x = current.0;
+                            *start_y = current.1;
+                        }
+                        SelectableRole::MeasurementArrowEnd => {
+                            *end_x = current.0;
+                            *end_y = current.1;
+                        }
+                        SelectableRole::MeasurementArrow => {
+                            let delta = (
+                                current.0 - measurement.press.0,
+                                current.1 - measurement.press.1,
+                            );
+                            *start_x = measurement.start.0 + delta.0;
+                            *start_y = measurement.start.1 + delta.1;
+                            *end_x = measurement.end.0 + delta.0;
+                            *end_y = measurement.end.1 + delta.1;
+                        }
+                        _ => {}
+                    }
+                    match constraint {
+                        MeasurementConstraint::Free => {}
+                        MeasurementConstraint::Horizontal => *end_y = *start_y,
+                        MeasurementConstraint::Vertical => *end_x = *start_x,
+                    }
+                    self.execute_document_edit_with_group(
+                        EditCommand::SetArtistRecord(record),
+                        self.language.text(Text::ArtistProperties),
+                        Some(EditGroup::ArtistProperties),
+                    );
+                }
+            } else if let Some(connector_index) = drag.connector_index {
+                if let Some((mut pointer_x, mut pointer_y)) = event.pointer
+                    && let Some(mut record) = self.document.artist_record(&event.id)
+                    && let ArtistProperties::Annotation { connectors, .. } = &mut record.properties
+                    && let Some(connector) = connectors.get_mut(connector_index)
+                {
+                    if event.shift
+                        && let Some(bounds) = drag.connector_text_bounds
+                    {
+                        (pointer_x, pointer_y) =
+                            snap_connector_target_to_text_bounds(bounds, (pointer_x, pointer_y));
+                    }
+                    if let Some((target_x, target_y)) = active_data_coordinates_from_local(
+                        &self.document,
+                        self.resolved.layout.result.axes,
+                        pointer_x,
+                        pointer_y,
+                    )
+                    .and_then(|coordinates| coordinates_for_binding(coordinates, connector.axes))
+                    {
+                        connector.target_x = target_x;
+                        connector.target_y = target_y;
+                        self.execute_document_edit_with_group(
+                            EditCommand::SetArtistRecord(record),
+                            self.language.text(Text::ArtistProperties),
+                            Some(EditGroup::ArtistProperties),
+                        );
+                    }
                 }
             } else if let Some(legend) = drag.legend {
                 drag.total_delta += frame_delta;
@@ -3189,6 +3529,13 @@ impl StudioApp {
             }
         }
         if event.stopped {
+            if event.role == SelectableRole::ReferenceLine {
+                self.execute_document_edit_with_group(
+                    EditCommand::RefreshAutoscale,
+                    "更新自动范围",
+                    Some(EditGroup::ArtistProperties),
+                );
+            }
             if let Some(drag) = self.active_artist_drag.as_ref()
                 && drag.legend.is_some()
                 && drag.total_delta != egui::Vec2::ZERO
@@ -3231,6 +3578,13 @@ impl StudioApp {
         let Some(mut record) = self.document.artist_record(artist_id) else {
             return;
         };
+        let reference_autoscale_before = matches!(
+            record.properties,
+            ArtistProperties::ReferenceLine {
+                include_in_autoscale: true,
+                ..
+            }
+        );
         let palette = self.document.palette_colors().to_vec();
         let (canvas_width_mm, canvas_height_mm) = self.document.figure_size_mm();
         let mut changed = false;
@@ -3242,6 +3596,8 @@ impl StudioApp {
         let mut apply_marker_fill_to_all = None;
         let mut series_style_change = None;
         let mut axis_binding_change = None;
+        let mut measurement_label_change = None;
+        let mut delete_drawing_object = false;
         let properties_title = self.language.text(Text::ArtistProperties);
         let mut draw_properties = |ui: &mut egui::Ui| {
             if matches!(record.role, ArtistRole::Annotation | ArtistRole::Legend) {
@@ -3462,11 +3818,13 @@ impl StudioApp {
                     value,
                     axes,
                     stroke,
+                    include_in_autoscale,
                 } => {
-                    changed |= axis_binding_editor(
+                    changed |= reference_axis_binding_editor(
                         ui,
                         ("reference-axis-binding", artist_id),
                         self.document.axis_mode(),
+                        *orientation,
                         axes,
                     );
                     let response = ui
@@ -3504,10 +3862,171 @@ impl StudioApp {
                     changed |= edit.changed;
                     continuous_change |= edit.continuous;
                     finish_coalescing |= edit.finish;
+                    if !reference_value_is_visible(&self.document, *orientation, *axes, *value) {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "当前值超出坐标轴范围；对象已保存，但画布中不可见。",
+                        );
+                    }
+                    changed |= ui.checkbox(include_in_autoscale, "纳入自动范围").changed();
                     let edit = stroke_editor(ui, self.language, artist_id, stroke, &palette);
                     changed |= edit.changed;
                     continuous_change |= edit.continuous;
                     finish_coalescing |= edit.finish;
+                    delete_drawing_object |= ui.button("删除参考线").clicked();
+                }
+                ArtistProperties::MeasurementArrow {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    axes,
+                    stroke,
+                    start_arrow,
+                    end_arrow,
+                    arrow_head,
+                    arrow_size_pt,
+                    constraint,
+                    label_id,
+                    label_offset_x_pt,
+                    label_offset_y_pt,
+                } => {
+                    changed |= axis_binding_editor(
+                        ui,
+                        ("measurement-arrow-axis-binding", artist_id),
+                        self.document.axis_mode(),
+                        axes,
+                    );
+                    for (name, value) in [
+                        ("起点 X", &mut *start_x),
+                        ("起点 Y", &mut *start_y),
+                        ("终点 X", &mut *end_x),
+                        ("终点 Y", &mut *end_y),
+                    ] {
+                        let response =
+                            ui.add(egui::DragValue::new(value).prefix(format!("{name}: ")));
+                        let edit = continuous_edit(&response);
+                        changed |= edit.changed;
+                        continuous_change |= edit.continuous;
+                        finish_coalescing |= edit.finish;
+                    }
+                    if !measurement_points_are_visible(
+                        &self.document,
+                        *axes,
+                        (*start_x, *start_y),
+                        (*end_x, *end_y),
+                    ) {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "一个或多个端点超出坐标轴范围；对象已保存，但超出部分不可见。",
+                        );
+                    }
+                    match constraint {
+                        MeasurementConstraint::Horizontal => {
+                            let mut delta = *end_x - *start_x;
+                            let response = ui.add(egui::DragValue::new(&mut delta).prefix("ΔX: "));
+                            if response.changed() {
+                                *end_x = *start_x + delta;
+                                *end_y = *start_y;
+                                changed = true;
+                            }
+                        }
+                        MeasurementConstraint::Vertical => {
+                            let mut delta = *end_y - *start_y;
+                            let response = ui.add(egui::DragValue::new(&mut delta).prefix("ΔY: "));
+                            if response.changed() {
+                                *end_y = *start_y + delta;
+                                *end_x = *start_x;
+                                changed = true;
+                            }
+                        }
+                        MeasurementConstraint::Free => {
+                            if let Some((start, end)) = data_point_to_local(
+                                &self.document,
+                                self.resolved.layout.result.axes,
+                                *axes,
+                                (*start_x, *start_y),
+                            )
+                            .zip(data_point_to_local(
+                                &self.document,
+                                self.resolved.layout.result.axes,
+                                *axes,
+                                (*end_x, *end_y),
+                            )) {
+                                let angle = (end.1 - start.1).atan2(end.0 - start.0).to_degrees();
+                                ui.weak(format!("屏幕角度: {angle:.1}°"));
+                            }
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("方向约束");
+                        for (candidate, name) in [
+                            (MeasurementConstraint::Free, "自由"),
+                            (MeasurementConstraint::Horizontal, "水平"),
+                            (MeasurementConstraint::Vertical, "垂直"),
+                        ] {
+                            changed |= ui.selectable_value(constraint, candidate, name).changed();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        changed |= ui.checkbox(start_arrow, "起点箭头").changed();
+                        changed |= ui.checkbox(end_arrow, "末端箭头").changed();
+                    });
+                    egui::ComboBox::from_id_salt(("measurement-arrow-head", artist_id))
+                        .selected_text(match arrow_head {
+                            ArrowHead::Open => "空心箭头",
+                            ArrowHead::Filled => "实心箭头",
+                        })
+                        .show_ui(ui, |ui| {
+                            changed |= ui
+                                .selectable_value(arrow_head, ArrowHead::Open, "空心箭头")
+                                .changed();
+                            changed |= ui
+                                .selectable_value(arrow_head, ArrowHead::Filled, "实心箭头")
+                                .changed();
+                        });
+                    let response = ui.add(
+                        egui::DragValue::new(arrow_size_pt)
+                            .range(2.0..=18.0)
+                            .prefix("箭头大小 (pt): "),
+                    );
+                    let edit = continuous_edit(&response);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
+                    stroke.color_id = "object-black".to_owned();
+                    let response = ui.add(
+                        egui::DragValue::new(&mut stroke.width_pt)
+                            .range(0.7..=12.0)
+                            .prefix("线宽 (pt): "),
+                    );
+                    let edit = continuous_edit(&response);
+                    changed |= edit.changed;
+                    continuous_change |= edit.continuous;
+                    finish_coalescing |= edit.finish;
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("标签偏移");
+                        changed |= ui
+                            .add(egui::DragValue::new(label_offset_x_pt).prefix("X: "))
+                            .changed();
+                        changed |= ui
+                            .add(egui::DragValue::new(label_offset_y_pt).prefix("Y: "))
+                            .changed();
+                    });
+                    if let Some(label_id) = label_id {
+                        if !compact {
+                            semantic_labels.push(label_id.clone());
+                        } else {
+                            self.quick_semantic_label_editor(ui, label_id);
+                        }
+                        if ui.button("移除标签").clicked() {
+                            measurement_label_change = Some(None);
+                        }
+                    } else if ui.button("添加标签").clicked() {
+                        measurement_label_change =
+                            Some(Some(vec![LabelNode::Text("Δx".to_owned())]));
+                    }
+                    delete_drawing_object |= ui.button("删除测量箭头").clicked();
                 }
                 ArtistProperties::Annotation {
                     label_id,
@@ -3591,6 +4110,31 @@ impl StudioApp {
                                     3 => (true, true),
                                     _ => (false, false),
                                 };
+                                egui::ComboBox::from_id_salt((
+                                    "annotation-arrow-head",
+                                    artist_id,
+                                    index,
+                                ))
+                                .selected_text(match connector.arrow_head {
+                                    ArrowHead::Open => "空心箭头",
+                                    ArrowHead::Filled => "实心箭头",
+                                })
+                                .show_ui(ui, |ui| {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut connector.arrow_head,
+                                            ArrowHead::Open,
+                                            "空心箭头",
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut connector.arrow_head,
+                                            ArrowHead::Filled,
+                                            "实心箭头",
+                                        )
+                                        .changed();
+                                });
                                 let response = ui.add(
                                     egui::DragValue::new(&mut connector.arrow_size_pt)
                                         .range(2.0..=18.0)
@@ -3633,6 +4177,7 @@ impl StudioApp {
                             },
                             start_arrow: false,
                             end_arrow: true,
+                            arrow_head: ArrowHead::Open,
                             arrow_size_pt: 5.0,
                         });
                         changed = true;
@@ -3852,6 +4397,27 @@ impl StudioApp {
                 .default_open(true)
                 .show(ui, draw_properties);
         }
+        if delete_drawing_object {
+            self.execute_document_edit(
+                EditCommand::DeleteDrawingObject {
+                    artist_id: artist_id.to_owned(),
+                },
+                "删除绘图对象",
+            );
+            self.selected_canvas_node = None;
+            self.selected_canvas_role = None;
+            return;
+        }
+        if let Some(nodes) = measurement_label_change {
+            self.execute_document_edit(
+                EditCommand::SetMeasurementArrowLabel {
+                    artist_id: artist_id.to_owned(),
+                    nodes,
+                },
+                "编辑测量标签",
+            );
+            return;
+        }
         if let Some(style) = series_style_change {
             if self.execute_document_edit(
                 EditCommand::SetSeriesStyle {
@@ -3873,13 +4439,31 @@ impl StudioApp {
                 "更改曲线坐标轴",
             );
         }
+        let refresh_reference_autoscale = changed
+            && (reference_autoscale_before
+                || matches!(
+                    &record.properties,
+                    ArtistProperties::ReferenceLine {
+                        include_in_autoscale: true,
+                        ..
+                    }
+                ));
+        let edit_group = (continuous_change || refresh_reference_autoscale)
+            .then_some(EditGroup::ArtistProperties);
         if changed
             && self.execute_document_edit_with_group(
                 EditCommand::SetArtistRecord(record),
                 self.language.text(Text::ArtistProperties),
-                continuous_change.then_some(EditGroup::ArtistProperties),
+                edit_group,
             )
         {
+            if refresh_reference_autoscale {
+                self.execute_document_edit_with_group(
+                    EditCommand::RefreshAutoscale,
+                    "更新自动范围",
+                    edit_group,
+                );
+            }
             ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
         }
         if finish_coalescing {
@@ -3941,11 +4525,15 @@ impl StudioApp {
         initial: String,
         target: LabelInputTarget<'_>,
     ) {
-        let allows_hard_line_breaks = matches!(
-            target,
-            LabelInputTarget::Semantic(label_id)
-                if self.annotation_artist_for_label(label_id).is_some()
-        );
+        let annotation_artist = match target {
+            LabelInputTarget::Semantic(label_id) => self.annotation_artist_for_label(label_id),
+            LabelInputTarget::Axis(_) => None,
+        };
+        let measurement_artist = match target {
+            LabelInputTarget::Semantic(label_id) => self.measurement_artist_for_label(label_id),
+            LabelInputTarget::Axis(_) => None,
+        };
+        let allows_hard_line_breaks = annotation_artist.is_some() || measurement_artist.is_some();
         let state = self
             .label_inputs
             .entry(key.to_owned())
@@ -4076,9 +4664,21 @@ impl StudioApp {
         }
         changed |= normalize_label_editor_line_breaks(&mut text, allows_hard_line_breaks);
         self.label_inputs.get_mut(key).unwrap().text = text.clone();
-        let empty_annotation = text.trim().is_empty() && allows_hard_line_breaks;
+        let empty_annotation = text.trim().is_empty() && annotation_artist.is_some();
+        let empty_measurement = text.trim().is_empty() && measurement_artist.is_some();
         if empty_annotation {
             ui.weak("内容已清空；关闭窗口后将删除此标注");
+        } else if empty_measurement {
+            ui.weak("内容已清空；测量标签已移除，箭头保留");
+            if changed && let Some(artist_id) = measurement_artist {
+                self.execute_document_edit(
+                    EditCommand::SetMeasurementArrowLabel {
+                        artist_id,
+                        nodes: None,
+                    },
+                    "移除测量标签",
+                );
+            }
         } else {
             match label_input::parse(&text).and_then(|nodes| {
                 label_input::validate_glyphs(&nodes)?;
@@ -4150,6 +4750,73 @@ fn axis_binding_name(binding: AxisBinding) -> &'static str {
     }
 }
 
+fn coordinates_for_binding(
+    coordinates: HoverDataCoordinates,
+    binding: AxisBinding,
+) -> Option<(f64, f64)> {
+    let x = match binding.x {
+        XAxisSlot::X1 => coordinates.x1,
+        XAxisSlot::X2 => coordinates.x2?,
+    };
+    let y = match binding.y {
+        YAxisSlot::Y1 => coordinates.y1,
+        YAxisSlot::Y2 => coordinates.y2?,
+    };
+    Some((x, y))
+}
+
+fn axis_value_is_visible(axis: &instplot_studio::AxisRecord, value: f64) -> bool {
+    value.is_finite()
+        && value >= axis.minimum
+        && value <= axis.maximum
+        && (!matches!(axis.scale, instplot_studio::AxisScale::Log10) || value > 0.0)
+}
+
+fn reference_value_is_visible(
+    document: &FigureDocument,
+    orientation: ReferenceOrientation,
+    binding: AxisBinding,
+    value: f64,
+) -> bool {
+    let identity = match orientation {
+        ReferenceOrientation::Vertical => match binding.x {
+            XAxisSlot::X1 => AxisIdentity::X1,
+            XAxisSlot::X2 => AxisIdentity::X2,
+        },
+        ReferenceOrientation::Horizontal => match binding.y {
+            YAxisSlot::Y1 => AxisIdentity::Y1,
+            YAxisSlot::Y2 => AxisIdentity::Y2,
+        },
+    };
+    document
+        .axis_record_by_identity(identity)
+        .is_some_and(|axis| axis_value_is_visible(&axis, value))
+}
+
+fn measurement_points_are_visible(
+    document: &FigureDocument,
+    binding: AxisBinding,
+    start: (f64, f64),
+    end: (f64, f64),
+) -> bool {
+    let x_identity = match binding.x {
+        XAxisSlot::X1 => AxisIdentity::X1,
+        XAxisSlot::X2 => AxisIdentity::X2,
+    };
+    let y_identity = match binding.y {
+        YAxisSlot::Y1 => AxisIdentity::Y1,
+        YAxisSlot::Y2 => AxisIdentity::Y2,
+    };
+    document
+        .axis_record_by_identity(x_identity)
+        .zip(document.axis_record_by_identity(y_identity))
+        .is_some_and(|(x_axis, y_axis)| {
+            [start, end].into_iter().all(|(x, y)| {
+                axis_value_is_visible(&x_axis, x) && axis_value_is_visible(&y_axis, y)
+            })
+        })
+}
+
 fn axis_binding_editor(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
@@ -4187,6 +4854,50 @@ fn axis_binding_editor(
     });
     if !binding.is_enabled_in(mode) {
         ui.weak("所绑定的副轴当前已关闭；此数据坐标对象暂时隐藏。");
+    }
+    *binding != before
+}
+
+fn reference_axis_binding_editor(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    mode: AxisMode,
+    orientation: ReferenceOrientation,
+    binding: &mut AxisBinding,
+) -> bool {
+    let before = *binding;
+    ui.horizontal(|ui| {
+        ui.label("坐标轴");
+        egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(match orientation {
+                ReferenceOrientation::Vertical => match binding.x {
+                    XAxisSlot::X1 => "X1",
+                    XAxisSlot::X2 => "X2",
+                },
+                ReferenceOrientation::Horizontal => match binding.y {
+                    YAxisSlot::Y1 => "Y1",
+                    YAxisSlot::Y2 => "Y2",
+                },
+            })
+            .show_ui(ui, |ui| match orientation {
+                ReferenceOrientation::Vertical => {
+                    ui.selectable_value(&mut binding.x, XAxisSlot::X1, "X1");
+                    if mode == AxisMode::DualX {
+                        ui.selectable_value(&mut binding.x, XAxisSlot::X2, "X2");
+                    }
+                    binding.y = YAxisSlot::Y1;
+                }
+                ReferenceOrientation::Horizontal => {
+                    ui.selectable_value(&mut binding.y, YAxisSlot::Y1, "Y1");
+                    if mode == AxisMode::DualY {
+                        ui.selectable_value(&mut binding.y, YAxisSlot::Y2, "Y2");
+                    }
+                    binding.x = XAxisSlot::X1;
+                }
+            });
+    });
+    if !binding.is_enabled_in(mode) {
+        ui.weak("所绑定的副轴当前已关闭；此参考线暂时隐藏。");
     }
     *binding != before
 }

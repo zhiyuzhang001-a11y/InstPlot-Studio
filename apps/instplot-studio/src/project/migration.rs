@@ -22,7 +22,7 @@ pub(super) fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> 
     axes.y.maximum = legacy.y_max;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v0".to_owned(),
-        operation: "migrate_schema_0_to_8".to_owned(),
+        operation: "migrate_schema_0_to_9".to_owned(),
         input_ids: vec![legacy.producer_version],
         parameters: BTreeMap::new(),
     });
@@ -30,12 +30,12 @@ pub(super) fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> 
 }
 
 pub(super) fn migrate_v7(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    upgrade_value_to_v9(&mut value, 7)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 7 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v7".to_owned(),
-        operation: "migrate_schema_7_to_8".to_owned(),
+        operation: "migrate_schema_7_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -43,7 +43,6 @@ pub(super) fn migrate_v7(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
     let artists = value["figure"]["artists"]
         .as_array_mut()
         .ok_or_else(|| ProjectError::Decode("schema 1 artists are missing".to_owned()))?;
@@ -53,11 +52,12 @@ pub(super) fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectErr
             .ok_or_else(|| ProjectError::Decode("schema 1 artist is invalid".to_owned()))?
             .insert("visible".to_owned(), Value::Bool(true));
     }
+    upgrade_value_to_v9(&mut value, 1)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 1 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v1".to_owned(),
-        operation: "migrate_schema_1_to_8".to_owned(),
+        operation: "migrate_schema_1_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -65,12 +65,12 @@ pub(super) fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    upgrade_value_to_v9(&mut value, 2)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 2 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v2".to_owned(),
-        operation: "migrate_schema_2_to_8".to_owned(),
+        operation: "migrate_schema_2_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -78,12 +78,12 @@ pub(super) fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v3(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    upgrade_value_to_v9(&mut value, 3)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 3 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v3".to_owned(),
-        operation: "migrate_schema_3_to_8".to_owned(),
+        operation: "migrate_schema_3_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -91,12 +91,12 @@ pub(super) fn migrate_v3(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v4(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    upgrade_value_to_v9(&mut value, 4)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 4 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v4".to_owned(),
-        operation: "migrate_schema_4_to_8".to_owned(),
+        operation: "migrate_schema_4_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -104,12 +104,12 @@ pub(super) fn migrate_v4(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v5(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    upgrade_value_to_v9(&mut value, 5)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 5 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v5".to_owned(),
-        operation: "migrate_schema_5_to_8".to_owned(),
+        operation: "migrate_schema_5_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -117,7 +117,6 @@ pub(super) fn migrate_v5(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v6(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
     let sources = value["data_sources"]
         .as_array_mut()
         .ok_or_else(|| ProjectError::Decode("schema 6 data sources are missing".to_owned()))?;
@@ -138,15 +137,111 @@ pub(super) fn migrate_v6(mut value: Value) -> Result<ProjectDocument, ProjectErr
             }),
         );
     }
+    upgrade_value_to_v9(&mut value, 6)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 6 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v6".to_owned(),
-        operation: "migrate_schema_6_to_8".to_owned(),
+        operation: "migrate_schema_6_to_9".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
     finish_legacy_migration(document, 6)
+}
+
+pub(super) fn migrate_v8(mut value: Value) -> Result<ProjectDocument, ProjectError> {
+    upgrade_value_to_v9(&mut value, 8)?;
+    let mut document: ProjectDocument = serde_json::from_value(value)
+        .map_err(|error| ProjectError::Decode(format!("schema 8 migration: {error}")))?;
+    document.provenance.push(ProvenanceRecord {
+        id: "provenance-migrate-v8".to_owned(),
+        operation: "migrate_schema_8_to_9".to_owned(),
+        input_ids: Vec::new(),
+        parameters: BTreeMap::new(),
+    });
+    Ok(document)
+}
+
+fn upgrade_value_to_v9(value: &mut Value, source_schema: u32) -> Result<(), ProjectError> {
+    value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
+    let axes = value["figure"]["axes"]
+        .as_array_mut()
+        .ok_or_else(|| ProjectError::Decode(format!("schema {source_schema} axes are missing")))?;
+    for axes_record in axes {
+        let object = axes_record.as_object_mut().ok_or_else(|| {
+            ProjectError::Decode(format!("schema {source_schema} axes record is invalid"))
+        })?;
+        for key in ["x", "y", "x2", "y2"] {
+            let Some(axis) = object.get_mut(key).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let appearance = axis
+                .entry("appearance")
+                .or_insert_with(|| {
+                    serde_json::to_value(AxisAppearanceRecord::default())
+                        .expect("default axis appearance is serializable")
+                })
+                .as_object_mut()
+                .ok_or_else(|| {
+                    ProjectError::Decode(format!(
+                        "schema {source_schema} axis appearance is invalid"
+                    ))
+                })?;
+            appearance
+                .entry("spine_color_id")
+                .or_insert_with(|| Value::String("object-black".to_owned()));
+        }
+    }
+    let artists = value["figure"]["artists"].as_array_mut().ok_or_else(|| {
+        ProjectError::Decode(format!("schema {source_schema} artists are missing"))
+    })?;
+    for artist in artists {
+        let Some(properties) = artist.get_mut("properties").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        match properties.get("kind").and_then(Value::as_str) {
+            Some("reference_line") => {
+                properties
+                    .entry("include_in_autoscale")
+                    .or_insert(Value::Bool(true));
+                let orientation = properties
+                    .get("orientation")
+                    .and_then(Value::as_str)
+                    .unwrap_or("horizontal")
+                    .to_owned();
+                let axes = properties
+                    .entry("axes")
+                    .or_insert_with(|| serde_json::json!({"x":"x1","y":"y1"}))
+                    .as_object_mut()
+                    .ok_or_else(|| {
+                        ProjectError::Decode(format!(
+                            "schema {source_schema} reference axes are invalid"
+                        ))
+                    })?;
+                if orientation == "vertical" {
+                    axes.insert("y".to_owned(), Value::String("y1".to_owned()));
+                } else {
+                    axes.insert("x".to_owned(), Value::String("x1".to_owned()));
+                }
+            }
+            Some("annotation") => {
+                if let Some(connectors) = properties
+                    .get_mut("connectors")
+                    .and_then(Value::as_array_mut)
+                {
+                    for connector in connectors {
+                        if let Some(connector) = connector.as_object_mut() {
+                            connector
+                                .entry("arrow_head")
+                                .or_insert_with(|| Value::String("open".to_owned()));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn finish_legacy_migration(

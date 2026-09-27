@@ -7,8 +7,9 @@ use instplot_render::{
 use instplot_text::Label;
 
 use crate::model::{
-    Annotation, AnnotationPosition, AxisPair, AxisSpec, Chart, DashStyle, DataPoint,
-    LegendPosition, MarkerShape, MarkerStyle, Series, TickDirection,
+    Annotation, AnnotationPosition, ArrowHead, AxisPair, AxisSpec, Chart, DashStyle, DataPoint,
+    LegendPosition, MarkerShape, MarkerStyle, MeasurementArrow, ReferenceOrientation, Series,
+    TickDirection,
 };
 use crate::scale::{Scale, collision_stride, minor_ticks_with_interval};
 use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
@@ -62,6 +63,11 @@ pub enum SelectableRole {
     ErrorBar,
     Annotation,
     AnnotationConnector,
+    ReferenceLine,
+    MeasurementArrow,
+    MeasurementArrowStart,
+    MeasurementArrowEnd,
+    MeasurementArrowLabel,
     Legend,
 }
 
@@ -106,8 +112,13 @@ impl HitMap {
                 if !expanded.contains(point_bounds) {
                     return false;
                 }
-                item.role != SelectableRole::Series
-                    || distance_to_polyline(x, y, &item.path_proximity) <= tolerance
+                !matches!(
+                    item.role,
+                    SelectableRole::Series
+                        | SelectableRole::ReferenceLine
+                        | SelectableRole::MeasurementArrow
+                        | SelectableRole::AnnotationConnector
+                ) || distance_to_polyline(x, y, &item.path_proximity) <= tolerance
             })
             .collect();
         matches.sort_by_key(|item: &&HitItem| std::cmp::Reverse(item.z_order));
@@ -494,7 +505,16 @@ pub fn layout_with_measurer(
         &mut hit_map,
         &mut warnings,
     );
+    draw_reference_lines(chart, axes, &mut display_list, &mut hit_map)?;
     draw_series(chart, axes, &mut display_list, &mut hit_map)?;
+    draw_measurement_arrows(
+        chart,
+        axes,
+        measurer,
+        &mut display_list,
+        &mut hit_map,
+        &mut warnings,
+    )?;
     draw_annotations(
         chart,
         axes,
@@ -1152,8 +1172,13 @@ fn draw_axes(
     warnings: &mut Vec<LayoutWarning>,
 ) -> (Bounds, Bounds, Option<Bounds>, Option<Bounds>) {
     draw_grid(chart, axes, x_axis, y_axis, list);
-    let spine = stroke(
-        Color(45, 50, 55, 255),
+    let x_spine = stroke(
+        chart.x.appearance.spine_color,
+        AXIS_STROKE_WIDTH_PT,
+        DashStyle::Solid,
+    );
+    let y_spine = stroke(
+        chart.y.appearance.spine_color,
         AXIS_STROKE_WIDTH_PT,
         DashStyle::Solid,
     );
@@ -1163,7 +1188,7 @@ fn draw_axes(
             chart.id,
             (axes.x, axes.bottom()),
             (axes.right(), axes.bottom()),
-            &spine,
+            &x_spine,
         );
     }
     if chart.x2.is_none() && chart.x.appearance.far_spine {
@@ -1172,7 +1197,7 @@ fn draw_axes(
             chart.id,
             (axes.x, axes.y),
             (axes.right(), axes.y),
-            &spine,
+            &x_spine,
         );
     }
     if chart.y.appearance.near_spine {
@@ -1181,7 +1206,7 @@ fn draw_axes(
             chart.id,
             (axes.x, axes.y),
             (axes.x, axes.bottom()),
-            &spine,
+            &y_spine,
         );
     }
     if chart.y2.is_none() && chart.y.appearance.far_spine {
@@ -1190,7 +1215,7 @@ fn draw_axes(
             chart.id,
             (axes.right(), axes.y),
             (axes.right(), axes.bottom()),
-            &spine,
+            &y_spine,
         );
     }
     for tick in &x_axis.major {
@@ -1540,7 +1565,7 @@ fn draw_secondary_x_axis(
     warnings: &mut Vec<LayoutWarning>,
 ) -> Bounds {
     let spine = stroke(
-        Color(45, 50, 55, 255),
+        axis.appearance.spine_color,
         AXIS_STROKE_WIDTH_PT,
         DashStyle::Solid,
     );
@@ -1660,7 +1685,7 @@ fn draw_secondary_y_axis(
     warnings: &mut Vec<LayoutWarning>,
 ) -> Bounds {
     let spine = stroke(
-        Color(45, 50, 55, 255),
+        axis.appearance.spine_color,
         AXIS_STROKE_WIDTH_PT,
         DashStyle::Solid,
     );
@@ -1870,6 +1895,280 @@ fn grid_line(
         },
         fill: None,
         stroke: Some(style.clone()),
+    });
+}
+
+fn draw_reference_lines(
+    chart: &Chart,
+    axes: Bounds,
+    list: &mut DisplayList,
+    hit_map: &mut HitMap,
+) -> Result<(), LayoutError> {
+    if chart.reference_lines.is_empty() {
+        return Ok(());
+    }
+    list.items.push(DisplayItem::ClipPush {
+        source: chart.id,
+        x: pt(axes.x),
+        y: pt(axes.y),
+        width: pt(axes.width),
+        height: pt(axes.height),
+    });
+    for (index, reference) in chart.reference_lines.iter().enumerate() {
+        let pair = reference.axes;
+        let Some((x_axis, y_axis)) = axis_specs(chart, pair) else {
+            return Err(LayoutError::InvalidData(reference.id));
+        };
+        let (start, end) = match reference.orientation {
+            ReferenceOrientation::Vertical => (
+                DataPoint {
+                    x: reference.value,
+                    y: y_axis.minimum,
+                },
+                DataPoint {
+                    x: reference.value,
+                    y: y_axis.maximum,
+                },
+            ),
+            ReferenceOrientation::Horizontal => (
+                DataPoint {
+                    x: x_axis.minimum,
+                    y: reference.value,
+                },
+                DataPoint {
+                    x: x_axis.maximum,
+                    y: reference.value,
+                },
+            ),
+        };
+        let Some((start, end)) =
+            map_point(chart, axes, pair, start).zip(map_point(chart, axes, pair, end))
+        else {
+            return Err(LayoutError::InvalidData(reference.id));
+        };
+        let points = vec![start, end];
+        list.items.push(DisplayItem::Path {
+            source: reference.id,
+            path: polyline(&points),
+            fill: None,
+            stroke: Some(stroke(
+                reference.color,
+                reference.stroke.width,
+                reference.stroke.dash,
+            )),
+        });
+        hit_map.items.push(HitItem {
+            node: reference.id,
+            bounds: bounds_of_points(&points, reference.stroke.width + 4.0),
+            z_order: 50 + index as u32,
+            role: SelectableRole::ReferenceLine,
+            data_index: None,
+            tooltip: Some(format!("reference: {:.6}", reference.value)),
+            path_proximity: points,
+        });
+    }
+    list.items.push(DisplayItem::ClipPop { source: chart.id });
+    Ok(())
+}
+
+fn draw_measurement_arrows(
+    chart: &Chart,
+    axes: Bounds,
+    measurer: &mut dyn TextMeasurer,
+    list: &mut DisplayList,
+    hit_map: &mut HitMap,
+    warnings: &mut Vec<LayoutWarning>,
+) -> Result<(), LayoutError> {
+    if chart.measurement_arrows.is_empty() {
+        return Ok(());
+    }
+    list.items.push(DisplayItem::ClipPush {
+        source: chart.id,
+        x: pt(axes.x),
+        y: pt(axes.y),
+        width: pt(axes.width),
+        height: pt(axes.height),
+    });
+    for (index, arrow) in chart.measurement_arrows.iter().enumerate() {
+        let Some((start, end)) = map_point(chart, axes, arrow.axes, arrow.start)
+            .zip(map_point(chart, axes, arrow.axes, arrow.end))
+        else {
+            return Err(LayoutError::InvalidData(arrow.id));
+        };
+        draw_measurement_arrow_path(arrow, start, end, list);
+        let points = vec![start, end];
+        let z = 600 + index as u32 * 4;
+        hit_map.items.push(HitItem {
+            node: arrow.id,
+            bounds: bounds_of_points(&points, arrow.stroke.width + 5.0),
+            z_order: z,
+            role: SelectableRole::MeasurementArrow,
+            data_index: None,
+            tooltip: Some("measurement arrow".to_owned()),
+            path_proximity: points,
+        });
+        for (point, role, endpoint) in [
+            (start, SelectableRole::MeasurementArrowStart, 0),
+            (end, SelectableRole::MeasurementArrowEnd, 1),
+        ] {
+            hit_map.items.push(HitItem {
+                node: arrow.id,
+                bounds: Bounds {
+                    x: point.0 - 5.0,
+                    y: point.1 - 5.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+                z_order: z + 2,
+                role,
+                data_index: Some(endpoint),
+                tooltip: None,
+                path_proximity: vec![point],
+            });
+        }
+    }
+    list.items.push(DisplayItem::ClipPop { source: chart.id });
+    for (index, arrow) in chart.measurement_arrows.iter().enumerate() {
+        if arrow.labels.is_empty() {
+            continue;
+        }
+        let Some((start, end)) = map_point(chart, axes, arrow.axes, arrow.start)
+            .zip(map_point(chart, axes, arrow.axes, arrow.end))
+        else {
+            continue;
+        };
+        let center = (
+            (start.0 + end.0) / 2.0 + arrow.label_offset_pt.0,
+            (start.1 + end.1) / 2.0 + arrow.label_offset_pt.1,
+        );
+        let sizes = arrow
+            .labels
+            .iter()
+            .map(|label| measurer.measure_label(label, TICK_FONT))
+            .collect::<Vec<_>>();
+        let line_height = TICK_FONT * 1.25;
+        let width = sizes.iter().map(|size| size.width).fold(0.0, f64::max);
+        let first_ascent = sizes.first().map_or(0.0, |size| size.ascent);
+        let last_descent = sizes.last().map_or(0.0, |size| size.descent);
+        let bounds = Bounds {
+            x: center.0 - width / 2.0,
+            y: center.1 - first_ascent,
+            width,
+            height: first_ascent
+                + line_height * arrow.labels.len().saturating_sub(1) as f64
+                + last_descent,
+        };
+        for (line, label) in arrow.labels.iter().enumerate() {
+            label_text(
+                list,
+                arrow.id,
+                label,
+                (center.0, center.1 + line as f64 * line_height),
+                TICK_FONT,
+                TextAnchor::Middle,
+                0.0,
+            );
+        }
+        if bounds.x < 0.0
+            || bounds.y < 0.0
+            || bounds.right() > chart.width_pt
+            || bounds.bottom() > chart.height_pt
+        {
+            warnings.push(LayoutWarning::TextOutsideFigure {
+                node: arrow.id,
+                text: arrow
+                    .labels
+                    .iter()
+                    .map(Label::normalized_text)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            });
+        }
+        hit_map.items.push(HitItem {
+            node: arrow.id,
+            bounds,
+            z_order: 603 + index as u32 * 4,
+            role: SelectableRole::MeasurementArrowLabel,
+            data_index: None,
+            tooltip: Some(
+                arrow
+                    .labels
+                    .iter()
+                    .map(Label::normalized_text)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            path_proximity: vec![center],
+        });
+    }
+    Ok(())
+}
+
+fn draw_measurement_arrow_path(
+    arrow: &MeasurementArrow,
+    start: (f64, f64),
+    end: (f64, f64),
+    list: &mut DisplayList,
+) {
+    let mut verbs = vec![
+        PathVerb::MoveTo(pt(start.0), pt(start.1)),
+        PathVerb::LineTo(pt(end.0), pt(end.1)),
+    ];
+    if arrow.arrow_head == ArrowHead::Open {
+        if arrow.start_arrow {
+            append_arrow_head(&mut verbs, start, end, arrow.arrow_size);
+        }
+        if arrow.end_arrow {
+            append_arrow_head(&mut verbs, end, start, arrow.arrow_size);
+        }
+    }
+    list.items.push(DisplayItem::Path {
+        source: arrow.id,
+        path: Path { verbs },
+        fill: None,
+        stroke: Some(stroke(arrow.color, arrow.stroke.width, arrow.stroke.dash)),
+    });
+    if arrow.arrow_head == ArrowHead::Filled {
+        if arrow.start_arrow {
+            draw_filled_arrow_head(list, arrow.id, start, end, arrow.arrow_size, arrow.color);
+        }
+        if arrow.end_arrow {
+            draw_filled_arrow_head(list, arrow.id, end, start, arrow.arrow_size, arrow.color);
+        }
+    }
+}
+
+fn draw_filled_arrow_head(
+    list: &mut DisplayList,
+    source: NodeId,
+    tip: (f64, f64),
+    away: (f64, f64),
+    size: f64,
+    color: Color,
+) {
+    let dx = away.0 - tip.0;
+    let dy = away.1 - tip.1;
+    let length = dx.hypot(dy);
+    if length <= f64::EPSILON {
+        return;
+    }
+    let ux = dx / length;
+    let uy = dy / length;
+    let wing = size * 0.45;
+    let base = (tip.0 + ux * size, tip.1 + uy * size);
+    let perpendicular = (-uy * wing, ux * wing);
+    list.items.push(DisplayItem::Path {
+        source,
+        path: polygon(&[
+            tip,
+            (base.0 + perpendicular.0, base.1 + perpendicular.1),
+            (base.0 - perpendicular.0, base.1 - perpendicular.1),
+        ]),
+        fill: Some(Fill {
+            color,
+            rule: FillRule::NonZero,
+        }),
+        stroke: None,
     });
 }
 
@@ -2101,10 +2400,10 @@ fn draw_annotations(
                 PathVerb::MoveTo(pt(start.0), pt(start.1)),
                 PathVerb::LineTo(pt(target.0), pt(target.1)),
             ];
-            if connector.start_arrow {
+            if connector.start_arrow && connector.arrow_head == ArrowHead::Open {
                 append_arrow_head(&mut verbs, start, target, connector.arrow_size);
             }
-            if connector.end_arrow {
+            if connector.end_arrow && connector.arrow_head == ArrowHead::Open {
                 append_arrow_head(&mut verbs, target, start, connector.arrow_size);
             }
             list.items.push(DisplayItem::Path {
@@ -2117,6 +2416,28 @@ fn draw_annotations(
                     connector.stroke.dash,
                 )),
             });
+            if connector.arrow_head == ArrowHead::Filled {
+                if connector.start_arrow {
+                    draw_filled_arrow_head(
+                        list,
+                        annotation.id,
+                        start,
+                        target,
+                        connector.arrow_size,
+                        connector.color,
+                    );
+                }
+                if connector.end_arrow {
+                    draw_filled_arrow_head(
+                        list,
+                        annotation.id,
+                        target,
+                        start,
+                        connector.arrow_size,
+                        connector.color,
+                    );
+                }
+            }
             hit_map.items.push(HitItem {
                 node: annotation.id,
                 bounds: Bounds {
@@ -2129,7 +2450,7 @@ fn draw_annotations(
                 role: SelectableRole::AnnotationConnector,
                 data_index: Some(connector_index),
                 tooltip: Some(format!("connector {}", connector_index + 1)),
-                path_proximity: vec![target],
+                path_proximity: vec![start, target],
             });
         }
         for (line, label) in annotation.labels.iter().enumerate() {
@@ -2149,7 +2470,7 @@ fn draw_annotations(
                 x,
                 y: top,
                 width,
-                height: (bottom - top).max(TICK_FONT),
+                height: (bottom - top).max(f64::EPSILON),
             },
             z_order: 500 + index as u32,
             role: SelectableRole::Annotation,
@@ -2348,7 +2669,7 @@ fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, dx: f64, dy: 
         },
         fill: None,
         stroke: Some(stroke(
-            Color(45, 50, 55, 255),
+            Color(0, 0, 0, 255),
             AXIS_STROKE_WIDTH_PT,
             DashStyle::Solid,
         )),
@@ -2370,7 +2691,7 @@ fn text(
         x: pt(position.0),
         y: pt(position.1),
         size: pt(size),
-        color: Color(25, 25, 25, 255),
+        color: Color(0, 0, 0, 255),
         rotation_degrees: rotation,
         anchor,
     }));
@@ -2391,7 +2712,7 @@ fn label_text(
         x: pt(position.0),
         y: pt(position.1),
         size: pt(size),
-        color: Color(25, 25, 25, 255),
+        color: Color(0, 0, 0, 255),
         rotation_degrees: rotation,
         anchor,
     }));

@@ -68,6 +68,31 @@ pub(super) fn data_coordinates_from_local(
     ))
 }
 
+pub(super) fn active_data_coordinates_from_local(
+    document: &FigureDocument,
+    axes: instplot_layout::Bounds,
+    x: f64,
+    y: f64,
+) -> Option<HoverDataCoordinates> {
+    let x_fraction = ((x - axes.x) / axes.width).clamp(0.0, 1.0);
+    let y_fraction = (1.0 - (y - axes.y) / axes.height).clamp(0.0, 1.0);
+    let x1 = axis_value_at_fraction(
+        &document.axis_record_by_identity(AxisIdentity::X1)?,
+        x_fraction,
+    )?;
+    let y1 = axis_value_at_fraction(
+        &document.axis_record_by_identity(AxisIdentity::Y1)?,
+        y_fraction,
+    )?;
+    let x2 = document
+        .axis_record_by_identity(AxisIdentity::X2)
+        .and_then(|axis| axis_value_at_fraction(&axis, x_fraction));
+    let y2 = document
+        .axis_record_by_identity(AxisIdentity::Y2)
+        .and_then(|axis| axis_value_at_fraction(&axis, y_fraction));
+    Some(HoverDataCoordinates { x1, y1, x2, y2 })
+}
+
 pub(super) fn axis_value_at_fraction(axis: &AxisRecord, fraction: f64) -> Option<f64> {
     match axis.scale {
         AxisScale::Linear => Some(axis.minimum + fraction * (axis.maximum - axis.minimum)),
@@ -76,6 +101,38 @@ pub(super) fn axis_value_at_fraction(axis: &AxisRecord, fraction: f64) -> Option
                 axis.minimum.log10() + fraction * (axis.maximum.log10() - axis.minimum.log10()),
             ))
         }
+        AxisScale::Log10 => None,
+    }
+}
+
+pub(super) fn data_point_to_local(
+    document: &FigureDocument,
+    axes: instplot_layout::Bounds,
+    binding: AxisBinding,
+    point: (f64, f64),
+) -> Option<(f64, f64)> {
+    let x_axis = document.axis_record_by_identity(match binding.x {
+        XAxisSlot::X1 => AxisIdentity::X1,
+        XAxisSlot::X2 => AxisIdentity::X2,
+    })?;
+    let y_axis = document.axis_record_by_identity(match binding.y {
+        YAxisSlot::Y1 => AxisIdentity::Y1,
+        YAxisSlot::Y2 => AxisIdentity::Y2,
+    })?;
+    let x = axis_fraction_at_value(&x_axis, point.0)?;
+    let y = axis_fraction_at_value(&y_axis, point.1)?;
+    Some((axes.x + x * axes.width, axes.bottom() - y * axes.height))
+}
+
+fn axis_fraction_at_value(axis: &AxisRecord, value: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    match axis.scale {
+        AxisScale::Linear => Some((value - axis.minimum) / (axis.maximum - axis.minimum)),
+        AxisScale::Log10 if value > 0.0 && axis.minimum > 0.0 && axis.maximum > 0.0 => Some(
+            (value.log10() - axis.minimum.log10()) / (axis.maximum.log10() - axis.minimum.log10()),
+        ),
         AxisScale::Log10 => None,
     }
 }
@@ -166,6 +223,51 @@ pub(super) fn same_frame_primary_drag(events: &[egui::Event]) -> Option<(egui::P
         }
     }
     None
+}
+
+pub(super) fn snap_pointer_to_special_angle(start: egui::Pos2, end: egui::Pos2) -> egui::Pos2 {
+    let delta = end - start;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return end;
+    }
+    let step = std::f32::consts::FRAC_PI_4;
+    let angle = (delta.y.atan2(delta.x) / step).round() * step;
+    start + egui::vec2(angle.cos(), angle.sin()) * length
+}
+
+pub(super) fn snap_connector_target_to_text_bounds(
+    bounds: (f64, f64, f64, f64),
+    target: (f64, f64),
+) -> (f64, f64) {
+    let target = egui::pos2(target.0 as f32, target.1 as f32);
+    let nearest = egui::pos2(
+        f64::from(target.x).clamp(bounds.0, bounds.2) as f32,
+        f64::from(target.y).clamp(bounds.1, bounds.3) as f32,
+    );
+    let snapped_direction = snap_pointer_to_special_angle(nearest, target) - nearest;
+    let length = target.distance(nearest);
+    if length <= f32::EPSILON {
+        return (f64::from(target.x), f64::from(target.y));
+    }
+    let direction = snapped_direction / length;
+    let epsilon = 1.0e-4;
+    let anchor_x = if direction.x < -epsilon {
+        bounds.0
+    } else if direction.x > epsilon {
+        bounds.2
+    } else {
+        f64::from(target.x).clamp(bounds.0, bounds.2)
+    };
+    let anchor_y = if direction.y < -epsilon {
+        bounds.1
+    } else if direction.y > epsilon {
+        bounds.3
+    } else {
+        f64::from(target.y).clamp(bounds.1, bounds.3)
+    };
+    let snapped = egui::pos2(anchor_x as f32, anchor_y as f32) + direction * length;
+    (f64::from(snapped.x), f64::from(snapped.y))
 }
 
 pub(super) fn hit_project_candidates(
@@ -310,6 +412,41 @@ pub(super) fn selected_hit_bounds_for_role(
     Some(hit_bounds)
 }
 
+pub(super) fn layout_hit_bounds_for_role(
+    resolved: &ResolvedFigure,
+    project_id: &str,
+    role: SelectableRole,
+) -> Option<(f64, f64, f64, f64)> {
+    let mut bounds = resolved
+        .layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            item.role == role
+                && resolved
+                    .layout
+                    .project_ids
+                    .get(&item.node)
+                    .map(String::as_str)
+                    == Some(project_id)
+        })
+        .map(|item| item.bounds);
+    let first = bounds.next()?;
+    Some(bounds.fold(
+        (first.x, first.y, first.right(), first.bottom()),
+        |(left, top, right, bottom), next| {
+            (
+                left.min(next.x),
+                top.min(next.y),
+                right.max(next.right()),
+                bottom.max(next.bottom()),
+            )
+        },
+    ))
+}
+
 pub(super) fn resolved_text_ink_bounds(text: &ResolvedText) -> Option<(f64, f64, f64, f64)> {
     let angle = f64::from(text.rotation_degrees).to_radians();
     let (sin, cos) = angle.sin_cos();
@@ -361,7 +498,16 @@ pub(super) fn paint_object_path_overlay(
 ) -> bool {
     if !matches!(
         role,
-        Some(SelectableRole::Series | SelectableRole::DataPoint | SelectableRole::ErrorBar)
+        Some(
+            SelectableRole::Series
+                | SelectableRole::DataPoint
+                | SelectableRole::ErrorBar
+                | SelectableRole::ReferenceLine
+                | SelectableRole::MeasurementArrow
+                | SelectableRole::MeasurementArrowStart
+                | SelectableRole::MeasurementArrowEnd
+                | SelectableRole::AnnotationConnector,
+        )
     ) {
         return false;
     }

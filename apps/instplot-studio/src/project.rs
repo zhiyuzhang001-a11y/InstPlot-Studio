@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 8;
+pub const PROJECT_SCHEMA_VERSION: u32 = 9;
 /// Default physical stroke used by newly created data curves.
 pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
 /// Default physical stroke used by newly created error bars.
@@ -172,9 +172,11 @@ pub struct AxisRecord {
     pub appearance: AxisAppearanceRecord,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AxisAppearanceRecord {
+    #[serde(default = "default_axis_color_id")]
+    pub spine_color_id: String,
     pub near_spine: bool,
     pub far_spine: bool,
     pub near_ticks: bool,
@@ -194,6 +196,7 @@ pub struct AxisAppearanceRecord {
 impl Default for AxisAppearanceRecord {
     fn default() -> Self {
         Self {
+            spine_color_id: default_axis_color_id(),
             near_spine: true,
             far_spine: true,
             near_ticks: true,
@@ -210,6 +213,10 @@ impl Default for AxisAppearanceRecord {
             label_tick_pad_pt: 4.0,
         }
     }
+}
+
+fn default_axis_color_id() -> String {
+    "object-black".to_owned()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +268,7 @@ pub enum ArtistKind {
     Scatter,
     ErrorBar,
     ReferenceLine,
+    MeasurementArrow,
     Annotation,
     Legend,
 }
@@ -289,7 +297,26 @@ pub struct AnnotationConnectorRecord {
     pub start_arrow: bool,
     #[serde(default)]
     pub end_arrow: bool,
+    #[serde(default)]
+    pub arrow_head: ArrowHead,
     pub arrow_size_pt: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHead {
+    #[default]
+    Open,
+    Filled,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementConstraint {
+    #[default]
+    Free,
+    Horizontal,
+    Vertical,
 }
 
 fn default_true() -> bool {
@@ -321,6 +348,32 @@ pub enum ArtistProperties {
         #[serde(default)]
         axes: AxisBinding,
         stroke: StrokeStyle,
+        #[serde(default = "default_true")]
+        include_in_autoscale: bool,
+    },
+    MeasurementArrow {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        #[serde(default)]
+        axes: AxisBinding,
+        stroke: StrokeStyle,
+        #[serde(default)]
+        start_arrow: bool,
+        #[serde(default = "default_true")]
+        end_arrow: bool,
+        #[serde(default)]
+        arrow_head: ArrowHead,
+        arrow_size_pt: f64,
+        #[serde(default)]
+        constraint: MeasurementConstraint,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_id: Option<String>,
+        #[serde(default)]
+        label_offset_x_pt: f64,
+        #[serde(default)]
+        label_offset_y_pt: f64,
     },
     Annotation {
         label_id: String,
@@ -788,7 +841,19 @@ impl ProjectDocument {
             | ArtistProperties::ErrorBar { .. } => self
                 .series_group_for_artist(&artist.id)
                 .map(|group| group.axes),
-            ArtistProperties::ReferenceLine { axes, .. } => Some(*axes),
+            ArtistProperties::ReferenceLine {
+                orientation, axes, ..
+            } => Some(match orientation {
+                ReferenceOrientation::Vertical => AxisBinding {
+                    x: axes.x,
+                    y: YAxisSlot::Y1,
+                },
+                ReferenceOrientation::Horizontal => AxisBinding {
+                    x: XAxisSlot::X1,
+                    y: axes.y,
+                },
+            }),
+            ArtistProperties::MeasurementArrow { axes, .. } => Some(*axes),
             ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => None,
         }
     }
@@ -859,15 +924,15 @@ impl ProjectDocument {
             insert_id(&mut ids, &axes.id)?;
             insert_id(&mut ids, &axes.x.id)?;
             insert_id(&mut ids, &axes.y.id)?;
-            validate_axis(&axes.x, &labels)?;
-            validate_axis(&axes.y, &labels)?;
+            validate_axis(&axes.x, &labels, &palette_colors)?;
+            validate_axis(&axes.y, &labels, &palette_colors)?;
             if let Some(axis) = &axes.x2 {
                 insert_id(&mut ids, &axis.id)?;
-                validate_axis(axis, &labels)?;
+                validate_axis(axis, &labels, &palette_colors)?;
             }
             if let Some(axis) = &axes.y2 {
                 insert_id(&mut ids, &axis.id)?;
-                validate_axis(axis, &labels)?;
+                validate_axis(axis, &labels, &palette_colors)?;
             }
             match axes.mode {
                 AxisMode::Single => {}
@@ -950,6 +1015,89 @@ impl ProjectDocument {
         }
         for artist in &self.figure.artists {
             validate_artist(artist, &sources, &labels, &artists, &palette_colors)?;
+        }
+        let axes = &self.figure.axes[0];
+        for artist in &self.figure.artists {
+            let positive_required = |binding: AxisBinding, x: f64, y: f64| {
+                let x_axis = match binding.x {
+                    XAxisSlot::X1 => Some(&axes.x),
+                    XAxisSlot::X2 => axes.x2.as_ref(),
+                };
+                let y_axis = match binding.y {
+                    YAxisSlot::Y1 => Some(&axes.y),
+                    YAxisSlot::Y2 => axes.y2.as_ref(),
+                };
+                x_axis.is_some_and(|axis| axis.scale == AxisScale::Log10 && x <= 0.0)
+                    || y_axis.is_some_and(|axis| axis.scale == AxisScale::Log10 && y <= 0.0)
+            };
+            let invalid_log_coordinate = match &artist.properties {
+                ArtistProperties::ReferenceLine {
+                    orientation,
+                    value,
+                    axes: binding,
+                    ..
+                } => match orientation {
+                    ReferenceOrientation::Vertical => positive_required(*binding, *value, 1.0),
+                    ReferenceOrientation::Horizontal => positive_required(*binding, 1.0, *value),
+                },
+                ArtistProperties::MeasurementArrow {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    axes: binding,
+                    ..
+                } => {
+                    positive_required(*binding, *start_x, *start_y)
+                        || positive_required(*binding, *end_x, *end_y)
+                }
+                _ => false,
+            };
+            if invalid_log_coordinate {
+                return Err(ProjectError::Validation(format!(
+                    "artist {} has a non-positive coordinate on a logarithmic axis",
+                    artist.id
+                )));
+            }
+        }
+        let mut owned_labels = BTreeSet::new();
+        for artist in &self.figure.artists {
+            let owned_label = match &artist.properties {
+                ArtistProperties::MeasurementArrow {
+                    label_id: Some(label_id),
+                    ..
+                }
+                | ArtistProperties::Annotation { label_id, .. } => Some(label_id),
+                _ => None,
+            };
+            if let Some(label_id) = owned_label
+                && !owned_labels.insert(label_id)
+            {
+                return Err(ProjectError::Validation(format!(
+                    "semantic label {label_id} is owned by more than one artist"
+                )));
+            }
+        }
+        for artist in &self.figure.artists {
+            if let ArtistProperties::Legend { entries, .. } = &artist.properties {
+                for entry in entries {
+                    let target = self
+                        .figure
+                        .artists
+                        .iter()
+                        .find(|candidate| candidate.id == entry.artist_id)
+                        .expect("legend target existence was validated");
+                    if matches!(
+                        target.kind,
+                        ArtistKind::ReferenceLine | ArtistKind::MeasurementArrow
+                    ) {
+                        return Err(ProjectError::Validation(format!(
+                            "legend {} cannot include scientific guide {}",
+                            artist.id, target.id
+                        )));
+                    }
+                }
+            }
         }
         for source in &self.data_sources {
             if source.label.trim().is_empty() {
@@ -1254,6 +1402,7 @@ mod migration;
 
 use migration::{
     migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
+    migrate_v8,
 };
 
 #[cfg(test)]

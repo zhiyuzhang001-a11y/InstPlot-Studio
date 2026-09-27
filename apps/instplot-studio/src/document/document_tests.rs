@@ -280,6 +280,100 @@ fn secondary_axis_record_and_label_are_editable_without_replacing_identity() {
 }
 
 #[test]
+fn dual_x_and_dual_y_spine_colors_survive_mode_switches_independently() {
+    let mut document = FigureDocument::fixed();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    let mut y1 = document.axis_record_by_identity(AxisIdentity::Y1).unwrap();
+    let mut y2 = document.axis_record_by_identity(AxisIdentity::Y2).unwrap();
+    y1.appearance.spine_color_id = "blue".to_owned();
+    y2.appearance.spine_color_id = "gray".to_owned();
+    y2.autoscale = false;
+    document
+        .set_axis_record_by_identity(AxisIdentity::Y1, y1)
+        .unwrap();
+    document
+        .set_axis_record_by_identity(AxisIdentity::Y2, y2)
+        .unwrap();
+
+    document.set_axis_mode(AxisMode::DualX).unwrap();
+    let mut x1 = document.axis_record_by_identity(AxisIdentity::X1).unwrap();
+    let mut x2 = document.axis_record_by_identity(AxisIdentity::X2).unwrap();
+    x1.appearance.spine_color_id = "gray".to_owned();
+    x2.appearance.spine_color_id = "blue".to_owned();
+    x2.autoscale = false;
+    document
+        .set_axis_record_by_identity(AxisIdentity::X1, x1)
+        .unwrap();
+    document
+        .set_axis_record_by_identity(AxisIdentity::X2, x2)
+        .unwrap();
+
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    assert_eq!(
+        document
+            .axis_record_by_identity(AxisIdentity::Y1)
+            .unwrap()
+            .appearance
+            .spine_color_id,
+        "blue"
+    );
+    assert_eq!(
+        document
+            .axis_record_by_identity(AxisIdentity::Y2)
+            .unwrap()
+            .appearance
+            .spine_color_id,
+        "gray"
+    );
+
+    document.set_axis_mode(AxisMode::DualX).unwrap();
+    assert_eq!(
+        document
+            .axis_record_by_identity(AxisIdentity::X1)
+            .unwrap()
+            .appearance
+            .spine_color_id,
+        "gray"
+    );
+    assert_eq!(
+        document
+            .axis_record_by_identity(AxisIdentity::X2)
+            .unwrap()
+            .appearance
+            .spine_color_id,
+        "blue"
+    );
+
+    document.set_axis_mode(AxisMode::Single).unwrap();
+    let encoded = serde_json::to_vec(document.project()).unwrap();
+    let reopened =
+        FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap()).unwrap();
+    let layout = reopened.layout_figure().unwrap();
+    let axis_ids = [
+        document
+            .axis_record_by_identity(AxisIdentity::X1)
+            .unwrap()
+            .id,
+        document
+            .axis_record_by_identity(AxisIdentity::Y1)
+            .unwrap()
+            .id,
+    ];
+    for id in axis_ids {
+        let node = layout
+            .project_ids
+            .iter()
+            .find_map(|(node, project_id)| (project_id == &id).then_some(*node))
+            .unwrap();
+        assert!(layout.result.display_list.items.iter().any(|item| matches!(
+            item,
+            DisplayItem::Path { source, stroke: Some(stroke), .. }
+                if *source == node && stroke.color == Color(0, 0, 0, 255)
+        )));
+    }
+}
+
+#[test]
 fn first_secondary_assignment_suggests_a_label_but_never_overwrites_user_text() {
     let mut document = FigureDocument::fixed();
     let secondary = add_secondary_dataset(&mut document);
@@ -430,6 +524,7 @@ fn multiline_annotation_and_multiple_arrow_modes_round_trip_and_render() {
             },
             start_arrow,
             end_arrow,
+            arrow_head: crate::project::ArrowHead::Open,
             arrow_size_pt: 5.0,
         });
     }
@@ -459,6 +554,49 @@ fn multiline_annotation_and_multiple_arrow_modes_round_trip_and_render() {
         .count();
     assert_eq!(text_count, 2);
     assert_eq!(connector_count, 3);
+
+    let measurement_id = document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 1.0),
+            end: (1.0, 1.0),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δt = 255 s\nfirst cycle".to_owned())]),
+        })
+        .unwrap();
+    let encoded = serde_json::to_vec(document.project()).unwrap();
+    let reopened =
+        FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap()).unwrap();
+    let layout = reopened.layout_figure().unwrap();
+    let measurement_node = layout
+        .project_ids
+        .iter()
+        .find_map(|(node, id)| (id == &measurement_id).then_some(*node))
+        .unwrap();
+    assert_eq!(
+        layout
+            .result
+            .display_list
+            .items
+            .iter()
+            .filter(
+                |item| matches!(item, DisplayItem::GlyphRun(run) if run.source == measurement_node)
+            )
+            .count(),
+        2
+    );
+    let label_hit = layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == measurement_node && item.role == SelectableRole::MeasurementArrowLabel
+        })
+        .unwrap();
+    assert!(label_hit.bounds.height > 10.0);
 }
 
 #[test]
@@ -758,8 +896,8 @@ fn clearing_last_source_resets_only_data_dependent_axis_state() {
         axis.minor_interval = Some(0.25);
         document.set_axis_record(dimension, axis).unwrap();
     }
-    let x_appearance = document.project().figure.axes[0].x.appearance;
-    let y_appearance = document.project().figure.axes[0].y.appearance;
+    let x_appearance = document.project().figure.axes[0].x.appearance.clone();
+    let y_appearance = document.project().figure.axes[0].y.appearance.clone();
     document
         .delete_data_sources(&["errors".to_owned()])
         .unwrap();
@@ -1007,6 +1145,7 @@ fn canvas_first_axis_contract_hides_legacy_grid_and_uses_inward_ticks() {
         &document.axis_record(AxisDimension::X),
         100.0,
         &document.project().semantic_registry,
+        &document.project().palette,
         &mut BTreeMap::new(),
         true,
     )
@@ -1981,6 +2120,74 @@ fn switching_palette_recolors_series_and_keeps_the_document_valid() {
 }
 
 #[test]
+fn neutral_series_guide_colors_migrate_by_index_without_losing_connector_style() {
+    let mut document = FigureDocument::showcase();
+    document.set_palette("sciplot-neutral-v1").unwrap();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    let mut y2 = document.axis_record_by_identity(AxisIdentity::Y2).unwrap();
+    y2.autoscale = false;
+    y2.appearance.spine_color_id = "neutral-secondary".to_owned();
+    document
+        .set_axis_record_by_identity(AxisIdentity::Y2, y2)
+        .unwrap();
+
+    let reference_id = document
+        .add_reference_line(ReferenceOrientation::Vertical, 0.5, AxisBinding::PRIMARY)
+        .unwrap();
+    let mut reference = document.artist_record(&reference_id).unwrap();
+    let ArtistProperties::ReferenceLine { stroke, .. } = &mut reference.properties else {
+        unreachable!()
+    };
+    stroke.color_id = "neutral-primary".to_owned();
+    document.set_artist_record(reference).unwrap();
+
+    let annotation_id = document
+        .add_annotation(vec![LabelNode::Text("note".to_owned())])
+        .unwrap();
+    let mut annotation = document.artist_record(&annotation_id).unwrap();
+    let ArtistProperties::Annotation { connectors, .. } = &mut annotation.properties else {
+        unreachable!()
+    };
+    connectors.push(crate::AnnotationConnectorRecord {
+        target_x: 0.0,
+        target_y: 0.0,
+        axes: AxisBinding::PRIMARY,
+        stroke: StrokeStyle {
+            color_id: "neutral-secondary".to_owned(),
+            width_pt: 0.9,
+            dash_pt: Vec::new(),
+        },
+        start_arrow: false,
+        end_arrow: true,
+        arrow_head: crate::ArrowHead::Open,
+        arrow_size_pt: 5.0,
+    });
+    document.set_artist_record(annotation).unwrap();
+
+    document.set_palette("viridis-v1").unwrap();
+    assert_eq!(
+        document
+            .axis_record_by_identity(AxisIdentity::Y2)
+            .unwrap()
+            .appearance
+            .spine_color_id,
+        "viridis-2"
+    );
+    let ArtistProperties::ReferenceLine { stroke, .. } =
+        document.artist_record(&reference_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    assert_eq!(stroke.color_id, "viridis-1");
+    let ArtistProperties::Annotation { connectors, .. } =
+        document.artist_record(&annotation_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    assert_eq!(connectors[0].stroke.color_id, "viridis-2");
+}
+
+#[test]
 fn series_management_is_valid_deterministic_and_round_trips() {
     let mut document = FigureDocument::fixed();
     let created = document
@@ -2141,7 +2348,7 @@ fn formal_figure_layout_includes_remaining_single_axes_artists() {
             .hit_map
             .items
             .iter()
-            .any(|item| { item.node == NodeId(10) && item.role == SelectableRole::Series })
+            .any(|item| { item.node == NodeId(10) && item.role == SelectableRole::ReferenceLine })
     );
     assert_eq!(
         output
@@ -2185,6 +2392,200 @@ fn formal_figure_layout_includes_remaining_single_axes_artists() {
     assert!(labels.contains(&(NodeId(14), "T ≤ 300 K".to_owned())));
     assert!(labels.contains(&(NodeId(13), "Experiment".to_owned())));
     assert!(labels.contains(&(NodeId(11), "Fit".to_owned())));
+}
+
+#[test]
+fn scientific_guides_are_not_logical_series_or_legend_entries() {
+    let mut document = FigureDocument::fixed();
+    let before_series = document.logical_series().len();
+    let reference_id = document
+        .add_reference_line(ReferenceOrientation::Vertical, 1.25, AxisBinding::PRIMARY)
+        .unwrap();
+    let arrow_id = document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 1.0),
+            end: (1.0, 1.0),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δx".to_owned())]),
+        })
+        .unwrap();
+    assert_eq!(document.logical_series().len(), before_series);
+    assert!(document.project().figure.artists.iter().all(|artist| {
+        let ArtistProperties::Legend { entries, .. } = &artist.properties else {
+            return true;
+        };
+        entries
+            .iter()
+            .all(|entry| entry.artist_id != reference_id && entry.artist_id != arrow_id)
+    }));
+    let layout = document.layout_figure().unwrap();
+    assert!(layout.result.hit_map.items.iter().any(|item| {
+        layout.project_ids.get(&item.node).map(String::as_str) == Some(reference_id.as_str())
+            && item.role == SelectableRole::ReferenceLine
+    }));
+    assert!(layout.result.hit_map.items.iter().any(|item| {
+        layout.project_ids.get(&item.node).map(String::as_str) == Some(arrow_id.as_str())
+            && item.role == SelectableRole::MeasurementArrow
+    }));
+}
+
+#[test]
+fn one_hundred_reference_lines_resolve_with_independent_hit_targets() {
+    let mut document = FigureDocument::fixed();
+    let mut ids = Vec::new();
+    for index in 0..100 {
+        ids.push(
+            document
+                .add_reference_line(
+                    if index % 2 == 0 {
+                        ReferenceOrientation::Vertical
+                    } else {
+                        ReferenceOrientation::Horizontal
+                    },
+                    -2.0 + index as f64 * 0.04,
+                    AxisBinding::PRIMARY,
+                )
+                .unwrap(),
+        );
+    }
+
+    let layout = document.layout_figure().unwrap();
+    let hit_ids = layout
+        .result
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| item.role == SelectableRole::ReferenceLine)
+        .filter_map(|item| layout.project_ids.get(&item.node))
+        .filter(|id| ids.contains(id))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(hit_ids.len(), 100);
+    assert!(layout.result.display_list.validation_errors().is_empty());
+}
+
+#[test]
+fn guide_geometry_reaches_pdf_svg_and_png_from_one_resolved_scene() {
+    let mut document = FigureDocument::fixed();
+    let reference_id = document
+        .add_reference_line(ReferenceOrientation::Vertical, 0.75, AxisBinding::PRIMARY)
+        .unwrap();
+    let arrow_id = document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 0.8),
+            end: (1.0, 0.8),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δx = 2".to_owned())]),
+        })
+        .unwrap();
+
+    let layout = document.layout_figure().unwrap();
+    for id in [&reference_id, &arrow_id] {
+        let node = layout
+            .project_ids
+            .iter()
+            .find_map(|(node, project_id)| (project_id == id).then_some(*node))
+            .unwrap();
+        assert!(
+            layout.result.display_list.items.iter().any(|item| {
+                matches!(item, DisplayItem::Path { source, .. } if *source == node)
+            })
+        );
+    }
+
+    let pdf = crate::figure_pdf(&document).unwrap();
+    let svg = crate::figure_svg(&document).unwrap();
+    let png = crate::figure_png(&document, 300).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert!(svg.starts_with(b"<svg"));
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+}
+
+#[test]
+fn reference_line_autoscale_is_explicit_and_orientation_specific() {
+    let mut document = FigureDocument::fixed();
+    let mut x = document.axis_record(AxisDimension::X);
+    x.autoscale = true;
+    document.set_axis_record(AxisDimension::X, x).unwrap();
+    let reference_id = document
+        .add_reference_line(ReferenceOrientation::Vertical, 100.0, AxisBinding::PRIMARY)
+        .unwrap();
+    document.refresh_autoscale().unwrap();
+    assert!(document.axis_record(AxisDimension::X).maximum < 100.0);
+
+    let mut reference = document.artist_record(&reference_id).unwrap();
+    let ArtistProperties::ReferenceLine {
+        include_in_autoscale,
+        ..
+    } = &mut reference.properties
+    else {
+        unreachable!()
+    };
+    *include_in_autoscale = true;
+    document.set_artist_record(reference).unwrap();
+    document.refresh_autoscale().unwrap();
+    assert!(document.axis_record(AxisDimension::X).maximum > 100.0);
+    assert!(document.axis_record(AxisDimension::Y).maximum < 100.0);
+
+    let mut reference = document.artist_record(&reference_id).unwrap();
+    let ArtistProperties::ReferenceLine {
+        include_in_autoscale,
+        ..
+    } = &mut reference.properties
+    else {
+        unreachable!()
+    };
+    *include_in_autoscale = false;
+    document.set_artist_record(reference).unwrap();
+    document.refresh_autoscale().unwrap();
+    assert!(document.axis_record(AxisDimension::X).maximum < 100.0);
+
+    let mut reference = document.artist_record(&reference_id).unwrap();
+    let ArtistProperties::ReferenceLine {
+        include_in_autoscale,
+        ..
+    } = &mut reference.properties
+    else {
+        unreachable!()
+    };
+    *include_in_autoscale = true;
+    document.set_artist_record(reference).unwrap();
+    document.refresh_autoscale().unwrap();
+    assert!(document.axis_record(AxisDimension::X).maximum > 100.0);
+    document.delete_drawing_object(&reference_id).unwrap();
+    assert!(document.axis_record(AxisDimension::X).maximum < 100.0);
+}
+
+#[test]
+fn deleting_measurement_arrow_removes_only_its_owned_label() {
+    let mut document = FigureDocument::fixed();
+    let arrow_id = document
+        .add_measurement_arrow(MeasurementArrowSpec {
+            start: (-1.0, 0.0),
+            end: (1.0, 0.0),
+            axes: AxisBinding::PRIMARY,
+            constraint: MeasurementConstraint::Horizontal,
+            start_arrow: true,
+            end_arrow: true,
+            label_nodes: Some(vec![LabelNode::Text("Δt".to_owned())]),
+        })
+        .unwrap();
+    let ArtistProperties::MeasurementArrow {
+        label_id: Some(label_id),
+        ..
+    } = document.artist_record(&arrow_id).unwrap().properties
+    else {
+        unreachable!()
+    };
+    document.delete_drawing_object(&arrow_id).unwrap();
+    assert!(document.artist_record(&arrow_id).is_none());
+    assert!(document.semantic_label_nodes(&label_id).is_none());
+    document.project().validate().unwrap();
 }
 
 #[test]
