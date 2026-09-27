@@ -12,7 +12,7 @@ pub use layout::{
     TickLayout, layout, layout_with_measurer,
 };
 pub use model::{
-    Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance, AxisSpec, Chart,
+    Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance, AxisPair, AxisSpec, Chart,
     DashStyle, DataPoint, ErrorBar, ErrorStyle, GridSpec, LegendErrorStyle, LegendGrid,
     LegendPosition, LegendSpec, LineStyle, MarkerShape, MarkerStyle, Series, TickDirection,
 };

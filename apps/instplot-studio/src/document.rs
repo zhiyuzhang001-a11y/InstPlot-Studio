@@ -6,10 +6,11 @@ use instplot_core::{DataSet, DataSetKind, NumericColumn};
 use instplot_io::save_retained_rows_selected_with_fits;
 use instplot_layout::{
     Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance as LayoutAxisAppearance,
-    AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec,
-    LayoutError, LayoutResult, LegendErrorStyle, LegendGrid as LayoutLegendGrid, LegendPosition,
-    LegendSpec, LineStyle, Locator, MarkerShape as LayoutMarkerShape,
-    MarkerStyle as LayoutMarkerStyle, Scale, Series, TickDirection as LayoutTickDirection, layout,
+    AxisPair as LayoutAxisPair, AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar,
+    ErrorStyle, Formatter, GridSpec, LayoutError, LayoutResult, LegendErrorStyle,
+    LegendGrid as LayoutLegendGrid, LegendPosition, LegendSpec, LineStyle, Locator,
+    MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle, Scale, Series,
+    TickDirection as LayoutTickDirection, layout,
 };
 use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
 use instplot_text::Label;
@@ -400,22 +401,68 @@ impl FigureDocument {
             width_pt,
             &self.project.semantic_registry,
             &mut project_ids,
+            true,
         )?;
         let y = axis_spec(
             &stored.y,
             height_pt,
             &self.project.semantic_registry,
             &mut project_ids,
+            true,
         )?;
+        let x2 = if stored.mode == AxisMode::DualX {
+            stored
+                .x2
+                .as_ref()
+                .map(|axis| {
+                    axis_spec(
+                        axis,
+                        width_pt,
+                        &self.project.semantic_registry,
+                        &mut project_ids,
+                        compute_axis_data_bounds(
+                            &self.project,
+                            AxisIdentity::X2,
+                            AutoscalePolicy::default(),
+                        )
+                        .is_ok(),
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let y2 = if stored.mode == AxisMode::DualY {
+            stored
+                .y2
+                .as_ref()
+                .map(|axis| {
+                    axis_spec(
+                        axis,
+                        height_pt,
+                        &self.project.semantic_registry,
+                        &mut project_ids,
+                        compute_axis_data_bounds(
+                            &self.project,
+                            AxisIdentity::Y2,
+                            AutoscalePolicy::default(),
+                        )
+                        .is_ok(),
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let (legend, legend_labels) = if include_artists {
             legend_spec(stored, &self.project, &mut project_ids)?
         } else {
             (None, BTreeMap::new())
         };
-        let series = if include_artists {
+        let (series, series_axes) = if include_artists {
             formal_series(stored, &self.project, &legend_labels, &mut project_ids)?
         } else {
-            Vec::new()
+            (Vec::new(), BTreeMap::new())
         };
         let annotations = if include_artists {
             formal_annotations(stored, &self.project, &mut project_ids)?
@@ -428,6 +475,9 @@ impl FigureDocument {
             height_pt,
             x,
             y,
+            x2,
+            y2,
+            series_axes,
             series,
             annotations,
             legend,
@@ -1045,8 +1095,9 @@ fn formal_series(
     project: &ProjectDocument,
     legend_labels: &BTreeMap<String, instplot_text::Label>,
     project_ids: &mut BTreeMap<NodeId, String>,
-) -> Result<Vec<Series>, DocumentLayoutError> {
+) -> Result<(Vec<Series>, BTreeMap<NodeId, LayoutAxisPair>), DocumentLayoutError> {
     let mut output = Vec::new();
+    let mut series_axes = BTreeMap::new();
     for artist_id in &axes.artist_ids {
         let artist = project
             .figure
@@ -1107,28 +1158,38 @@ fn formal_series(
             ArtistProperties::ReferenceLine {
                 orientation,
                 value,
+                axes: binding,
                 stroke,
-                ..
             } => {
+                let x_axis = match binding.x {
+                    XAxisSlot::X1 => Some(&axes.x),
+                    XAxisSlot::X2 => axes.x2.as_ref(),
+                }
+                .ok_or(DocumentLayoutError::MissingAxes)?;
+                let y_axis = match binding.y {
+                    YAxisSlot::Y1 => Some(&axes.y),
+                    YAxisSlot::Y2 => axes.y2.as_ref(),
+                }
+                .ok_or(DocumentLayoutError::MissingAxes)?;
                 let points = match orientation {
                     ReferenceOrientation::Horizontal => vec![
                         DataPoint {
-                            x: axes.x.minimum,
+                            x: x_axis.minimum,
                             y: *value,
                         },
                         DataPoint {
-                            x: axes.x.maximum,
+                            x: x_axis.maximum,
                             y: *value,
                         },
                     ],
                     ReferenceOrientation::Vertical => vec![
                         DataPoint {
                             x: *value,
-                            y: axes.y.minimum,
+                            y: y_axis.minimum,
                         },
                         DataPoint {
                             x: *value,
-                            y: axes.y.maximum,
+                            y: y_axis.maximum,
                         },
                     ],
                 };
@@ -1218,8 +1279,12 @@ fn formal_series(
                 })
                 .transpose()?
         };
+        let node_id = register_node_id(&artist.id, project_ids)?;
+        if let Some(binding) = project.artist_axis_binding(artist) {
+            series_axes.insert(node_id, layout_axis_pair(binding));
+        }
         output.push(Series {
-            id: register_node_id(&artist.id, project_ids)?,
+            id: node_id,
             label,
             legend_label,
             points,
@@ -1232,7 +1297,7 @@ fn formal_series(
             color: palette_color(color_id, &project.palette)?,
         });
     }
-    Ok(output)
+    Ok((output, series_axes))
 }
 
 fn formal_annotations(
@@ -1282,6 +1347,7 @@ fn formal_annotations(
                         start_arrow: connector.start_arrow,
                         end_arrow: connector.end_arrow,
                         arrow_size: connector.arrow_size_pt,
+                        axes: layout_axis_pair(connector.axes),
                     })
                 })
                 .collect::<Result<Vec<_>, DocumentLayoutError>>()?,
@@ -1583,6 +1649,7 @@ fn axis_spec(
     available_pt: f64,
     labels: &[SemanticLabel],
     project_ids: &mut BTreeMap<NodeId, String>,
+    has_data: bool,
 ) -> Result<AxisSpec, DocumentLayoutError> {
     let semantic = labels
         .iter()
@@ -1639,7 +1706,19 @@ fn axis_spec(
             label_edge_pad_pt: axis.appearance.label_edge_pad_pt,
             label_tick_pad_pt: axis.appearance.label_tick_pad_pt,
         },
+        has_data,
     })
+}
+
+fn layout_axis_pair(binding: AxisBinding) -> LayoutAxisPair {
+    match (binding.x, binding.y) {
+        (XAxisSlot::X1, YAxisSlot::Y1) => LayoutAxisPair::X1Y1,
+        (XAxisSlot::X2, YAxisSlot::Y1) => LayoutAxisPair::X2Y1,
+        (XAxisSlot::X1, YAxisSlot::Y2) => LayoutAxisPair::X1Y2,
+        (XAxisSlot::X2, YAxisSlot::Y2) => {
+            unreachable!("project validation rejects X2/Y2 bindings")
+        }
+    }
 }
 
 /// Convert persisted label semantics using the same shaping rules as preview and export.

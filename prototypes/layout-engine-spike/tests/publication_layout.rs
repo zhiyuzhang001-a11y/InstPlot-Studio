@@ -1,7 +1,7 @@
 use instplot_export::{FontOrigin, resolve};
 use layout_engine_spike::{
-    AnnotationPosition, Bounds, DashStyle, DataPoint, Formatter, HitItem, HitMap, LayoutWarning,
-    LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape, MarkerStyle, Scale,
+    AnnotationPosition, AxisPair, Bounds, DashStyle, DataPoint, Formatter, HitItem, HitMap,
+    LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape, MarkerStyle, Scale,
     SelectableRole, TextMeasurer, TextSize, TickDirection, layout, layout_with_measurer,
     marker_gallery_fixture, publication_fixture,
 };
@@ -885,4 +885,124 @@ fn layout_reports_non_convergence_from_unstable_metrics() {
         node: publication_fixture().id,
         iterations: 4,
     }));
+}
+
+#[test]
+fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
+    let mut baseline_chart = publication_fixture();
+    baseline_chart.legend = None;
+    let baseline = layout(&baseline_chart).unwrap();
+
+    let mut dual_y = baseline_chart.clone();
+    let mut y2 = dual_y.y.clone();
+    y2.id = NodeId(30);
+    y2.label = Label::Text("Secondary Y".into());
+    y2.minimum = -100.0;
+    y2.maximum = 100.0;
+    dual_y.y2 = Some(y2);
+    let marker_id = dual_y
+        .series
+        .iter()
+        .find(|series| series.marker.is_some())
+        .unwrap()
+        .id;
+    dual_y.series_axes.insert(marker_id, AxisPair::X1Y2);
+    let placed = layout(&dual_y).unwrap();
+
+    assert!((placed.axes.width - baseline.axes.width).abs() < 0.05);
+    assert!((placed.axes.height - baseline.axes.height).abs() < 0.05);
+    assert!(placed.display_list.width.get() > baseline.display_list.width.get());
+    assert!(placed.y2_axis.as_ref().is_some_and(|axis| !axis.major.is_empty()));
+    assert!(placed.y2_label_bounds.is_some());
+    let right_edge_owners = placed
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            item.role == SelectableRole::Axis
+                && (item.bounds.x - placed.axes.right()).abs() < 0.01
+                && item.bounds.height > 0.0
+        })
+        .map(|item| item.node)
+        .collect::<Vec<_>>();
+    assert_eq!(right_edge_owners, vec![NodeId(30)]);
+
+    let marker_point = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.node == marker_id && item.role == SelectableRole::DataPoint)
+        .unwrap();
+    let source_y = dual_y
+        .series
+        .iter()
+        .find(|series| series.id == marker_id)
+        .unwrap()
+        .points[marker_point.data_index.unwrap()]
+        .y;
+    let expected_fraction = (source_y + 100.0) / 200.0;
+    let expected_y = placed.axes.bottom() - expected_fraction * placed.axes.height;
+    assert!((marker_point.path_proximity[0].1 - expected_y).abs() < 0.01);
+    assert!(!placed.warnings.iter().any(|warning| {
+        matches!(warning, LayoutWarning::TextOutsideFigure { node, .. } if *node == NodeId(30))
+    }));
+
+    let mut dual_x = baseline_chart;
+    let mut x2 = dual_x.x.clone();
+    x2.id = NodeId(32);
+    x2.label = Label::Text("Secondary X".into());
+    x2.minimum = -300.0;
+    x2.maximum = 300.0;
+    dual_x.x2 = Some(x2);
+    dual_x.series_axes.insert(marker_id, AxisPair::X2Y1);
+    let placed_x = layout(&dual_x).unwrap();
+    assert!((placed_x.axes.width - baseline.axes.width).abs() < 0.05);
+    assert!((placed_x.axes.height - baseline.axes.height).abs() < 0.05);
+    assert!(placed_x.display_list.height.get() > baseline.display_list.height.get());
+    assert!(placed_x.x2_axis.as_ref().is_some_and(|axis| !axis.major.is_empty()));
+    let marker_point_x = placed_x
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.node == marker_id && item.role == SelectableRole::DataPoint)
+        .unwrap();
+    let source_x = dual_x
+        .series
+        .iter()
+        .find(|series| series.id == marker_id)
+        .unwrap()
+        .points[marker_point_x.data_index.unwrap()]
+        .x;
+    let expected_x = placed_x.axes.x + (source_x + 300.0) / 600.0 * placed_x.axes.width;
+    assert!((marker_point_x.path_proximity[0].0 - expected_x).abs() < 0.01);
+}
+
+#[test]
+fn an_enabled_secondary_axis_without_data_owns_its_edge_without_fake_ticks() {
+    let mut chart = publication_fixture();
+    let mut x2 = chart.x.clone();
+    x2.id = NodeId(31);
+    x2.label = Label::Text("Secondary X".into());
+    x2.has_data = false;
+    chart.x2 = Some(x2);
+    let placed = layout(&chart).unwrap();
+
+    assert!(placed.x2_axis.as_ref().is_some_and(|axis| axis.major.is_empty()));
+    assert!(!placed
+        .hit_map
+        .items
+        .iter()
+        .any(|item| item.node == NodeId(31) && item.role == SelectableRole::Tick));
+    let top_edge_owners = placed
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            item.role == SelectableRole::Axis
+                && (item.bounds.y - placed.axes.y).abs() < 0.01
+                && item.bounds.width > 0.0
+        })
+        .map(|item| item.node)
+        .collect::<Vec<_>>();
+    assert_eq!(top_edge_owners, vec![NodeId(31)]);
 }

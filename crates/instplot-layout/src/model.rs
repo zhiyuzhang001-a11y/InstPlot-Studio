@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use instplot_render::{Color, NodeId};
 use instplot_text::Label;
 
@@ -10,6 +12,9 @@ pub struct Chart {
     pub height_pt: f64,
     pub x: AxisSpec,
     pub y: AxisSpec,
+    pub x2: Option<AxisSpec>,
+    pub y2: Option<AxisSpec>,
+    pub series_axes: BTreeMap<NodeId, AxisPair>,
     pub series: Vec<Series>,
     pub annotations: Vec<Annotation>,
     pub legend: Option<LegendSpec>,
@@ -27,6 +32,16 @@ pub struct AxisSpec {
     pub formatter: Formatter,
     pub grid: GridSpec,
     pub appearance: AxisAppearance,
+    /// False keeps the owned edge/spine available without drawing fabricated ticks.
+    pub has_data: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AxisPair {
+    #[default]
+    X1Y1,
+    X2Y1,
+    X1Y2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +193,7 @@ pub struct AnnotationConnector {
     pub start_arrow: bool,
     pub end_arrow: bool,
     pub arrow_size: f64,
+    pub axes: AxisPair,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

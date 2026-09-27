@@ -7,8 +7,8 @@ use instplot_render::{
 use instplot_text::Label;
 
 use crate::model::{
-    Annotation, AnnotationPosition, Chart, DashStyle, DataPoint, LegendPosition, MarkerShape,
-    MarkerStyle, Series, TickDirection,
+    Annotation, AnnotationPosition, AxisPair, AxisSpec, Chart, DashStyle, DataPoint,
+    LegendPosition, MarkerShape, MarkerStyle, Series, TickDirection,
 };
 use crate::scale::{Scale, collision_stride, minor_ticks_with_interval};
 use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
@@ -144,8 +144,12 @@ pub struct LayoutResult {
     pub axes: Bounds,
     pub x_axis: AxisLayout,
     pub y_axis: AxisLayout,
+    pub x2_axis: Option<AxisLayout>,
+    pub y2_axis: Option<AxisLayout>,
     pub x_label_bounds: Bounds,
     pub y_label_bounds: Bounds,
+    pub x2_label_bounds: Option<Bounds>,
+    pub y2_label_bounds: Option<Bounds>,
     pub legend: Option<Bounds>,
     pub hit_map: HitMap,
     pub warnings: Vec<LayoutWarning>,
@@ -164,6 +168,25 @@ impl LayoutResult {
         )
         .unwrap();
         for (name, axis) in [("X", &self.x_axis), ("Y", &self.y_axis)] {
+            writeln!(output, "{name} exponent={:?}", axis.shared_exponent).unwrap();
+            for tick in &axis.major {
+                writeln!(
+                    output,
+                    "  {:.6} {:?} pos={:.3} bounds={:.3},{:.3},{:.3},{:.3}",
+                    tick.value,
+                    tick.label,
+                    tick.position,
+                    tick.label_bounds.x,
+                    tick.label_bounds.y,
+                    tick.label_bounds.width,
+                    tick.label_bounds.height
+                )
+                .unwrap();
+            }
+            writeln!(output, "  minor={}", axis.minor.len()).unwrap();
+        }
+        for (name, axis) in [("X2", self.x2_axis.as_ref()), ("Y2", self.y2_axis.as_ref())] {
+            let Some(axis) = axis else { continue };
             writeln!(output, "{name} exponent={:?}", axis.shared_exponent).unwrap();
             for tick in &axis.major {
                 writeln!(
@@ -273,8 +296,16 @@ pub fn layout_with_measurer(
     for iteration in 1..=MAX_ITERATIONS {
         iterations = iteration;
         let axes = axes_from_margins(chart, margins);
-        let x = axis_layout(chart, true, axes, measurer);
-        let y = axis_layout(chart, false, axes, measurer);
+        let x = axis_layout(&chart.x, true, axes, measurer);
+        let y = axis_layout(&chart.y, false, axes, measurer);
+        let x2 = chart
+            .x2
+            .as_ref()
+            .map(|axis| axis_layout(axis, true, axes, measurer));
+        let y2 = chart
+            .y2
+            .as_ref()
+            .map(|axis| axis_layout(axis, false, axes, measurer));
         let legend = choose_legend(chart, axes, measurer, auto_position);
         let y_label = measurer.measure_label(&chart.y.label, LABEL_FONT);
         let x_label = measurer.measure_label(&chart.x.label, LABEL_FONT);
@@ -288,6 +319,50 @@ pub fn layout_with_measurer(
             .iter()
             .map(|tick| tick.label_bounds.height)
             .fold(0.0, f64::max);
+        let x2_tick_height = x2
+            .as_ref()
+            .into_iter()
+            .flat_map(|axis| &axis.major)
+            .map(|tick| tick.label_bounds.height)
+            .fold(0.0, f64::max);
+        let y2_tick_width = y2
+            .as_ref()
+            .into_iter()
+            .flat_map(|axis| &axis.major)
+            .map(|tick| tick.label_bounds.width)
+            .fold(0.0, f64::max);
+        let base_right = if chart.y.appearance.far_tick_labels && chart.y2.is_none() {
+            max_y_tick + chart.y.appearance.tick_label_pad_pt + 6.0
+        } else {
+            12.0
+        };
+        let secondary_right = chart.y2.as_ref().map_or(base_right, |axis| {
+            let label = measurer.measure_label(&axis.label, LABEL_FONT);
+            axis.appearance.label_edge_pad_pt
+                + label.height
+                + axis.appearance.label_tick_pad_pt
+                + if axis.has_data && axis.appearance.near_tick_labels {
+                    y2_tick_width + axis.appearance.tick_label_pad_pt
+                } else {
+                    0.0
+                }
+        });
+        let base_top = if chart.x.appearance.far_tick_labels && chart.x2.is_none() {
+            tick_height + chart.x.appearance.tick_label_pad_pt + 6.0
+        } else {
+            12.0
+        };
+        let secondary_top = chart.x2.as_ref().map_or(base_top, |axis| {
+            let label = measurer.measure_label(&axis.label, LABEL_FONT);
+            axis.appearance.label_edge_pad_pt
+                + label.height
+                + axis.appearance.label_tick_pad_pt
+                + if axis.has_data && axis.appearance.near_tick_labels {
+                    x2_tick_height + axis.appearance.tick_label_pad_pt
+                } else {
+                    0.0
+                }
+        });
         let mut next = Margins {
             left: chart.y.appearance.label_edge_pad_pt
                 + y_label.height
@@ -297,16 +372,8 @@ pub fn layout_with_measurer(
                 } else {
                     0.0
                 },
-            right: if chart.y.appearance.far_tick_labels {
-                max_y_tick + chart.y.appearance.tick_label_pad_pt + 6.0
-            } else {
-                12.0
-            },
-            top: if chart.x.appearance.far_tick_labels {
-                tick_height + chart.x.appearance.tick_label_pad_pt + 6.0
-            } else {
-                12.0
-            },
+            right: secondary_right,
+            top: secondary_top,
             bottom: chart.x.appearance.label_edge_pad_pt
                 + x_label.height
                 + chart.x.appearance.label_tick_pad_pt
@@ -315,14 +382,14 @@ pub fn layout_with_measurer(
                 } else {
                     0.0
                 },
-            canvas_right: 0.0,
-            canvas_top: 0.0,
+            canvas_right: (secondary_right - base_right).max(0.0),
+            canvas_top: (secondary_top - base_top).max(0.0),
             canvas_bottom: 0.0,
         };
         if legend.outside {
             match legend.position {
                 LegendPosition::Above => {
-                    next.canvas_top = if chart
+                    let legend_top = if chart
                         .legend
                         .as_ref()
                         .is_some_and(|spec| spec.manual_position.is_some())
@@ -331,21 +398,31 @@ pub fn layout_with_measurer(
                     } else {
                         legend.bounds.height + 6.0
                     };
-                    next.top += next.canvas_top;
-                    next.canvas_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
-                    next.right += next.canvas_right;
+                    next.canvas_top += legend_top;
+                    next.top += legend_top;
+                    let required_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
+                    if required_right > next.canvas_right {
+                        next.right += required_right - next.canvas_right;
+                        next.canvas_right = required_right;
+                    }
                 }
                 LegendPosition::Right => {
-                    next.canvas_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
-                    next.right += next.canvas_right;
+                    let required_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
+                    if required_right > next.canvas_right {
+                        next.right += required_right - next.canvas_right;
+                        next.canvas_right = required_right;
+                    }
                     next.canvas_bottom = (legend.bounds.bottom() + 3.0 - chart.height_pt).max(0.0);
                     next.bottom += next.canvas_bottom;
                 }
                 _ => {}
             }
         } else if legend.visible {
-            next.canvas_right = (legend.bounds.right() - chart.width_pt).max(0.0);
-            next.right += next.canvas_right;
+            let required_right = (legend.bounds.right() - chart.width_pt).max(0.0);
+            if required_right > next.canvas_right {
+                next.right += required_right - next.canvas_right;
+                next.canvas_right = required_right;
+            }
             next.canvas_bottom = (legend.bounds.bottom() - chart.height_pt).max(0.0);
             next.bottom += next.canvas_bottom;
         }
@@ -358,8 +435,16 @@ pub fn layout_with_measurer(
     }
 
     let axes = axes_from_margins(chart, margins);
-    let x_axis = axis_layout(chart, true, axes, measurer);
-    let y_axis = axis_layout(chart, false, axes, measurer);
+    let x_axis = axis_layout(&chart.x, true, axes, measurer);
+    let y_axis = axis_layout(&chart.y, false, axes, measurer);
+    let x2_axis = chart
+        .x2
+        .as_ref()
+        .map(|axis| axis_layout(axis, true, axes, measurer));
+    let y2_axis = chart
+        .y2
+        .as_ref()
+        .map(|axis| axis_layout(axis, false, axes, measurer));
     let legend_choice = choose_legend(chart, axes, measurer, auto_position);
     let mut warnings = Vec::new();
     if !converged {
@@ -396,11 +481,13 @@ pub fn layout_with_measurer(
         path_proximity: Vec::new(),
     });
 
-    let (x_label_bounds, y_label_bounds) = draw_axes(
+    let (x_label_bounds, y_label_bounds, x2_label_bounds, y2_label_bounds) = draw_axes(
         chart,
         axes,
         &x_axis,
         &y_axis,
+        x2_axis.as_ref(),
+        y2_axis.as_ref(),
         margins.canvas_bottom,
         measurer,
         &mut display_list,
@@ -431,8 +518,12 @@ pub fn layout_with_measurer(
         axes,
         x_axis,
         y_axis,
+        x2_axis,
+        y2_axis,
         x_label_bounds,
         y_label_bounds,
+        x2_label_bounds,
+        y2_label_bounds,
         legend: legend_choice.visible.then_some(legend_choice.bounds),
         hit_map,
         warnings,
@@ -448,7 +539,11 @@ fn validate(chart: &Chart) -> Result<(), LayoutError> {
     {
         return Err(LayoutError::InvalidFigure);
     }
-    for axis in [&chart.x, &chart.y] {
+    for axis in std::iter::once(&chart.x)
+        .chain(std::iter::once(&chart.y))
+        .chain(chart.x2.iter())
+        .chain(chart.y2.iter())
+    {
         let valid = axis.minimum.is_finite()
             && axis.maximum.is_finite()
             && axis.minimum < axis.maximum
@@ -465,11 +560,12 @@ fn validate(chart: &Chart) -> Result<(), LayoutError> {
         }
     }
     for series in &chart.series {
+        let (x_axis, y_axis) = series_axis_specs(chart, series.id)?;
         if series.points.iter().any(|point| {
             !point.x.is_finite()
                 || !point.y.is_finite()
-                || (chart.x.scale == Scale::Log10 && point.x <= 0.0)
-                || (chart.y.scale == Scale::Log10 && point.y <= 0.0)
+                || (x_axis.scale == Scale::Log10 && point.x <= 0.0)
+                || (y_axis.scale == Scale::Log10 && point.y <= 0.0)
         }) || series.errors.iter().any(|error| {
             [error.x_minus, error.x_plus, error.y_minus, error.y_plus]
                 .into_iter()
@@ -497,10 +593,13 @@ fn validate(chart: &Chart) -> Result<(), LayoutError> {
             AnnotationPosition::FigurePoints { x, y } => x.is_finite() && y.is_finite(),
         };
         let connectors_valid = annotation.connectors.iter().all(|connector| {
+            let Some((x_axis, y_axis)) = axis_specs(chart, connector.axes) else {
+                return false;
+            };
             connector.target.x.is_finite()
                 && connector.target.y.is_finite()
-                && (chart.x.scale != Scale::Log10 || connector.target.x > 0.0)
-                && (chart.y.scale != Scale::Log10 || connector.target.y > 0.0)
+                && (x_axis.scale != Scale::Log10 || connector.target.x > 0.0)
+                && (y_axis.scale != Scale::Log10 || connector.target.y > 0.0)
                 && connector.stroke.width.is_finite()
                 && connector.stroke.width > 0.0
                 && connector.arrow_size.is_finite()
@@ -548,12 +647,18 @@ fn margins_close(first: Margins, second: Margins) -> bool {
 }
 
 fn axis_layout(
-    chart: &Chart,
+    axis: &AxisSpec,
     horizontal: bool,
     axes: Bounds,
     measurer: &mut dyn TextMeasurer,
 ) -> AxisLayout {
-    let axis = if horizontal { &chart.x } else { &chart.y };
+    if !axis.has_data {
+        return AxisLayout {
+            major: Vec::new(),
+            minor: Vec::new(),
+            shared_exponent: None,
+        };
+    }
     let length = if horizontal { axes.width } else { axes.height };
     let values = axis
         .locator
@@ -913,8 +1018,17 @@ fn extrema_regions(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
     let points: Vec<(f64, f64)> = chart
         .series
         .iter()
-        .flat_map(|series| series.points.iter())
-        .filter_map(|point| map_point(chart, axes, *point))
+        .flat_map(|series| {
+            let pair = chart
+                .series_axes
+                .get(&series.id)
+                .copied()
+                .unwrap_or_default();
+            series
+                .points
+                .iter()
+                .filter_map(move |point| map_point(chart, axes, pair, *point))
+        })
         .collect();
     let mut selected = Vec::new();
     for (x, y) in [
@@ -942,8 +1056,13 @@ fn extrema_regions(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
 fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
     let mut output = Vec::new();
     for series in &chart.series {
+        let pair = chart
+            .series_axes
+            .get(&series.id)
+            .copied()
+            .unwrap_or_default();
         for (index, point) in series.points.iter().enumerate() {
-            if let Some((x, y)) = map_point(chart, axes, *point) {
+            if let Some((x, y)) = map_point(chart, axes, pair, *point) {
                 let mut radius: f64 = 3.0;
                 if let Some(marker) = series.marker {
                     radius = radius.max(marker.size / 2.0);
@@ -952,6 +1071,7 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
                     && let Some((left, top)) = map_point(
                         chart,
                         axes,
+                        pair,
                         DataPoint {
                             x: point.x - error.x_minus,
                             y: point.y + error.y_plus,
@@ -960,6 +1080,7 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
                     && let Some((right, bottom)) = map_point(
                         chart,
                         axes,
+                        pair,
                         DataPoint {
                             x: point.x + error.x_plus,
                             y: point.y - error.y_minus,
@@ -984,8 +1105,8 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
         if series.line.is_some() {
             for segment in series.points.windows(2) {
                 let (Some(start), Some(end)) = (
-                    map_point(chart, axes, segment[0]),
-                    map_point(chart, axes, segment[1]),
+                    map_point(chart, axes, pair, segment[0]),
+                    map_point(chart, axes, pair, segment[1]),
                 ) else {
                     continue;
                 };
@@ -1022,12 +1143,14 @@ fn draw_axes(
     axes: Bounds,
     x_axis: &AxisLayout,
     y_axis: &AxisLayout,
+    x2_axis: Option<&AxisLayout>,
+    y2_axis: Option<&AxisLayout>,
     canvas_bottom: f64,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
     hit_map: &mut HitMap,
     warnings: &mut Vec<LayoutWarning>,
-) -> (Bounds, Bounds) {
+) -> (Bounds, Bounds, Option<Bounds>, Option<Bounds>) {
     draw_grid(chart, axes, x_axis, y_axis, list);
     let spine = stroke(
         Color(45, 50, 55, 255),
@@ -1043,7 +1166,7 @@ fn draw_axes(
             &spine,
         );
     }
-    if chart.x.appearance.far_spine {
+    if chart.x2.is_none() && chart.x.appearance.far_spine {
         grid_line(
             list,
             chart.id,
@@ -1061,7 +1184,7 @@ fn draw_axes(
             &spine,
         );
     }
-    if chart.y.appearance.far_spine {
+    if chart.y2.is_none() && chart.y.appearance.far_spine {
         grid_line(
             list,
             chart.id,
@@ -1083,7 +1206,7 @@ fn draw_axes(
                 chart.x.appearance.tick_direction,
             );
         }
-        if chart.x.appearance.major_ticks && chart.x.appearance.far_ticks {
+        if chart.x2.is_none() && chart.x.appearance.major_ticks && chart.x.appearance.far_ticks {
             directional_tick(
                 list,
                 chart.x.id,
@@ -1116,7 +1239,7 @@ fn draw_axes(
                 path_proximity: vec![(tick.position, axes.bottom())],
             });
         }
-        if chart.x.appearance.far_tick_labels {
+        if chart.x2.is_none() && chart.x.appearance.far_tick_labels {
             let bounds = Bounds {
                 x: tick.position - size.width / 2.0,
                 y: axes.y - chart.x.appearance.tick_label_pad_pt - size.height,
@@ -1157,7 +1280,8 @@ fn draw_axes(
                     chart.x.appearance.tick_direction,
                 );
             }
-            if chart.x.appearance.minor_ticks && chart.x.appearance.far_ticks {
+            if chart.x2.is_none() && chart.x.appearance.minor_ticks && chart.x.appearance.far_ticks
+            {
                 directional_tick(
                     list,
                     chart.x.id,
@@ -1184,7 +1308,7 @@ fn draw_axes(
                 chart.y.appearance.tick_direction,
             );
         }
-        if chart.y.appearance.major_ticks && chart.y.appearance.far_ticks {
+        if chart.y2.is_none() && chart.y.appearance.major_ticks && chart.y.appearance.far_ticks {
             directional_tick(
                 list,
                 chart.y.id,
@@ -1220,7 +1344,7 @@ fn draw_axes(
                 path_proximity: vec![(axes.x, tick.position)],
             });
         }
-        if chart.y.appearance.far_tick_labels {
+        if chart.y2.is_none() && chart.y.appearance.far_tick_labels {
             let bounds = Bounds {
                 x: axes.right() + chart.y.appearance.tick_label_pad_pt,
                 y: tick.position - size.height / 2.0,
@@ -1261,7 +1385,8 @@ fn draw_axes(
                     chart.y.appearance.tick_direction,
                 );
             }
-            if chart.y.appearance.minor_ticks && chart.y.appearance.far_ticks {
+            if chart.y2.is_none() && chart.y.appearance.minor_ticks && chart.y.appearance.far_ticks
+            {
                 directional_tick(
                     list,
                     chart.y.id,
@@ -1350,7 +1475,7 @@ fn draw_axes(
             },
         ));
     }
-    if chart.x.appearance.far_spine {
+    if chart.x2.is_none() && chart.x.appearance.far_spine {
         hit_map.items.push(axis_hit_item(
             chart.x.id,
             Bounds {
@@ -1372,7 +1497,7 @@ fn draw_axes(
             },
         ));
     }
-    if chart.y.appearance.far_spine {
+    if chart.y2.is_none() && chart.y.appearance.far_spine {
         hit_map.items.push(axis_hit_item(
             chart.y.id,
             Bounds {
@@ -1383,7 +1508,13 @@ fn draw_axes(
             },
         ));
     }
-    (x_bounds, y_bounds)
+    let x2_bounds = chart.x2.as_ref().zip(x2_axis).map(|(axis, layout)| {
+        draw_secondary_x_axis(axis, layout, axes, measurer, list, hit_map, warnings)
+    });
+    let y2_bounds = chart.y2.as_ref().zip(y2_axis).map(|(axis, layout)| {
+        draw_secondary_y_axis(axis, layout, axes, measurer, list, hit_map, warnings)
+    });
+    (x_bounds, y_bounds, x2_bounds, y2_bounds)
 }
 
 fn axis_hit_item(node: NodeId, bounds: Bounds) -> HitItem {
@@ -1396,6 +1527,276 @@ fn axis_hit_item(node: NodeId, bounds: Bounds) -> HitItem {
         tooltip: None,
         path_proximity: Vec::new(),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_secondary_x_axis(
+    axis: &AxisSpec,
+    layout: &AxisLayout,
+    axes: Bounds,
+    measurer: &mut dyn TextMeasurer,
+    list: &mut DisplayList,
+    hit_map: &mut HitMap,
+    warnings: &mut Vec<LayoutWarning>,
+) -> Bounds {
+    let spine = stroke(
+        Color(45, 50, 55, 255),
+        AXIS_STROKE_WIDTH_PT,
+        DashStyle::Solid,
+    );
+    if axis.appearance.near_spine {
+        grid_line(
+            list,
+            axis.id,
+            (axes.x, axes.y),
+            (axes.right(), axes.y),
+            &spine,
+        );
+        hit_map.items.push(axis_hit_item(
+            axis.id,
+            Bounds {
+                x: axes.x,
+                y: axes.y,
+                width: axes.width,
+                height: 0.0,
+            },
+        ));
+    }
+    let mut max_tick_height: f64 = 0.0;
+    for tick in &layout.major {
+        if axis.appearance.major_ticks && axis.appearance.near_ticks {
+            directional_tick(
+                list,
+                axis.id,
+                tick.position,
+                axes.y,
+                false,
+                1.0,
+                4.0,
+                axis.appearance.tick_direction,
+            );
+        }
+        if axis.appearance.near_tick_labels {
+            let size = measurer.measure(&tick.label, TICK_FONT);
+            max_tick_height = max_tick_height.max(size.height);
+            let bounds = Bounds {
+                x: tick.position - size.width / 2.0,
+                y: axes.y - axis.appearance.tick_label_pad_pt - size.height,
+                width: size.width,
+                height: size.height,
+            };
+            text(
+                list,
+                axis.id,
+                &tick.label,
+                (tick.position, bounds.y + size.ascent),
+                TICK_FONT,
+                TextAnchor::Middle,
+                0.0,
+            );
+            hit_map.items.push(HitItem {
+                node: axis.id,
+                bounds,
+                z_order: 20,
+                role: SelectableRole::Tick,
+                data_index: None,
+                tooltip: Some(format!("x2 = {}", tick.value)),
+                path_proximity: vec![(tick.position, axes.y)],
+            });
+        }
+    }
+    for value in &layout.minor {
+        if let Some(fraction) = axis.scale.map(*value, axis.minimum, axis.maximum)
+            && axis.appearance.minor_ticks
+            && axis.appearance.near_ticks
+        {
+            directional_tick(
+                list,
+                axis.id,
+                axes.x + fraction * axes.width,
+                axes.y,
+                false,
+                1.0,
+                2.0,
+                axis.appearance.tick_direction,
+            );
+        }
+    }
+    let size = measurer.measure_label(&axis.label, LABEL_FONT);
+    let label_bottom = axes.y
+        - if axis.has_data && axis.appearance.near_tick_labels {
+            max_tick_height + axis.appearance.tick_label_pad_pt
+        } else {
+            0.0
+        }
+        - axis.appearance.label_tick_pad_pt;
+    let bounds = Bounds {
+        x: axes.x + (axes.width - size.width) / 2.0,
+        y: label_bottom - size.height,
+        width: size.width,
+        height: size.height,
+    };
+    label_text(
+        list,
+        axis.id,
+        &axis.label,
+        (axes.x + axes.width / 2.0, bounds.y + size.ascent),
+        LABEL_FONT,
+        TextAnchor::Middle,
+        0.0,
+    );
+    register_secondary_label(axis, bounds, list, hit_map, warnings);
+    bounds
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_secondary_y_axis(
+    axis: &AxisSpec,
+    layout: &AxisLayout,
+    axes: Bounds,
+    measurer: &mut dyn TextMeasurer,
+    list: &mut DisplayList,
+    hit_map: &mut HitMap,
+    warnings: &mut Vec<LayoutWarning>,
+) -> Bounds {
+    let spine = stroke(
+        Color(45, 50, 55, 255),
+        AXIS_STROKE_WIDTH_PT,
+        DashStyle::Solid,
+    );
+    if axis.appearance.near_spine {
+        grid_line(
+            list,
+            axis.id,
+            (axes.right(), axes.y),
+            (axes.right(), axes.bottom()),
+            &spine,
+        );
+        hit_map.items.push(axis_hit_item(
+            axis.id,
+            Bounds {
+                x: axes.right(),
+                y: axes.y,
+                width: 0.0,
+                height: axes.height,
+            },
+        ));
+    }
+    let mut max_tick_width: f64 = 0.0;
+    for tick in &layout.major {
+        if axis.appearance.major_ticks && axis.appearance.near_ticks {
+            directional_tick(
+                list,
+                axis.id,
+                axes.right(),
+                tick.position,
+                true,
+                -1.0,
+                4.0,
+                axis.appearance.tick_direction,
+            );
+        }
+        if axis.appearance.near_tick_labels {
+            let size = measurer.measure(&tick.label, TICK_FONT);
+            max_tick_width = max_tick_width.max(size.width);
+            let bounds = Bounds {
+                x: axes.right() + axis.appearance.tick_label_pad_pt,
+                y: tick.position - size.height / 2.0,
+                width: size.width,
+                height: size.height,
+            };
+            text(
+                list,
+                axis.id,
+                &tick.label,
+                (bounds.x, tick.position + (size.ascent - size.descent) / 2.0),
+                TICK_FONT,
+                TextAnchor::Start,
+                0.0,
+            );
+            hit_map.items.push(HitItem {
+                node: axis.id,
+                bounds,
+                z_order: 20,
+                role: SelectableRole::Tick,
+                data_index: None,
+                tooltip: Some(format!("y2 = {}", tick.value)),
+                path_proximity: vec![(axes.right(), tick.position)],
+            });
+        }
+    }
+    for value in &layout.minor {
+        if let Some(fraction) = axis.scale.map(*value, axis.minimum, axis.maximum)
+            && axis.appearance.minor_ticks
+            && axis.appearance.near_ticks
+        {
+            directional_tick(
+                list,
+                axis.id,
+                axes.right(),
+                axes.bottom() - fraction * axes.height,
+                true,
+                -1.0,
+                2.0,
+                axis.appearance.tick_direction,
+            );
+        }
+    }
+    let size = measurer.measure_label(&axis.label, LABEL_FONT);
+    let left = axes.right()
+        + if axis.has_data && axis.appearance.near_tick_labels {
+            max_tick_width + axis.appearance.tick_label_pad_pt
+        } else {
+            0.0
+        }
+        + axis.appearance.label_tick_pad_pt;
+    let bounds = Bounds {
+        x: left,
+        y: axes.y + (axes.height - size.width) / 2.0,
+        width: size.height,
+        height: size.width,
+    };
+    label_text(
+        list,
+        axis.id,
+        &axis.label,
+        (bounds.right() - size.descent, axes.y + axes.height / 2.0),
+        LABEL_FONT,
+        TextAnchor::Middle,
+        -90.0,
+    );
+    register_secondary_label(axis, bounds, list, hit_map, warnings);
+    bounds
+}
+
+fn register_secondary_label(
+    axis: &AxisSpec,
+    bounds: Bounds,
+    list: &DisplayList,
+    hit_map: &mut HitMap,
+    warnings: &mut Vec<LayoutWarning>,
+) {
+    let figure = Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: list.width.get(),
+        height: list.height.get(),
+    };
+    if !figure.contains(bounds) {
+        warnings.push(LayoutWarning::TextOutsideFigure {
+            node: axis.id,
+            text: axis.label.normalized_text(),
+        });
+    }
+    hit_map.items.push(HitItem {
+        node: axis.id,
+        bounds,
+        z_order: 22,
+        role: SelectableRole::AxisLabel,
+        data_index: None,
+        tooltip: None,
+        path_proximity: Vec::new(),
+    });
 }
 
 fn draw_grid(
@@ -1487,10 +1888,15 @@ fn draw_series(
     });
     let mut z = 100_u32;
     for series in &chart.series {
+        let pair = chart
+            .series_axes
+            .get(&series.id)
+            .copied()
+            .unwrap_or_default();
         let mapped: Vec<(f64, f64)> = series
             .points
             .iter()
-            .filter_map(|point| map_point(chart, axes, *point))
+            .filter_map(|point| map_point(chart, axes, pair, *point))
             .collect();
         if let Some(line) = series.line
             && mapped.len() >= 2
@@ -1514,7 +1920,9 @@ fn draw_series(
         }
         for (index, ((x, y), point)) in mapped.iter().zip(series.points.iter()).enumerate() {
             if let Some(error) = series.errors.get(index) {
-                draw_error_bar(chart, axes, series, index, *point, *error, list, hit_map, z)?;
+                draw_error_bar(
+                    chart, axes, pair, series, index, *point, *error, list, hit_map, z,
+                )?;
                 z += 1;
             }
             if let Some(marker) = series.marker
@@ -1561,6 +1969,7 @@ fn draw_series(
 fn draw_error_bar(
     chart: &Chart,
     axes: Bounds,
+    pair: AxisPair,
     series: &Series,
     index: usize,
     point: DataPoint,
@@ -1572,6 +1981,7 @@ fn draw_error_bar(
     let left = map_point(
         chart,
         axes,
+        pair,
         DataPoint {
             x: point.x - error.x_minus,
             y: point.y,
@@ -1580,6 +1990,7 @@ fn draw_error_bar(
     let right = map_point(
         chart,
         axes,
+        pair,
         DataPoint {
             x: point.x + error.x_plus,
             y: point.y,
@@ -1588,6 +1999,7 @@ fn draw_error_bar(
     let top = map_point(
         chart,
         axes,
+        pair,
         DataPoint {
             x: point.x,
             y: point.y + error.y_plus,
@@ -1596,6 +2008,7 @@ fn draw_error_bar(
     let bottom = map_point(
         chart,
         axes,
+        pair,
         DataPoint {
             x: point.x,
             y: point.y - error.y_minus,
@@ -1680,7 +2093,7 @@ fn draw_annotations(
         let top = y - first_ascent;
         let bottom = y + line_height * (sizes.len().saturating_sub(1)) as f64 + last_descent;
         for (connector_index, connector) in annotation.connectors.iter().enumerate() {
-            let Some(target) = map_point(chart, axes, connector.target) else {
+            let Some(target) = map_point(chart, axes, connector.axes, connector.target) else {
                 return Err(LayoutError::InvalidData(annotation.id));
             };
             let start = (target.0.clamp(x, x + width), target.1.clamp(top, bottom));
@@ -1893,7 +2306,7 @@ fn annotation_position(
     canvas_top: f64,
 ) -> Option<(f64, f64)> {
     match annotation.position {
-        AnnotationPosition::Data(point) => map_point(chart, axes, point),
+        AnnotationPosition::Data(point) => map_point(chart, axes, AxisPair::X1Y1, point),
         AnnotationPosition::FigurePoints { x, y } if x.is_finite() && y.is_finite() => {
             Some((x, y + canvas_top))
         }
@@ -1984,16 +2397,24 @@ fn label_text(
     }));
 }
 
-fn map_point(chart: &Chart, axes: Bounds, point: DataPoint) -> Option<(f64, f64)> {
-    let x = chart
-        .x
-        .scale
-        .map(point.x, chart.x.minimum, chart.x.maximum)?;
-    let y = chart
-        .y
-        .scale
-        .map(point.y, chart.y.minimum, chart.y.maximum)?;
+fn map_point(chart: &Chart, axes: Bounds, pair: AxisPair, point: DataPoint) -> Option<(f64, f64)> {
+    let (x_axis, y_axis) = axis_specs(chart, pair)?;
+    let x = x_axis.scale.map(point.x, x_axis.minimum, x_axis.maximum)?;
+    let y = y_axis.scale.map(point.y, y_axis.minimum, y_axis.maximum)?;
     Some((axes.x + x * axes.width, axes.bottom() - y * axes.height))
+}
+
+fn axis_specs(chart: &Chart, pair: AxisPair) -> Option<(&AxisSpec, &AxisSpec)> {
+    match pair {
+        AxisPair::X1Y1 => Some((&chart.x, &chart.y)),
+        AxisPair::X2Y1 => chart.x2.as_ref().map(|x| (x, &chart.y)),
+        AxisPair::X1Y2 => chart.y2.as_ref().map(|y| (&chart.x, y)),
+    }
+}
+
+fn series_axis_specs(chart: &Chart, id: NodeId) -> Result<(&AxisSpec, &AxisSpec), LayoutError> {
+    let pair = chart.series_axes.get(&id).copied().unwrap_or_default();
+    axis_specs(chart, pair).ok_or(LayoutError::InvalidData(id))
 }
 
 fn polyline(points: &[(f64, f64)]) -> Path {

@@ -203,6 +203,59 @@ fn dual_x_autoscale_is_independent_and_last_secondary_series_enters_empty_state(
 }
 
 #[test]
+fn formal_layout_maps_dual_axes_and_single_mode_removes_secondary_geometry() {
+    let mut document = FigureDocument::fixed();
+    let single = document.layout_figure().unwrap();
+    let secondary = add_secondary_dataset(&mut document);
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    let dual = document.layout_figure().unwrap();
+    assert!(
+        dual.result
+            .y2_axis
+            .as_ref()
+            .is_some_and(|axis| !axis.major.is_empty())
+    );
+    assert!(dual.result.y2_label_bounds.is_some());
+    assert!(dual.result.display_list.width.get() > single.result.display_list.width.get());
+    assert!((dual.result.axes.width - single.result.axes.width).abs() < 0.05);
+    assert!((dual.result.axes.height - single.result.axes.height).abs() < 0.05);
+    let secondary_node = dual
+        .project_ids
+        .iter()
+        .find_map(|(node, id)| (id == &secondary).then_some(*node))
+        .unwrap();
+    assert!(
+        dual.result
+            .hit_map
+            .items
+            .iter()
+            .any(|item| item.node == secondary_node && item.role == SelectableRole::Series)
+    );
+
+    document.set_axis_mode(AxisMode::Single).unwrap();
+    let restored = document.layout_figure().unwrap();
+    assert!(restored.result.y2_axis.is_none());
+    assert!(
+        !restored
+            .result
+            .hit_map
+            .items
+            .iter()
+            .any(|item| item.node == secondary_node)
+    );
+    assert_eq!(restored.result.axes, single.result.axes);
+}
+
+#[test]
 fn multiple_new_annotations_are_distinct_and_start_inside_small_canvases() {
     let mut document = FigureDocument::showcase();
     document.set_figure_size_mm(20.0, 20.0).unwrap();
@@ -789,6 +842,7 @@ fn canvas_first_axis_contract_hides_legacy_grid_and_uses_inward_ticks() {
         100.0,
         &document.project().semantic_registry,
         &mut BTreeMap::new(),
+        true,
     )
     .unwrap();
     assert!(!spec.grid.major && !spec.grid.minor);

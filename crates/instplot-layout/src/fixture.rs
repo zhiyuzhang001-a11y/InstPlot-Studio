@@ -1,5 +1,6 @@
 use instplot_render::{Color, NodeId};
 use instplot_text::Label;
+use std::collections::BTreeMap;
 
 use crate::{
     Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
@@ -82,6 +83,7 @@ pub fn publication_fixture() -> Chart {
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
+            has_data: true,
         },
         y: AxisSpec {
             id: NodeId(3),
@@ -96,7 +98,11 @@ pub fn publication_fixture() -> Chart {
             formatter: Formatter::Auto,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
+            has_data: true,
         },
+        x2: None,
+        y2: None,
+        series_axes: BTreeMap::new(),
         series: vec![
             Series {
                 id: NodeId(10),
