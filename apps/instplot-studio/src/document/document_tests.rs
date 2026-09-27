@@ -667,6 +667,52 @@ fn legend_error_key_uses_the_real_error_style_and_marker_relative_height() {
 }
 
 #[test]
+fn legend_key_matches_scatter_line_and_combined_series_styles() {
+    let mut document = FigureDocument::from_datasets(&[error_dataset()]).unwrap();
+    let series_id = document.logical_series()[0].id.clone();
+
+    let legend_series = |document: &FigureDocument| {
+        let axes = &document.project().figure.axes[0];
+        let mut project_ids = BTreeMap::new();
+        let (legend, labels) = legend_spec(axes, document.project(), &mut project_ids).unwrap();
+        let legend_id = legend.unwrap().entry_order[0];
+        formal_series(axes, document.project(), &labels, &mut project_ids)
+            .unwrap()
+            .0
+            .into_iter()
+            .find(|series| series.id == legend_id)
+            .unwrap()
+    };
+
+    document
+        .set_series_style(&series_id, SeriesCreationStyle::Scatter)
+        .unwrap();
+    let scatter = legend_series(&document);
+    assert!(scatter.line.is_none());
+    assert!(scatter.marker.is_some());
+    assert!(scatter.legend_marker.is_none());
+
+    document
+        .set_series_style(&series_id, SeriesCreationStyle::Line)
+        .unwrap();
+    let line = legend_series(&document);
+    assert!(line.line.is_some());
+    assert!(line.marker.is_none());
+    assert!(line.legend_marker.is_none());
+
+    document
+        .set_series_style(&series_id, SeriesCreationStyle::Scatter)
+        .unwrap();
+    document
+        .set_series_style(&series_id, SeriesCreationStyle::LineAndMarker)
+        .unwrap();
+    let combined = legend_series(&document);
+    assert!(combined.line.is_some());
+    assert!(combined.marker.is_none());
+    assert!(combined.legend_marker.is_some());
+}
+
+#[test]
 fn all_seven_dash_patterns_map_to_distinct_layout_styles() {
     let patterns = [
         (Vec::new(), DashStyle::Solid),

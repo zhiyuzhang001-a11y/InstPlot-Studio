@@ -1398,26 +1398,26 @@ fn legend_spec(
         };
         let visible_entries: Vec<_> = entries
             .iter()
-            .filter(|entry| {
-                entry.visible
-                    && project.figure.artists.iter().any(|candidate| {
-                        candidate.id == entry.artist_id
-                            && project.artist_effectively_visible(candidate)
-                    })
+            .filter_map(|entry| {
+                if !entry.visible {
+                    return None;
+                }
+                legend_representative_artist_id(project, &entry.artist_id)
+                    .map(|representative| (entry, representative.to_owned()))
             })
             .collect();
         let labels = visible_entries
             .iter()
-            .map(|entry| {
+            .map(|(entry, representative)| {
                 Ok((
-                    entry.artist_id.clone(),
+                    representative.clone(),
                     semantic_label(&entry.label_id, &project.semantic_registry)?,
                 ))
             })
             .collect::<Result<_, DocumentLayoutError>>()?;
         let entry_order = visible_entries
             .iter()
-            .map(|entry| register_node_id(&entry.artist_id, project_ids))
+            .map(|(_, representative)| register_node_id(representative, project_ids))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok((
             Some(LegendSpec {
@@ -1448,6 +1448,39 @@ fn legend_spec(
         ));
     }
     Ok((None, BTreeMap::new()))
+}
+
+fn legend_representative_artist_id<'a>(
+    project: &'a ProjectDocument,
+    entry_artist_id: &'a str,
+) -> Option<&'a str> {
+    let visible_member = |kind| {
+        project
+            .series_group_for_artist(entry_artist_id)
+            .into_iter()
+            .flat_map(|group| group.artist_ids.iter())
+            .filter_map(|artist_id| {
+                project
+                    .figure
+                    .artists
+                    .iter()
+                    .find(|artist| artist.id == *artist_id)
+            })
+            .find(|artist| artist.kind == kind && project.artist_effectively_visible(artist))
+            .map(|artist| artist.id.as_str())
+    };
+    visible_member(ArtistKind::Line)
+        .or_else(|| visible_member(ArtistKind::Scatter))
+        .or_else(|| {
+            project
+                .figure
+                .artists
+                .iter()
+                .find(|artist| {
+                    artist.id == entry_artist_id && project.artist_effectively_visible(artist)
+                })
+                .map(|artist| artist.id.as_str())
+        })
 }
 
 fn bound_points(
