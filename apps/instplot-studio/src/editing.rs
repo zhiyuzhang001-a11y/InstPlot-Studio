@@ -1,6 +1,7 @@
 use crate::{
-    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, DocumentLayout, ExportPreferences,
-    FigureDocument, LabelNode, MoveDirection, ProjectDocument, SeriesCreationStyle,
+    ArtistRecord, AxisBinding, AxisDimension, AxisMode, AxisRanges, AxisRecord, DocumentLayout,
+    ExportPreferences, FigureDocument, LabelNode, MoveDirection, ProjectDocument,
+    SeriesCreationStyle,
 };
 
 const MAX_HISTORY: usize = 100;
@@ -39,6 +40,11 @@ pub enum EditCommand {
     SetSeriesVisible {
         artist_id: String,
         visible: bool,
+    },
+    SetAxisMode(AxisMode),
+    SetSeriesAxisBinding {
+        artist_id: String,
+        axes: AxisBinding,
     },
     SetSeriesStyle {
         artist_id: String,
@@ -113,6 +119,8 @@ impl EditCommand {
             Self::DeleteSeries { .. } => "Delete series",
             Self::SetSeriesVisible { visible: true, .. } => "Show series",
             Self::SetSeriesVisible { visible: false, .. } => "Hide series",
+            Self::SetAxisMode(_) => "Change axes mode",
+            Self::SetSeriesAxisBinding { .. } => "Change series axes",
             Self::SetSeriesStyle { .. } => "Change plot type",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
@@ -154,6 +162,10 @@ impl EditCommand {
             Self::DeleteSeries { artist_id } => document.delete_series(&artist_id),
             Self::SetSeriesVisible { artist_id, visible } => {
                 document.set_series_visible(&artist_id, visible)
+            }
+            Self::SetAxisMode(mode) => document.set_axis_mode(mode),
+            Self::SetSeriesAxisBinding { artist_id, axes } => {
+                document.set_series_axis_binding(&artist_id, axes)
             }
             Self::SetSeriesStyle { artist_id, style } => {
                 document.set_series_style(&artist_id, style)
@@ -384,6 +396,48 @@ mod tests {
         assert_ne!(document, before);
         history.undo(&mut document).unwrap();
         assert_eq!(document, before);
+    }
+
+    #[test]
+    fn axis_mode_and_series_binding_are_undoable_without_rewriting_visibility() {
+        let mut document = FigureDocument::fixed();
+        let artist_id = "node-11".to_owned();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAxisMode(AxisMode::DualY),
+                None,
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSeriesAxisBinding {
+                    artist_id: artist_id.clone(),
+                    axes: AxisBinding {
+                        x: crate::XAxisSlot::X1,
+                        y: crate::YAxisSlot::Y2,
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record(&artist_id).unwrap().visible);
+        assert_eq!(
+            document.series_axis_binding(&artist_id).unwrap().y,
+            crate::YAxisSlot::Y2
+        );
+        history.undo(&mut document).unwrap();
+        assert_eq!(
+            document.series_axis_binding(&artist_id),
+            Some(AxisBinding::PRIMARY)
+        );
+        history.redo(&mut document).unwrap();
+        history.undo(&mut document).unwrap();
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.axis_mode(), AxisMode::Single);
+        assert!(document.artist_record(&artist_id).unwrap().visible);
     }
 
     #[test]

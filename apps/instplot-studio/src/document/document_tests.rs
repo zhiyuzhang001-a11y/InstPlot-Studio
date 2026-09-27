@@ -37,6 +37,171 @@ fn error_dataset() -> DataSet {
     }
 }
 
+fn add_secondary_dataset(document: &mut FigureDocument) -> String {
+    document
+        .project
+        .upsert_embedded_source(
+            "secondary-data",
+            "Secondary data",
+            vec![
+                EmbeddedColumn {
+                    name: "x2".to_owned(),
+                    values: vec![100.0, 200.0],
+                    valid: Vec::new(),
+                },
+                EmbeddedColumn {
+                    name: "y2".to_owned(),
+                    values: vec![1_000.0, 2_000.0],
+                    valid: Vec::new(),
+                },
+                EmbeddedColumn {
+                    name: "xe2".to_owned(),
+                    values: vec![10.0, 20.0],
+                    valid: Vec::new(),
+                },
+                EmbeddedColumn {
+                    name: "ye2".to_owned(),
+                    values: vec![100.0, 200.0],
+                    valid: Vec::new(),
+                },
+            ],
+            vec![true; 2],
+            DataSourceKind::Source,
+            None,
+        )
+        .unwrap();
+    document
+        .create_series(
+            "secondary-data",
+            "x2",
+            "y2",
+            SeriesCreationStyle::LineAndMarker,
+        )
+        .unwrap()[0]
+        .clone()
+}
+
+#[test]
+fn dual_y_autoscale_includes_error_caps_and_mode_switch_suspends_without_hiding() {
+    let mut document = FigureDocument::fixed();
+    let secondary = add_secondary_dataset(&mut document);
+    let error = document
+        .create_error_bars("secondary-data", "x2", "y2", "ye2", Some("xe2"))
+        .unwrap();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+
+    let x1 = compute_axis_data_bounds(
+        document.project(),
+        AxisIdentity::X1,
+        AutoscalePolicy::default(),
+    )
+    .unwrap();
+    let y1 = compute_axis_data_bounds(
+        document.project(),
+        AxisIdentity::Y1,
+        AutoscalePolicy::default(),
+    )
+    .unwrap();
+    let y2 = compute_axis_data_bounds(
+        document.project(),
+        AxisIdentity::Y2,
+        AutoscalePolicy::default(),
+    )
+    .unwrap();
+    assert!(x1.maximum >= 220.0 && x1.minimum <= -3.2);
+    assert!(y1.maximum < 10.0);
+    assert_eq!(
+        y2,
+        DataBounds {
+            minimum: 900.0,
+            maximum: 2_200.0
+        }
+    );
+    assert!(document.project().artist_id_effectively_visible(&error));
+
+    document.set_axis_mode(AxisMode::Single).unwrap();
+    let descriptor = document
+        .series()
+        .into_iter()
+        .find(|series| series.id == secondary)
+        .unwrap();
+    assert!(descriptor.visible);
+    assert!(!descriptor.effective_visible);
+    assert!(
+        compute_axis_data_bounds(
+            document.project(),
+            AxisIdentity::Y2,
+            AutoscalePolicy::default()
+        )
+        .is_err()
+    );
+    assert!(!document.project().artist_id_effectively_visible(&error));
+
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    assert!(document.project().artist_id_effectively_visible(&secondary));
+    assert_eq!(
+        document.series_axis_binding(&secondary).unwrap().y,
+        YAxisSlot::Y2
+    );
+}
+
+#[test]
+fn dual_x_autoscale_is_independent_and_last_secondary_series_enters_empty_state() {
+    let mut document = FigureDocument::fixed();
+    let secondary = add_secondary_dataset(&mut document);
+    document.set_axis_mode(AxisMode::DualX).unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X2,
+                y: YAxisSlot::Y1,
+            },
+        )
+        .unwrap();
+    let x2 = compute_axis_data_bounds(
+        document.project(),
+        AxisIdentity::X2,
+        AutoscalePolicy::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        x2,
+        DataBounds {
+            minimum: 100.0,
+            maximum: 200.0
+        }
+    );
+    assert!(
+        document
+            .axis_record_by_identity(AxisIdentity::X2)
+            .unwrap()
+            .minimum
+            < 100.0
+    );
+
+    document.delete_data_source("secondary-data", true).unwrap();
+    let x2_axis = document.axis_record_by_identity(AxisIdentity::X2).unwrap();
+    assert_eq!((x2_axis.minimum, x2_axis.maximum), (0.0, 1.0));
+    assert!(
+        compute_axis_data_bounds(
+            document.project(),
+            AxisIdentity::X2,
+            AutoscalePolicy::default()
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn multiple_new_annotations_are_distinct_and_start_inside_small_canvases() {
     let mut document = FigureDocument::showcase();

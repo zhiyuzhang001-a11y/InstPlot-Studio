@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::palette::{PaletteKind, builtin_palette, registry_matches_metadata};
 use crate::semantic::color_id;
-use crate::{ArtistProperties, DataBinding, FigureDocument, ProjectDocument, ResolvedFigure};
+use crate::{ArtistProperties, FigureDocument, ProjectDocument, ResolvedFigure};
 
 pub const PUBLICATION_RULES_VERSION: &str = "instplot-publication-rules-v1";
 pub const CVD_SIMULATION_VERSION: &str = "machado-2009-deuteranopia-severity-1-linear-srgb-v1";
@@ -636,10 +636,18 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
         .artists
         .iter()
         .filter_map(|artist| match &artist.properties {
-            ArtistProperties::Legend { entries, .. } if artist.visible => Some(entries),
+            ArtistProperties::Legend { entries, .. }
+                if project.artist_effectively_visible(artist) =>
+            {
+                Some(entries)
+            }
             _ => None,
         })
-        .flat_map(|entries| entries.iter().filter(|entry| entry.visible))
+        .flat_map(|entries| {
+            entries.iter().filter(|entry| {
+                entry.visible && project.artist_id_effectively_visible(&entry.artist_id)
+            })
+        })
         .enumerate()
         .map(|(rank, entry)| (entry.artist_id.clone(), rank))
         .collect::<BTreeMap<_, _>>();
@@ -648,15 +656,20 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
         .figure
         .artists
         .iter()
-        .filter(|artist| artist.visible)
+        .filter(|artist| project.artist_effectively_visible(artist))
     {
         let Some(color) = color_id(artist).and_then(|id| colors.get(id).copied()) else {
             continue;
         };
         let key = match &artist.properties {
-            ArtistProperties::Line { binding, .. }
-            | ArtistProperties::Scatter { binding, .. }
-            | ArtistProperties::ErrorBar { binding, .. } => binding_series_key(project, binding),
+            ArtistProperties::Line { .. }
+            | ArtistProperties::Scatter { .. }
+            | ArtistProperties::ErrorBar { .. } => {
+                project.series_group_for_artist(&artist.id).map_or_else(
+                    || format!("ungrouped:{}", artist.id),
+                    |group| group.id.clone(),
+                )
+            }
             ArtistProperties::ReferenceLine { .. } => format!("reference:{}", artist.id),
             ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
         };
@@ -701,33 +714,6 @@ fn visual_series_encodings(project: &ProjectDocument) -> Vec<VisualSeriesEncodin
             ),
         })
         .collect()
-}
-
-fn binding_series_key(project: &ProjectDocument, binding: &DataBinding) -> String {
-    let Some(source) = project
-        .data_sources
-        .iter()
-        .find(|source| source.id == binding.data_source_id)
-    else {
-        return format!(
-            "binding:{}\u{0}{}\u{0}{}",
-            binding.data_source_id, binding.x_column, binding.y_column
-        );
-    };
-    source.fit.as_ref().map_or_else(
-        || {
-            format!(
-                "binding:{}\u{0}{}\u{0}{}",
-                binding.data_source_id, binding.x_column, binding.y_column
-            )
-        },
-        |fit| {
-            format!(
-                "binding:{}\u{0}{}\u{0}{}",
-                fit.parent_data_source_id, fit.source_x_column, fit.source_y_column
-            )
-        },
-    )
 }
 
 fn risky_color_pair(

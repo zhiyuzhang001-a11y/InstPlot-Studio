@@ -240,21 +240,21 @@ git diff --check
 
 ### Phase 2：文档操作与独立自动范围
 
-状态：`PENDING`
+状态：`DONE`（证据：[`reports/INSTPLOT_STUDIO_DUAL_AXES_PHASE2_DOCUMENT.md`](../reports/INSTPLOT_STUDIO_DUAL_AXES_PHASE2_DOCUMENT.md)）
 
-- [ ] 模式切换使用 document/transaction API；
-- [ ] 曲线轴绑定修改可撤销、重做；
-- [ ] 定义统一 `effective_visible = artist.visible && (unbound || bound_axes_enabled)`；
-- [ ] 关闭副轴时休眠并隐藏绑定曲线，但不改写持久 `visible`；
-- [ ] 重开副轴时恢复曲线、误差棒及对象；
-- [ ] X1、X2、Y1、Y2分别计算可见数据范围；
-- [ ] X/Y 误差棒完整参与相应轴范围；
-- [ ] 数据参考线保持现有行为并参与所属轴自动范围；
-- [ ] 箭头连接目标和普通数据标注默认不扩展范围，画布文字永不参与数据范围；
-- [ ] 空列、单点、NaN、无穷值具有稳定行为；
-- [ ] 删除最后一条副轴曲线后进入明确无数据状态；
-- [ ] 清除全部数据及重新导入后不保留陈旧范围。
-- [ ] 自动范围、图例、出版规范检查、命中测试和导出调用同一有效可见性规则。
+- [x] 模式切换使用 document/transaction API；
+- [x] 曲线轴绑定修改可撤销、重做；
+- [x] 定义统一 `effective_visible = artist.visible && (unbound || bound_axes_enabled)`；
+- [x] 关闭副轴时休眠并隐藏绑定曲线，但不改写持久 `visible`；
+- [x] 重开副轴时恢复曲线、误差棒及对象；
+- [x] X1、X2、Y1、Y2分别计算可见数据范围；
+- [x] X/Y 误差棒完整参与相应轴范围；
+- [x] 数据参考线保持现有行为并参与所属轴自动范围；
+- [x] 箭头连接目标和普通数据标注默认不扩展范围，画布文字永不参与数据范围；
+- [x] 空列、单点、NaN、无穷值具有稳定行为；
+- [x] 删除最后一条副轴曲线后进入明确无数据状态；
+- [x] 清除全部数据及重新导入后不保留陈旧范围。
+- [x] 自动范围、图例、出版规范检查、命中测试和导出调用同一有效可见性规则。
 
 阶段测试重点：
 

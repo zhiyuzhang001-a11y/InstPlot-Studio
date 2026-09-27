@@ -100,15 +100,7 @@ impl FigureDocument {
         if self.project.data_sources.is_empty() {
             reset_empty_axes(&mut self.project);
         } else {
-            for dimension in [AxisDimension::X, AxisDimension::Y] {
-                let autoscale = match dimension {
-                    AxisDimension::X => self.project.figure.axes[0].x.autoscale,
-                    AxisDimension::Y => self.project.figure.axes[0].y.autoscale,
-                };
-                if autoscale {
-                    apply_autoscale(&mut self.project, dimension)?;
-                }
-            }
+            refresh_active_autoscales(&mut self.project)?;
         }
         self.project.validate().map_err(|error| error.to_string())?;
         Ok(())
@@ -133,6 +125,7 @@ impl FigureDocument {
                     kind,
                     role: artist.role,
                     visible: artist.visible,
+                    effective_visible: self.project.artist_effectively_visible(artist),
                     label: artist_binding(artist)
                         .and_then(|binding| {
                             self.project
@@ -142,31 +135,17 @@ impl FigureDocument {
                         })
                         .map_or_else(|| artist.id.clone(), |source| source.label.clone()),
                     binding: artist_binding(artist).cloned(),
+                    axes: self.project.artist_axis_binding(artist),
                 }
             })
             .collect()
     }
 
     pub fn linked_series_ids(&self, artist_id: &str) -> Vec<String> {
-        let Some(selected) = self
-            .project
-            .figure
-            .artists
-            .iter()
-            .find(|artist| artist.id == artist_id)
-        else {
-            return vec![artist_id.to_owned()];
-        };
-        let Some(binding) = artist_binding(selected) else {
-            return vec![artist_id.to_owned()];
-        };
         self.project
-            .figure
-            .artists
-            .iter()
-            .filter(|artist| artist.visible && artist_binding(artist) == Some(binding))
-            .map(|artist| artist.id.clone())
-            .collect()
+            .series_group_for_artist(artist_id)
+            .map(|group| group.artist_ids.clone())
+            .unwrap_or_else(|| vec![artist_id.to_owned()])
     }
 
     pub fn project(&self) -> &ProjectDocument {
@@ -254,14 +233,11 @@ impl FigureDocument {
         // Import must be allowed to embed the new sources first; the caller then
         // creates their series and performs one autoscale over the visible data.
         // Autoscaling here would reject that valid intermediate state.
-        let has_visible_bound_artist = candidate
-            .figure
-            .artists
-            .iter()
-            .any(|artist| artist.visible && artist_binding(artist).is_some());
+        let has_visible_bound_artist = candidate.figure.artists.iter().any(|artist| {
+            candidate.artist_effectively_visible(artist) && artist_binding(artist).is_some()
+        });
         if refresh_autoscale && has_visible_bound_artist {
-            apply_autoscale(&mut candidate, AxisDimension::X).map_err(ProjectError::Validation)?;
-            apply_autoscale(&mut candidate, AxisDimension::Y).map_err(ProjectError::Validation)?;
+            refresh_active_autoscales(&mut candidate).map_err(ProjectError::Validation)?;
         }
         self.project = candidate;
         Ok(())

@@ -1,6 +1,40 @@
 use super::*;
 
 impl FigureDocument {
+    pub fn series_axis_binding(&self, artist_id: &str) -> Option<AxisBinding> {
+        self.project
+            .series_group_for_artist(artist_id)
+            .map(|group| group.axes)
+    }
+
+    pub fn set_series_axis_binding(
+        &mut self,
+        artist_id: &str,
+        axes: AxisBinding,
+    ) -> Result<(), String> {
+        if !axes.is_supported() {
+            return Err("a series cannot use X2 and Y2 at the same time".to_owned());
+        }
+        let mode = self.project.figure.axes[0].mode;
+        if !axes.is_enabled_in(mode) {
+            return Err(format!(
+                "axis combination {:?}/{:?} is not enabled in {mode:?} mode",
+                axes.x, axes.y
+            ));
+        }
+        let mut candidate = self.project.clone();
+        let group = candidate.figure.axes[0]
+            .series_groups
+            .iter_mut()
+            .find(|group| group.artist_ids.iter().any(|id| id == artist_id))
+            .ok_or_else(|| format!("artist {artist_id} has no logical series group"))?;
+        group.axes = axes;
+        refresh_active_autoscales(&mut candidate)?;
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
     pub fn create_series(
         &mut self,
         data_source_id: &str,
@@ -721,9 +755,7 @@ impl FigureDocument {
                 }
             }
         }
-        for dimension in [AxisDimension::X, AxisDimension::Y] {
-            apply_autoscale(&mut candidate.project, dimension)?;
-        }
+        refresh_active_autoscales(&mut candidate.project)?;
         candidate
             .project
             .validate()

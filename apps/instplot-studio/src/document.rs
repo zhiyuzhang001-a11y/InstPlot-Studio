@@ -16,14 +16,15 @@ use instplot_text::Label;
 
 use crate::project::fingerprint;
 use crate::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisRecord, AxisScale,
-    DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
-    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, FitIdentity,
-    FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisIdentity, AxisMode,
+    AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding,
+    DataSourceKind, DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn,
+    FitIdentity, FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
     ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
     OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
     ProvenanceRecord, ReferenceOrientation, SemanticLabel, SeriesGroupRecord, StrokeStyle,
-    builtin_palette_registry, open_project, palette_series_color_ids, save_project,
+    XAxisSlot, YAxisSlot, builtin_palette_registry, open_project, palette_series_color_ids,
+    save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -138,8 +139,10 @@ pub struct SeriesDescriptor {
     pub kind: SeriesKind,
     pub role: ArtistRole,
     pub visible: bool,
+    pub effective_visible: bool,
     pub label: String,
     pub binding: Option<DataBinding>,
+    pub axes: Option<AxisBinding>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -445,14 +448,26 @@ mod datasets;
 mod objects;
 mod series;
 
-use autoscale::apply_autoscale;
 pub use autoscale::{
-    AutoscalePolicy, DataBounds, VisualBounds, apply_visual_padding, compute_data_bounds,
+    AutoscalePolicy, DataBounds, VisualBounds, apply_visual_padding, compute_axis_data_bounds,
+    compute_data_bounds,
 };
+use autoscale::{apply_autoscale, refresh_active_autoscales};
 
 fn reset_empty_axes(project: &mut ProjectDocument) {
     let axes = &mut project.figure.axes[0];
-    for axis in [&mut axes.x, &mut axes.y] {
+    let mut label_ids = vec![axes.x.label_id.clone(), axes.y.label_id.clone()];
+    if let Some(axis) = &axes.x2 {
+        label_ids.push(axis.label_id.clone());
+    }
+    if let Some(axis) = &axes.y2 {
+        label_ids.push(axis.label_id.clone());
+    }
+    for axis in std::iter::once(&mut axes.x)
+        .chain(std::iter::once(&mut axes.y))
+        .chain(axes.x2.iter_mut())
+        .chain(axes.y2.iter_mut())
+    {
         axis.minimum = 0.0;
         axis.maximum = 1.0;
         axis.scale = AxisScale::Linear;
@@ -461,7 +476,6 @@ fn reset_empty_axes(project: &mut ProjectDocument) {
         axis.formatter = FormatterSpec::Auto;
         axis.autoscale = false;
     }
-    let label_ids = [axes.x.label_id.clone(), axes.y.label_id.clone()];
     for label in &mut project.semantic_registry {
         if label_ids.contains(&label.id) {
             label.nodes = vec![LabelNode::Text(String::new())];
@@ -560,6 +574,13 @@ fn next_stable_id(project: &ProjectDocument, prefix: &str) -> String {
                 .iter()
                 .flat_map(|axes| axes.series_groups.iter().map(|group| group.id.as_str())),
         )
+        .chain(project.figure.axes.iter().flat_map(|axes| {
+            std::iter::once(axes.id.as_str())
+                .chain(std::iter::once(axes.x.id.as_str()))
+                .chain(std::iter::once(axes.y.id.as_str()))
+                .chain(axes.x2.iter().map(|axis| axis.id.as_str()))
+                .chain(axes.y2.iter().map(|axis| axis.id.as_str()))
+        }))
         .chain(
             project
                 .semantic_registry
@@ -1033,7 +1054,7 @@ fn formal_series(
             .iter()
             .find(|artist| artist.id == *artist_id)
             .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
-        if !artist.visible {
+        if !project.artist_effectively_visible(artist) {
             continue;
         }
         let (points, line, marker, errors, error_style, color_id) = match &artist.properties {
@@ -1131,27 +1152,30 @@ fn formal_series(
             .map(instplot_text::Label::normalized_text)
             .unwrap_or_default();
         let binding = artist_binding(artist);
+        let group_members = project
+            .series_group_for_artist(&artist.id)
+            .map(|group| group.artist_ids.iter().collect::<BTreeSet<_>>())
+            .unwrap_or_default();
         let legend_marker = if !label.is_empty() && marker.is_none() {
-            binding.and_then(|binding| {
+            binding.and_then(|_| {
                 axes.artist_ids.iter().find_map(|candidate_id| {
-                    let candidate = project
-                        .figure
-                        .artists
-                        .iter()
-                        .find(|candidate| candidate.id == *candidate_id && candidate.visible)?;
-                    let ArtistProperties::Scatter {
-                        binding: candidate_binding,
-                        marker,
-                    } = &candidate.properties
+                    let candidate = project.figure.artists.iter().find(|candidate| {
+                        candidate.id == *candidate_id
+                            && group_members.contains(&candidate.id)
+                            && project.artist_effectively_visible(candidate)
+                    })?;
+                    let ArtistProperties::Scatter { binding: _, marker } = &candidate.properties
                     else {
                         return None;
                     };
-                    (candidate_binding == binding).then_some(LayoutMarkerStyle {
-                        shape: marker_shape(marker.shape),
-                        size: marker.size_pt,
-                        filled: marker.filled,
-                        interval: marker.interval.max(1),
-                    })
+                    group_members
+                        .contains(&candidate.id)
+                        .then_some(LayoutMarkerStyle {
+                            shape: marker_shape(marker.shape),
+                            size: marker.size_pt,
+                            filled: marker.filled,
+                            interval: marker.interval.max(1),
+                        })
                 })
             })
         } else {
@@ -1161,14 +1185,15 @@ fn formal_series(
             None
         } else {
             binding
-                .and_then(|binding| {
+                .and_then(|_| {
                     axes.artist_ids.iter().find_map(|candidate_id| {
-                        let candidate =
-                            project.figure.artists.iter().find(|candidate| {
-                                candidate.id == *candidate_id && candidate.visible
-                            })?;
+                        let candidate = project.figure.artists.iter().find(|candidate| {
+                            candidate.id == *candidate_id
+                                && group_members.contains(&candidate.id)
+                                && project.artist_effectively_visible(candidate)
+                        })?;
                         let ArtistProperties::ErrorBar {
-                            binding: error_binding,
+                            binding: _,
                             cap_width_pt,
                             stroke,
                             ..
@@ -1176,7 +1201,9 @@ fn formal_series(
                         else {
                             return None;
                         };
-                        (error_binding == binding).then_some((cap_width_pt, stroke))
+                        group_members
+                            .contains(&candidate.id)
+                            .then_some((cap_width_pt, stroke))
                     })
                 })
                 .map(|(cap_width_pt, stroke)| {
@@ -1221,7 +1248,7 @@ fn formal_annotations(
             .iter()
             .find(|artist| artist.id == *artist_id)
             .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
-        if !artist.visible {
+        if !project.artist_effectively_visible(artist) {
             continue;
         }
         let ArtistProperties::Annotation {
@@ -1240,6 +1267,7 @@ fn formal_annotations(
             offset_pt: (0.0, 0.0),
             connectors: connectors
                 .iter()
+                .filter(|connector| connector.axes.is_enabled_in(axes.mode))
                 .map(|connector| {
                     Ok(AnnotationConnector {
                         target: DataPoint {
@@ -1274,7 +1302,7 @@ fn legend_spec(
             .iter()
             .find(|artist| artist.id == *artist_id)
             .ok_or_else(|| DocumentLayoutError::MissingArtist(artist_id.clone()))?;
-        if !artist.visible {
+        if !project.artist_effectively_visible(artist) {
             continue;
         }
         let ArtistProperties::Legend {
@@ -1292,11 +1320,10 @@ fn legend_spec(
             .iter()
             .filter(|entry| {
                 entry.visible
-                    && project
-                        .figure
-                        .artists
-                        .iter()
-                        .any(|candidate| candidate.id == entry.artist_id && candidate.visible)
+                    && project.figure.artists.iter().any(|candidate| {
+                        candidate.id == entry.artist_id
+                            && project.artist_effectively_visible(candidate)
+                    })
             })
             .collect();
         let labels = visible_entries

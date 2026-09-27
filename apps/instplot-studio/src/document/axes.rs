@@ -1,6 +1,30 @@
 use super::*;
 
 impl FigureDocument {
+    pub fn axis_mode(&self) -> AxisMode {
+        self.project.figure.axes[0].mode
+    }
+
+    pub fn axis_record_by_identity(&self, identity: AxisIdentity) -> Option<crate::AxisRecord> {
+        let axes = &self.project.figure.axes[0];
+        match identity {
+            AxisIdentity::X1 => Some(axes.x.clone()),
+            AxisIdentity::X2 => axes.x2.clone(),
+            AxisIdentity::Y1 => Some(axes.y.clone()),
+            AxisIdentity::Y2 => axes.y2.clone(),
+        }
+    }
+
+    pub fn set_axis_mode(&mut self, mode: AxisMode) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        ensure_secondary_axis(&mut candidate, mode);
+        candidate.figure.axes[0].mode = mode;
+        refresh_active_autoscales(&mut candidate)?;
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
     pub fn axis_ranges(&self) -> AxisRanges {
         let axes = &self.project.figure.axes[0];
         AxisRanges {
@@ -114,4 +138,33 @@ impl FigureDocument {
         self.project.figure.height_mm = height;
         Ok(())
     }
+}
+
+fn ensure_secondary_axis(project: &mut ProjectDocument, mode: AxisMode) {
+    let (axis_id, label_id) = (
+        next_stable_id(project, "axis"),
+        next_stable_id(project, "axis-label"),
+    );
+    let axes = &mut project.figure.axes[0];
+    let target = match mode {
+        AxisMode::Single => return,
+        AxisMode::DualX => &mut axes.x2,
+        AxisMode::DualY => &mut axes.y2,
+    };
+    if target.is_some() {
+        return;
+    }
+    let mut record = match mode {
+        AxisMode::DualX => axes.x.clone(),
+        AxisMode::DualY => axes.y.clone(),
+        AxisMode::Single => unreachable!(),
+    };
+    record.id = axis_id;
+    record.label_id = label_id.clone();
+    record.autoscale = true;
+    project.semantic_registry.push(SemanticLabel {
+        id: label_id,
+        nodes: vec![LabelNode::Text(String::new())],
+    });
+    *target = Some(record);
 }

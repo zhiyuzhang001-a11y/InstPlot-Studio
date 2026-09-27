@@ -2928,17 +2928,20 @@ impl StudioApp {
                 ArtistProperties::Legend { entries, .. }
                     if event.role == SelectableRole::Legend =>
                 {
-                    let visible =
-                        entries
-                            .iter()
-                            .filter(|entry| {
-                                entry.visible
-                                    && self.document.project().figure.artists.iter().any(|artist| {
-                                        artist.id == entry.artist_id && artist.visible
-                                    })
-                            })
-                            .count()
-                            .max(1);
+                    let visible = entries
+                        .iter()
+                        .filter(|entry| {
+                            entry.visible
+                                && self.document.project().figure.artists.iter().any(|artist| {
+                                    artist.id == entry.artist_id
+                                        && self
+                                            .document
+                                            .project()
+                                            .artist_effectively_visible(artist)
+                                })
+                        })
+                        .count()
+                        .max(1);
                     let rows = ((bounds.3 - bounds.1 - 8.0) / 12.0).round().max(1.0) as usize;
                     let columns = visible.div_ceil(rows).max(1);
                     legend_drag = Some(LegendDragContext {
@@ -3531,17 +3534,20 @@ impl StudioApp {
                         continuous_change |= edit.continuous;
                         finish_coalescing |= edit.finish;
                     }
-                    let visible_entries =
-                        entries
-                            .iter()
-                            .filter(|entry| {
-                                entry.visible
-                                    && self.document.project().figure.artists.iter().any(|artist| {
-                                        artist.id == entry.artist_id && artist.visible
-                                    })
-                            })
-                            .count()
-                            .max(1);
+                    let visible_entries = entries
+                        .iter()
+                        .filter(|entry| {
+                            entry.visible
+                                && self.document.project().figure.artists.iter().any(|artist| {
+                                    artist.id == entry.artist_id
+                                        && self
+                                            .document
+                                            .project()
+                                            .artist_effectively_visible(artist)
+                                })
+                        })
+                        .count()
+                        .max(1);
                     let max_grid = visible_entries.min(usize::from(u8::MAX));
                     let rendered_rows = self
                         .resolved

@@ -23,7 +23,7 @@ pub use data::{
 pub use document::{
     AutoscalePolicy, AxisDimension, AxisRanges, DataBounds, DocumentLayout, DocumentLayoutError,
     FigureDocument, MoveDirection, SeriesCreationStyle, SeriesDescriptor, SeriesKind, VisualBounds,
-    apply_visual_padding, compute_data_bounds, layout_label_from_nodes,
+    apply_visual_padding, compute_axis_data_bounds, compute_data_bounds, layout_label_from_nodes,
 };
 pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
 pub use export::{

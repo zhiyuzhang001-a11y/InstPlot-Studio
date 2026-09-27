@@ -130,8 +130,18 @@ impl AxisBinding {
         y: YAxisSlot::Y1,
     };
 
-    pub fn is_supported(self) -> bool {
+    pub const fn is_supported(self) -> bool {
         !matches!((self.x, self.y), (XAxisSlot::X2, YAxisSlot::Y2))
+    }
+
+    pub const fn is_enabled_in(self, mode: AxisMode) -> bool {
+        self.is_supported()
+            && match (self.x, self.y) {
+                (XAxisSlot::X1, YAxisSlot::Y1) => true,
+                (XAxisSlot::X2, YAxisSlot::Y1) => matches!(mode, AxisMode::DualX),
+                (XAxisSlot::X1, YAxisSlot::Y2) => matches!(mode, AxisMode::DualY),
+                (XAxisSlot::X2, YAxisSlot::Y2) => false,
+            }
     }
 }
 
@@ -757,6 +767,47 @@ fn showcase_curve_value(index: usize, x: f64) -> f64 {
 mod fixture;
 
 impl ProjectDocument {
+    pub fn series_group_for_artist(&self, artist_id: &str) -> Option<&SeriesGroupRecord> {
+        self.figure
+            .axes
+            .first()?
+            .series_groups
+            .iter()
+            .find(|group| {
+                group
+                    .artist_ids
+                    .iter()
+                    .any(|candidate| candidate == artist_id)
+            })
+    }
+
+    pub fn artist_axis_binding(&self, artist: &ArtistRecord) -> Option<AxisBinding> {
+        match &artist.properties {
+            ArtistProperties::Line { .. }
+            | ArtistProperties::Scatter { .. }
+            | ArtistProperties::ErrorBar { .. } => self
+                .series_group_for_artist(&artist.id)
+                .map(|group| group.axes),
+            ArtistProperties::ReferenceLine { axes, .. } => Some(*axes),
+            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => None,
+        }
+    }
+
+    pub fn artist_effectively_visible(&self, artist: &ArtistRecord) -> bool {
+        artist.visible
+            && self
+                .artist_axis_binding(artist)
+                .is_none_or(|binding| binding.is_enabled_in(self.figure.axes[0].mode))
+    }
+
+    pub fn artist_id_effectively_visible(&self, artist_id: &str) -> bool {
+        self.figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == artist_id)
+            .is_some_and(|artist| self.artist_effectively_visible(artist))
+    }
+
     pub fn validate(&self) -> Result<(), ProjectError> {
         if self.schema_version != PROJECT_SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedSchema(self.schema_version));
