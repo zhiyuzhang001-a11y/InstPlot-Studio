@@ -15,6 +15,31 @@ impl FigureDocument {
         }
     }
 
+    pub fn set_axis_record_by_identity(
+        &mut self,
+        identity: AxisIdentity,
+        record: crate::AxisRecord,
+    ) -> Result<(), String> {
+        let current = self
+            .axis_record_by_identity(identity)
+            .ok_or_else(|| format!("axis {identity:?} is not available in the current project"))?;
+        if record.id != current.id || record.label_id != current.label_id {
+            return Err("axis identity and label identity cannot be replaced".to_owned());
+        }
+        let mut candidate = self.project.clone();
+        let axes = &mut candidate.figure.axes[0];
+        match identity {
+            AxisIdentity::X1 => axes.x = record,
+            AxisIdentity::X2 => axes.x2 = Some(record),
+            AxisIdentity::Y1 => axes.y = record,
+            AxisIdentity::Y2 => axes.y2 = Some(record),
+        }
+        apply_autoscale_for_axis(&mut candidate, identity, false)?;
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
     pub fn set_axis_mode(&mut self, mode: AxisMode) -> Result<(), String> {
         let mut candidate = self.project.clone();
         ensure_secondary_axis(&mut candidate, mode);
@@ -69,22 +94,11 @@ impl FigureDocument {
         dimension: AxisDimension,
         record: crate::AxisRecord,
     ) -> Result<(), String> {
-        let current = match dimension {
-            AxisDimension::X => &self.project.figure.axes[0].x,
-            AxisDimension::Y => &self.project.figure.axes[0].y,
+        let identity = match dimension {
+            AxisDimension::X => AxisIdentity::X1,
+            AxisDimension::Y => AxisIdentity::Y1,
         };
-        if record.id != current.id || record.label_id != current.label_id {
-            return Err("axis identity and label identity cannot be replaced".to_owned());
-        }
-        let mut candidate = self.project.clone();
-        match dimension {
-            AxisDimension::X => candidate.figure.axes[0].x = record,
-            AxisDimension::Y => candidate.figure.axes[0].y = record,
-        }
-        apply_autoscale(&mut candidate, dimension)?;
-        candidate.validate().map_err(|error| error.to_string())?;
-        self.project = candidate;
-        Ok(())
+        self.set_axis_record_by_identity(identity, record)
     }
 
     pub fn set_axis_label(
@@ -95,10 +109,25 @@ impl FigureDocument {
         if nodes.is_empty() {
             return Err("axis label cannot be empty".to_owned());
         }
-        let label_id = match dimension {
-            AxisDimension::X => self.project.figure.axes[0].x.label_id.clone(),
-            AxisDimension::Y => self.project.figure.axes[0].y.label_id.clone(),
+        let identity = match dimension {
+            AxisDimension::X => AxisIdentity::X1,
+            AxisDimension::Y => AxisIdentity::Y1,
         };
+        self.set_axis_label_by_identity(identity, nodes)
+    }
+
+    pub fn set_axis_label_by_identity(
+        &mut self,
+        identity: AxisIdentity,
+        nodes: Vec<LabelNode>,
+    ) -> Result<(), String> {
+        if nodes.is_empty() {
+            return Err("axis label cannot be empty".to_owned());
+        }
+        let label_id = self
+            .axis_record_by_identity(identity)
+            .ok_or_else(|| format!("axis {identity:?} is not available in the current project"))?
+            .label_id;
         let label = self
             .project
             .semantic_registry
@@ -110,14 +139,22 @@ impl FigureDocument {
     }
 
     pub fn axis_label(&self, dimension: AxisDimension) -> &[LabelNode] {
-        let label_id = match dimension {
-            AxisDimension::X => &self.project.figure.axes[0].x.label_id,
-            AxisDimension::Y => &self.project.figure.axes[0].y.label_id,
+        let identity = match dimension {
+            AxisDimension::X => AxisIdentity::X1,
+            AxisDimension::Y => AxisIdentity::Y1,
         };
+        self.axis_label_by_identity(identity)
+    }
+
+    pub fn axis_label_by_identity(&self, identity: AxisIdentity) -> &[LabelNode] {
+        let Some(axis) = self.axis_record_by_identity(identity) else {
+            return &[];
+        };
+        let label_id = axis.label_id;
         self.project
             .semantic_registry
             .iter()
-            .find(|label| label.id == *label_id)
+            .find(|label| label.id == label_id)
             .map(|label| label.nodes.as_slice())
             .unwrap_or(&[])
     }

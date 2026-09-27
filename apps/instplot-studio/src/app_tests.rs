@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_controller::explicit_column_unit;
 use instplot_export::ResolvedItem;
 use instplot_render::{Color, DisplayItem, NodeId};
 
@@ -904,6 +905,109 @@ fn manual_multiple_xy_groups_create_distinct_series_and_automatic_errors() {
         assert!(colors_by_y.values().all(|colors| colors.len() == 1));
         assert_ne!(colors_by_y["Signal A"], colors_by_y["Signal B"]);
     }
+}
+
+#[test]
+fn imported_and_manual_series_share_the_same_dual_axis_binding_path() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("smoke.csv");
+    app.load_data_paths(vec![fixture]);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "manual-dual-axis".to_owned(),
+            source_name: "Manual dual axis".to_owned(),
+            x: ManualAxisInput {
+                name: "manual x".to_owned(),
+                measurements: vec!["0 1 2".to_owned()],
+            },
+            y: ManualAxisInput {
+                name: "manual y".to_owned(),
+                measurements: vec!["10 20 30".to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }],
+    };
+    app.insert_manual_data().unwrap();
+
+    let logical = app.document.logical_series();
+    assert_eq!(logical.len(), 2);
+    let imported = logical
+        .iter()
+        .find(|series| {
+            series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.data_source_id != "manual-dual-axis")
+        })
+        .unwrap();
+    let manual = logical
+        .iter()
+        .find(|series| {
+            series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.data_source_id == "manual-dual-axis")
+        })
+        .unwrap();
+    app.document.set_axis_mode(AxisMode::DualY).unwrap();
+    app.document
+        .set_series_axis_binding(
+            &manual.id,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        app.document.series_axis_binding(&imported.id),
+        Some(AxisBinding::PRIMARY)
+    );
+    assert_eq!(
+        app.document.series_axis_binding(&manual.id),
+        Some(AxisBinding {
+            x: XAxisSlot::X1,
+            y: YAxisSlot::Y2,
+        })
+    );
+    assert_eq!(
+        app.document.project().data_sources.len(),
+        app.session.dataset_count()
+    );
+}
+
+#[test]
+fn logical_series_title_reports_the_combined_plot_style() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: vec![ManualDataGroupInput {
+            group_id: "combined-title".to_owned(),
+            source_name: "Combined title".to_owned(),
+            x: ManualAxisInput {
+                name: "x".to_owned(),
+                measurements: vec!["0 1".to_owned()],
+            },
+            y: ManualAxisInput {
+                name: "y".to_owned(),
+                measurements: vec!["1 2".to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        }],
+    };
+    app.insert_manual_data().unwrap();
+    let series = app.document.logical_series().remove(0);
+    assert_eq!(
+        canvas_logical_series_title(UiLanguage::Chinese, &app.document, &series),
+        "曲线＋点 · Combined title"
+    );
 }
 
 #[test]
@@ -2230,6 +2334,14 @@ fn fixed_tick_text_accepts_finite_values_and_rejects_bad_input() {
 }
 
 #[test]
+fn unit_conflict_detection_requires_explicit_delimiters() {
+    assert_eq!(explicit_column_unit("Field (mT)"), Some("mT"));
+    assert_eq!(explicit_column_unit("Current [A m^-2]"), Some("A m^-2"));
+    assert_eq!(explicit_column_unit("temperature_K"), None);
+    assert_eq!(explicit_column_unit("signal"), None);
+}
+
+#[test]
 fn cursor_coordinates_use_formal_axes_and_scale_mapping() {
     let document = FigureDocument::fixed();
     let resolved = resolved_preview(&document).unwrap();
@@ -2274,6 +2386,26 @@ fn cursor_coordinates_use_formal_axes_and_scale_mapping() {
     log_axis.maximum = 100.0;
     assert!((axis_value_at_fraction(&log_axis, 0.5).unwrap() - 10.0).abs() < 1e-9);
     assert_eq!(format_data_coordinate(-0.25), "−0.25");
+}
+
+#[test]
+fn cursor_coordinates_include_only_the_active_secondary_axis() {
+    let mut document = FigureDocument::fixed();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    let mut y2 = document.axis_record_by_identity(AxisIdentity::Y2).unwrap();
+    y2.autoscale = false;
+    y2.minimum = 100.0;
+    y2.maximum = 200.0;
+    document
+        .set_axis_record_by_identity(AxisIdentity::Y2, y2)
+        .unwrap();
+    let resolved = resolved_preview(&document).unwrap();
+    let axes = resolved.layout.result.axes;
+    let point = egui::pos2(axes.x as f32, axes.y as f32);
+    let coordinates =
+        active_data_coordinates_at(&resolved, &document, point, egui::Pos2::ZERO, 1.0).unwrap();
+    assert!(coordinates.x2.is_none());
+    assert_eq!(coordinates.y2, Some(200.0));
 }
 
 #[test]

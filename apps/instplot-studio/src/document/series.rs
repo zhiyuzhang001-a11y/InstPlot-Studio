@@ -23,12 +23,26 @@ impl FigureDocument {
             ));
         }
         let mut candidate = self.project.clone();
+        let data_binding = candidate
+            .figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == artist_id)
+            .and_then(|artist| match &artist.properties {
+                ArtistProperties::Line { binding, .. }
+                | ArtistProperties::Scatter { binding, .. }
+                | ArtistProperties::ErrorBar { binding, .. } => Some(binding.clone()),
+                _ => None,
+            });
         let group = candidate.figure.axes[0]
             .series_groups
             .iter_mut()
             .find(|group| group.artist_ids.iter().any(|id| id == artist_id))
             .ok_or_else(|| format!("artist {artist_id} has no logical series group"))?;
         group.axes = axes;
+        if let Some(binding) = data_binding {
+            suggest_empty_secondary_axis_label(&mut candidate, axes, &binding);
+        }
         refresh_active_autoscales(&mut candidate)?;
         candidate.validate().map_err(|error| error.to_string())?;
         self.project = candidate;
@@ -55,7 +69,7 @@ impl FigureDocument {
         };
         let source_label = source.label.clone();
         let color_id = default_series_color(&self.project, data_source_id, x_column, y_column);
-        let marker_shape = default_series_marker(&self.project, data_source_id);
+        let marker_shape = default_series_marker(&self.project, data_source_id, x_column, y_column);
         let kinds = match style {
             SeriesCreationStyle::Line => vec![ArtistKind::Line],
             SeriesCreationStyle::Scatter => vec![ArtistKind::Scatter],
@@ -455,7 +469,12 @@ impl FigureDocument {
         });
         let marker_style = marker_style.unwrap_or_else(|| MarkerStyle {
             color_id: fallback_color,
-            shape: default_series_marker(&candidate, &binding.data_source_id),
+            shape: default_series_marker(
+                &candidate,
+                &binding.data_source_id,
+                &binding.x_column,
+                &binding.y_column,
+            ),
             size_pt: 4.0,
             filled: true,
             interval: 1,
@@ -762,5 +781,40 @@ impl FigureDocument {
             .map_err(|error| error.to_string())?;
         *self = candidate;
         Ok(())
+    }
+}
+
+fn suggest_empty_secondary_axis_label(
+    project: &mut ProjectDocument,
+    axes: AxisBinding,
+    binding: &DataBinding,
+) {
+    let suggestion = match (axes.x, axes.y) {
+        (XAxisSlot::X2, YAxisSlot::Y1) => Some((AxisIdentity::X2, &binding.x_column)),
+        (XAxisSlot::X1, YAxisSlot::Y2) => Some((AxisIdentity::Y2, &binding.y_column)),
+        _ => None,
+    };
+    let Some((identity, text)) = suggestion else {
+        return;
+    };
+    let axes = &project.figure.axes[0];
+    let label_id = match identity {
+        AxisIdentity::X2 => axes.x2.as_ref().map(|axis| axis.label_id.as_str()),
+        AxisIdentity::Y2 => axes.y2.as_ref().map(|axis| axis.label_id.as_str()),
+        AxisIdentity::X1 | AxisIdentity::Y1 => None,
+    };
+    let Some(label_id) = label_id else {
+        return;
+    };
+    if let Some(label) = project
+        .semantic_registry
+        .iter_mut()
+        .find(|label| label.id == label_id)
+        && label.nodes.iter().all(|node| match node {
+            LabelNode::Text(value) => value.trim().is_empty(),
+            _ => false,
+        })
+    {
+        label.nodes = vec![LabelNode::Text(text.clone())];
     }
 }

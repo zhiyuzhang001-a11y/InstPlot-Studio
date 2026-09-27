@@ -913,7 +913,7 @@ pub(super) fn manual_group_input_card(
 pub(super) fn minor_interval_editor(
     ui: &mut egui::Ui,
     language: UiLanguage,
-    dimension: AxisDimension,
+    identity: AxisIdentity,
     record: &mut AxisRecord,
     numeric_inputs: &mut BTreeMap<String, DeferredNumericInput>,
 ) -> UiEdit {
@@ -923,7 +923,7 @@ pub(super) fn minor_interval_editor(
     let mut edit = UiEdit::default();
     ui.horizontal_wrapped(|ui| {
         ui.label(language.text(Text::MinorTickInterval));
-        egui::ComboBox::from_id_salt(("minor-interval-mode", dimension))
+        egui::ComboBox::from_id_salt(("minor-interval-mode", identity))
             .selected_text(language.text(if record.minor_interval.is_some() {
                 Text::Interval
             } else {
@@ -954,7 +954,7 @@ pub(super) fn minor_interval_editor(
             edit.merge(deferred_f64_editor(
                 ui,
                 numeric_inputs,
-                format!("axis-{dimension:?}-minor-interval"),
+                format!("axis-{identity:?}-minor-interval"),
                 step,
                 f64::MIN_POSITIVE..=f64::INFINITY,
                 112.0,
@@ -1088,11 +1088,14 @@ pub(super) fn artist_role_name(language: UiLanguage, role: ArtistRole) -> &'stat
     })
 }
 
-pub(super) fn series_style_name(style: SeriesCreationStyle) -> &'static str {
-    match style {
-        SeriesCreationStyle::Scatter => "散点",
-        SeriesCreationStyle::Line => "曲线",
-        SeriesCreationStyle::LineAndMarker => "曲线＋点",
+pub(super) fn series_style_name(language: UiLanguage, style: SeriesCreationStyle) -> &'static str {
+    match (language, style) {
+        (UiLanguage::Chinese, SeriesCreationStyle::Scatter) => "散点",
+        (UiLanguage::Chinese, SeriesCreationStyle::Line) => "曲线",
+        (UiLanguage::Chinese, SeriesCreationStyle::LineAndMarker) => "曲线＋点",
+        (UiLanguage::English, SeriesCreationStyle::Scatter) => "Scatter",
+        (UiLanguage::English, SeriesCreationStyle::Line) => "Line",
+        (UiLanguage::English, SeriesCreationStyle::LineAndMarker) => "Line + markers",
     }
 }
 

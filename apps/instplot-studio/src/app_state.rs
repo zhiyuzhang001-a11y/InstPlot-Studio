@@ -43,7 +43,7 @@ pub(super) struct StudioApp {
     pub(super) allow_close: bool,
     pub(super) canvas_zoom: f32,
     pub(super) canvas_scroll: egui::Vec2,
-    pub(super) hover_data_coordinates: Option<(f64, f64)>,
+    pub(super) hover_data_coordinates: Option<HoverDataCoordinates>,
     pub(super) trackpad_scroll_active: bool,
     pub(super) show_layers: bool,
     pub(super) show_inspector: bool,
@@ -268,6 +268,14 @@ pub(super) struct ManualDataState {
 
 #[derive(Clone, Copy)]
 pub(super) enum LabelInputTarget<'a> {
-    Axis(AxisDimension),
+    Axis(AxisIdentity),
     Semantic(&'a str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct HoverDataCoordinates {
+    pub(super) x1: f64,
+    pub(super) y1: f64,
+    pub(super) x2: Option<f64>,
+    pub(super) y2: Option<f64>,
 }

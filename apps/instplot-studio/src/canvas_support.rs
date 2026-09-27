@@ -31,6 +31,29 @@ pub(super) fn data_coordinates_at(
     data_coordinates_from_local(document, axes, x, y)
 }
 
+pub(super) fn active_data_coordinates_at(
+    resolved: &ResolvedFigure,
+    document: &FigureDocument,
+    point: egui::Pos2,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<HoverDataCoordinates> {
+    let (x1, y1) = data_coordinates_at(resolved, document, point, origin, zoom)?;
+    let local = (point - origin) / zoom;
+    let axes = resolved.layout.result.axes;
+    let x_fraction = ((f64::from(local.x) - axes.x) / axes.width).clamp(0.0, 1.0);
+    let y_fraction = (1.0 - (f64::from(local.y) - axes.y) / axes.height).clamp(0.0, 1.0);
+    let x2 = (document.axis_mode() == AxisMode::DualX)
+        .then(|| document.axis_record_by_identity(AxisIdentity::X2))
+        .flatten()
+        .and_then(|axis| axis_value_at_fraction(&axis, x_fraction));
+    let y2 = (document.axis_mode() == AxisMode::DualY)
+        .then(|| document.axis_record_by_identity(AxisIdentity::Y2))
+        .flatten()
+        .and_then(|axis| axis_value_at_fraction(&axis, y_fraction));
+    Some(HoverDataCoordinates { x1, y1, x2, y2 })
+}
+
 pub(super) fn data_coordinates_from_local(
     document: &FigureDocument,
     axes: instplot_layout::Bounds,
@@ -536,6 +559,19 @@ pub(super) fn canvas_series_title(language: UiLanguage, series: &SeriesDescripto
     } else {
         format!("{kind} · {}", series.label)
     }
+}
+
+pub(super) fn canvas_logical_series_title(
+    language: UiLanguage,
+    document: &FigureDocument,
+    series: &SeriesDescriptor,
+) -> String {
+    if matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter)
+        && let Some(style) = document.series_style(&series.id)
+    {
+        return format!("{} · {}", series_style_name(language, style), series.label);
+    }
+    canvas_series_title(language, series)
 }
 
 pub(super) fn fixed_ticks_text(record: &AxisRecord) -> String {

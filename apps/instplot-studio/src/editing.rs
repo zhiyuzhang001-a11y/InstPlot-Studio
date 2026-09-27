@@ -1,6 +1,6 @@
 use crate::{
-    ArtistRecord, AxisBinding, AxisDimension, AxisMode, AxisRanges, AxisRecord, DocumentLayout,
-    ExportPreferences, FigureDocument, LabelNode, MoveDirection, ProjectDocument,
+    ArtistRecord, AxisBinding, AxisDimension, AxisIdentity, AxisMode, AxisRanges, AxisRecord,
+    DocumentLayout, ExportPreferences, FigureDocument, LabelNode, MoveDirection, ProjectDocument,
     SeriesCreationStyle,
 };
 
@@ -77,8 +77,16 @@ pub enum EditCommand {
         dimension: AxisDimension,
         record: AxisRecord,
     },
+    SetAxisRecordByIdentity {
+        identity: AxisIdentity,
+        record: AxisRecord,
+    },
     SetAxisLabel {
         dimension: AxisDimension,
+        nodes: Vec<LabelNode>,
+    },
+    SetAxisLabelByIdentity {
+        identity: AxisIdentity,
         nodes: Vec<LabelNode>,
     },
     SetFigureSize {
@@ -128,7 +136,9 @@ impl EditCommand {
             Self::DeleteDataSource { .. } => "Delete data source",
             Self::DeleteDataSources { .. } => "Remove imported data",
             Self::SetAxisRecord { .. } => "Change axis settings",
+            Self::SetAxisRecordByIdentity { .. } => "Change axis settings",
             Self::SetAxisLabel { .. } => "Change axis label",
+            Self::SetAxisLabelByIdentity { .. } => "Change axis label",
             Self::SetFigureSize { .. } => "Change figure size",
             Self::SetArtistRecord(_) => "Change artist properties",
             Self::SetAllMarkerDensity { .. } => "Change all marker density",
@@ -206,7 +216,13 @@ impl EditCommand {
             Self::SetAxisRecord { dimension, record } => {
                 document.set_axis_record(dimension, record)
             }
+            Self::SetAxisRecordByIdentity { identity, record } => {
+                document.set_axis_record_by_identity(identity, record)
+            }
             Self::SetAxisLabel { dimension, nodes } => document.set_axis_label(dimension, nodes),
+            Self::SetAxisLabelByIdentity { identity, nodes } => {
+                document.set_axis_label_by_identity(identity, nodes)
+            }
             Self::SetFigureSize {
                 width_mm,
                 height_mm,

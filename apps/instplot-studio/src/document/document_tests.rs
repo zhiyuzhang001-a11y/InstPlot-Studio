@@ -158,6 +158,9 @@ fn dual_y_autoscale_includes_error_caps_and_mode_switch_suspends_without_hiding(
 fn dual_x_autoscale_is_independent_and_last_secondary_series_enters_empty_state() {
     let mut document = FigureDocument::fixed();
     let secondary = add_secondary_dataset(&mut document);
+    let error = document
+        .create_error_bars("secondary-data", "x2", "y2", "ye2", Some("xe2"))
+        .unwrap();
     document.set_axis_mode(AxisMode::DualX).unwrap();
     document
         .set_series_axis_binding(
@@ -177,10 +180,11 @@ fn dual_x_autoscale_is_independent_and_last_secondary_series_enters_empty_state(
     assert_eq!(
         x2,
         DataBounds {
-            minimum: 100.0,
-            maximum: 200.0
+            minimum: 90.0,
+            maximum: 220.0
         }
     );
+    assert!(document.project().artist_id_effectively_visible(&error));
     assert!(
         document
             .axis_record_by_identity(AxisIdentity::X2)
@@ -199,6 +203,122 @@ fn dual_x_autoscale_is_independent_and_last_secondary_series_enters_empty_state(
             AutoscalePolicy::default()
         )
         .is_err()
+    );
+}
+
+#[test]
+fn user_hidden_secondary_series_stays_hidden_across_mode_switch_and_round_trip() {
+    let mut document = FigureDocument::fixed();
+    let secondary = add_secondary_dataset(&mut document);
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    document.set_series_visible(&secondary, false).unwrap();
+    document.set_axis_mode(AxisMode::Single).unwrap();
+
+    let project_path = std::env::temp_dir().join(format!(
+        "instplot-dual-axis-dormant-{}.instplot",
+        std::process::id()
+    ));
+    document.save(&project_path).unwrap();
+    let (mut reopened, _) = FigureDocument::open(&project_path).unwrap();
+    std::fs::remove_file(project_path).unwrap();
+    assert_eq!(reopened.project().figure.axes[0].mode, AxisMode::Single);
+    assert_eq!(
+        reopened.series_axis_binding(&secondary),
+        Some(AxisBinding {
+            x: XAxisSlot::X1,
+            y: YAxisSlot::Y2,
+        })
+    );
+    assert!(
+        !reopened
+            .series()
+            .into_iter()
+            .find(|series| series.id == secondary)
+            .unwrap()
+            .visible
+    );
+
+    reopened.set_axis_mode(AxisMode::DualY).unwrap();
+    assert!(!reopened.project().artist_id_effectively_visible(&secondary));
+}
+
+#[test]
+fn secondary_axis_record_and_label_are_editable_without_replacing_identity() {
+    let mut document = FigureDocument::fixed();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    let mut y2 = document.axis_record_by_identity(AxisIdentity::Y2).unwrap();
+    let original_id = y2.id.clone();
+    y2.autoscale = false;
+    y2.minimum = -20.0;
+    y2.maximum = 80.0;
+    document
+        .set_axis_record_by_identity(AxisIdentity::Y2, y2)
+        .unwrap();
+    document
+        .set_axis_label_by_identity(
+            AxisIdentity::Y2,
+            vec![LabelNode::Text("Secondary response".to_owned())],
+        )
+        .unwrap();
+
+    let saved = document.axis_record_by_identity(AxisIdentity::Y2).unwrap();
+    assert_eq!(saved.id, original_id);
+    assert_eq!((saved.minimum, saved.maximum), (-20.0, 80.0));
+    assert_eq!(
+        document.axis_label_by_identity(AxisIdentity::Y2),
+        &[LabelNode::Text("Secondary response".to_owned())]
+    );
+}
+
+#[test]
+fn first_secondary_assignment_suggests_a_label_but_never_overwrites_user_text() {
+    let mut document = FigureDocument::fixed();
+    let secondary = add_secondary_dataset(&mut document);
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        document.axis_label_by_identity(AxisIdentity::Y2),
+        &[LabelNode::Text("y2".to_owned())]
+    );
+
+    document
+        .set_axis_label_by_identity(
+            AxisIdentity::Y2,
+            vec![LabelNode::Text("Custom unit".to_owned())],
+        )
+        .unwrap();
+    document
+        .set_series_axis_binding(&secondary, AxisBinding::PRIMARY)
+        .unwrap();
+    document
+        .set_series_axis_binding(
+            &secondary,
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        document.axis_label_by_identity(AxisIdentity::Y2),
+        &[LabelNode::Text("Custom unit".to_owned())]
     );
 }
 
@@ -1407,6 +1527,113 @@ fn separately_imported_sources_receive_distinct_default_markers() {
             .unwrap()
     });
     assert_ne!(shapes[0], shapes[1]);
+}
+
+#[test]
+fn multiple_series_from_one_source_receive_distinct_default_markers() {
+    let dataset = DataSet {
+        source: PathBuf::from("multi-series.csv"),
+        label: Some("multi-series".to_owned()),
+        kind: DataSetKind::Source,
+        plot_id: "multi-series".to_owned(),
+        fit_link: None,
+        encoding: "UTF-8".to_owned(),
+        separator: "comma".to_owned(),
+        columns: vec![
+            NumericColumn {
+                name: "x".to_owned(),
+                values: vec![0.0, 1.0],
+            },
+            NumericColumn {
+                name: "y1".to_owned(),
+                values: vec![1.0, 2.0],
+            },
+            NumericColumn {
+                name: "y2".to_owned(),
+                values: vec![2.0, 3.0],
+            },
+        ],
+        row_count: 2,
+        alive: vec![true; 2],
+    };
+    let mut document = FigureDocument::fixed();
+    document.sync_datasets(&[dataset]).unwrap();
+    for y in ["y1", "y2"] {
+        document
+            .create_series("multi-series", "x", y, SeriesCreationStyle::Scatter)
+            .unwrap();
+    }
+    let shapes = document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Scatter { binding, marker }
+                if binding.data_source_id == "multi-series" =>
+            {
+                Some(marker.shape)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(shapes.len(), 2);
+    assert_ne!(shapes[0], shapes[1]);
+}
+
+#[test]
+fn line_marker_and_error_bar_remain_one_logical_series_entry() {
+    let dataset = DataSet {
+        source: PathBuf::from("logical-series.csv"),
+        label: Some("logical-series".to_owned()),
+        kind: DataSetKind::Source,
+        plot_id: "logical-series".to_owned(),
+        fit_link: None,
+        encoding: "UTF-8".to_owned(),
+        separator: "comma".to_owned(),
+        columns: vec![
+            NumericColumn {
+                name: "x".to_owned(),
+                values: vec![0.0, 1.0],
+            },
+            NumericColumn {
+                name: "y".to_owned(),
+                values: vec![1.0, 2.0],
+            },
+            NumericColumn {
+                name: "error".to_owned(),
+                values: vec![0.1, 0.2],
+            },
+        ],
+        row_count: 2,
+        alive: vec![true; 2],
+    };
+    let mut document = FigureDocument::fixed();
+    document.sync_datasets(&[dataset]).unwrap();
+    document
+        .create_series(
+            "logical-series",
+            "x",
+            "y",
+            SeriesCreationStyle::LineAndMarker,
+        )
+        .unwrap();
+    document
+        .create_error_bars("logical-series", "x", "y", "error", None)
+        .unwrap();
+
+    let logical = document
+        .logical_series()
+        .into_iter()
+        .filter(|series| {
+            series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.data_source_id == "logical-series")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(logical.len(), 1);
+    assert_eq!(document.linked_series_ids(&logical[0].id).len(), 3);
 }
 
 #[test]

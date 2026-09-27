@@ -1291,7 +1291,10 @@ impl StudioApp {
                 let minor_edit = minor_interval_editor(
                     ui,
                     self.language,
-                    dimension,
+                    match dimension {
+                        AxisDimension::X => AxisIdentity::X1,
+                        AxisDimension::Y => AxisIdentity::Y1,
+                    },
                     &mut record,
                     &mut self.numeric_inputs,
                 );
@@ -1427,12 +1430,16 @@ impl StudioApp {
         self.axis_label_editor(ui, dimension);
     }
 
-    pub(super) fn axis_quick_editor(&mut self, ui: &mut egui::Ui, dimension: AxisDimension) {
-        let mut record = self.document.axis_record(dimension);
-        let title = match dimension {
-            AxisDimension::X => self.language.text(Text::XAxis),
-            AxisDimension::Y => self.language.text(Text::YAxis),
+    pub(super) fn axis_quick_editor_by_identity(
+        &mut self,
+        ui: &mut egui::Ui,
+        identity: AxisIdentity,
+    ) {
+        let Some(mut record) = self.document.axis_record_by_identity(identity) else {
+            return;
         };
+        let dimension = axis_dimension(identity);
+        let title = axis_title(self.language, identity);
         ui.strong(self.language.text(Text::AxesRanges));
         ui.add_space(2.0);
         let mut changed = ui
@@ -1446,7 +1453,7 @@ impl StudioApp {
                 let minimum = deferred_f64_editor(
                     ui,
                     &mut self.numeric_inputs,
-                    format!("quick-axis-{dimension:?}-minimum"),
+                    format!("quick-axis-{identity:?}-minimum"),
                     &mut record.minimum,
                     f64::NEG_INFINITY..=f64::INFINITY,
                     92.0,
@@ -1457,7 +1464,7 @@ impl StudioApp {
                 let maximum = deferred_f64_editor(
                     ui,
                     &mut self.numeric_inputs,
-                    format!("quick-axis-{dimension:?}-maximum"),
+                    format!("quick-axis-{identity:?}-maximum"),
                     &mut record.maximum,
                     f64::NEG_INFINITY..=f64::INFINITY,
                     92.0,
@@ -1477,7 +1484,7 @@ impl StudioApp {
             };
             ui.horizontal_wrapped(|ui| {
                 ui.strong(self.language.text(Text::MajorTicks));
-                egui::ComboBox::from_id_salt(("quick-locator", dimension))
+                egui::ComboBox::from_id_salt(("quick-locator", identity))
                     .selected_text(match mode {
                         0 => self.language.text(Text::Auto),
                         1 => self.language.text(Text::Interval),
@@ -1506,7 +1513,7 @@ impl StudioApp {
                     let edit = deferred_f64_editor(
                         ui,
                         &mut self.numeric_inputs,
-                        format!("quick-axis-{dimension:?}-major-interval"),
+                        format!("quick-axis-{identity:?}-major-interval"),
                         step,
                         f64::MIN_POSITIVE..=f64::INFINITY,
                         112.0,
@@ -1519,7 +1526,7 @@ impl StudioApp {
             let minor_edit = minor_interval_editor(
                 ui,
                 self.language,
-                dimension,
+                identity,
                 &mut record,
                 &mut self.numeric_inputs,
             );
@@ -1529,8 +1536,8 @@ impl StudioApp {
         }
         if changed {
             self.execute_document_edit_with_group(
-                EditCommand::SetAxisRecord { dimension, record },
-                title,
+                EditCommand::SetAxisRecordByIdentity { identity, record },
+                &title,
                 continuous.then_some(match dimension {
                     AxisDimension::X => EditGroup::AxisXSettings,
                     AxisDimension::Y => EditGroup::AxisYSettings,
@@ -1543,10 +1550,24 @@ impl StudioApp {
     }
 
     pub(super) fn axis_label_editor(&mut self, ui: &mut egui::Ui, dimension: AxisDimension) {
-        let current = self.document.axis_label(dimension).to_vec();
-        let key = match dimension {
-            AxisDimension::X => "axis-label-x",
-            AxisDimension::Y => "axis-label-y",
+        let identity = match dimension {
+            AxisDimension::X => AxisIdentity::X1,
+            AxisDimension::Y => AxisIdentity::Y1,
+        };
+        self.axis_label_editor_by_identity(ui, identity);
+    }
+
+    pub(super) fn axis_label_editor_by_identity(
+        &mut self,
+        ui: &mut egui::Ui,
+        identity: AxisIdentity,
+    ) {
+        let current = self.document.axis_label_by_identity(identity).to_vec();
+        let key = match identity {
+            AxisIdentity::X1 => "axis-label-x1",
+            AxisIdentity::X2 => "axis-label-x2",
+            AxisIdentity::Y1 => "axis-label-y1",
+            AxisIdentity::Y2 => "axis-label-y2",
         };
         let initial = label_input::format(&current)
             .or_else(|| {
@@ -1556,7 +1577,7 @@ impl StudioApp {
                     .map(|state| state.text.clone())
             })
             .unwrap_or_else(|| label_input::display_text(&current));
-        self.label_input_editor(ui, key, current, initial, LabelInputTarget::Axis(dimension));
+        self.label_input_editor(ui, key, current, initial, LabelInputTarget::Axis(identity));
     }
 
     pub(super) fn sync_axis_editors(&mut self) {
@@ -2295,25 +2316,123 @@ impl StudioApp {
         else {
             return;
         };
-        let Some(series) = self.document.series().into_iter().find(|series| {
-            matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter)
-                && series
+        let mut series_for_dataset = self
+            .document
+            .logical_series()
+            .into_iter()
+            .filter(|series| {
+                series
                     .binding
                     .as_ref()
                     .is_some_and(|binding| binding.data_source_id == dataset_id)
-        }) else {
-            return;
-        };
-        let binding = series.binding.as_ref().expect("filtered bound series");
+            })
+            .collect::<Vec<_>>();
         let Some(dataset) = self
             .session
             .datasets()
             .iter()
-            .find(|dataset| dataset.plot_id == binding.data_source_id)
+            .find(|dataset| dataset.plot_id == dataset_id)
             .cloned()
         else {
             return;
         };
+        if series_for_dataset.is_empty() {
+            return;
+        }
+        let selected_index = self
+            .selected_series
+            .as_ref()
+            .and_then(|selected| {
+                series_for_dataset
+                    .iter()
+                    .position(|series| &series.id == selected)
+            })
+            .unwrap_or(0);
+        let mut selected_id = series_for_dataset[selected_index].id.clone();
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt(("file-series", &group.key))
+                .width(142.0)
+                .selected_text(
+                    series_for_dataset
+                        .iter()
+                        .position(|series| series.id == selected_id)
+                        .map_or_else(|| "曲线".to_owned(), |index| format!("曲线 {}", index + 1)),
+                )
+                .show_ui(ui, |ui| {
+                    for (index, series) in series_for_dataset.iter().enumerate() {
+                        ui.selectable_value(
+                            &mut selected_id,
+                            series.id.clone(),
+                            format!(
+                                "曲线 {} · {}",
+                                index + 1,
+                                canvas_logical_series_title(self.language, &self.document, series,)
+                            ),
+                        );
+                    }
+                });
+            if ui.button("＋").on_hover_text("从此文件新增曲线").clicked() {
+                let used_y = series_for_dataset
+                    .iter()
+                    .filter_map(|series| {
+                        series
+                            .binding
+                            .as_ref()
+                            .map(|binding| binding.y_column.as_str())
+                    })
+                    .collect::<BTreeSet<_>>();
+                let x = series_for_dataset[0]
+                    .binding
+                    .as_ref()
+                    .map(|binding| binding.x_column.clone())
+                    .unwrap_or_else(|| dataset.columns[0].name.clone());
+                if let Some(y) = dataset
+                    .columns
+                    .iter()
+                    .map(|column| column.name.as_str())
+                    .find(|column| *column != x && !used_y.contains(column))
+                    .or_else(|| {
+                        dataset
+                            .columns
+                            .iter()
+                            .map(|column| column.name.as_str())
+                            .find(|column| *column != x)
+                    })
+                {
+                    self.execute_document_edit(
+                        EditCommand::CreateSeries {
+                            data_source_id: dataset.plot_id.clone(),
+                            x_column: x,
+                            y_column: y.to_owned(),
+                            style: SeriesCreationStyle::Scatter,
+                        },
+                        "新增曲线",
+                    );
+                    series_for_dataset = self
+                        .document
+                        .logical_series()
+                        .into_iter()
+                        .filter(|series| {
+                            series
+                                .binding
+                                .as_ref()
+                                .is_some_and(|binding| binding.data_source_id == dataset_id)
+                        })
+                        .collect();
+                    if let Some(created) = series_for_dataset.last() {
+                        selected_id.clone_from(&created.id);
+                    }
+                }
+            }
+        });
+        self.selected_series = Some(selected_id.clone());
+        let Some(series) = series_for_dataset
+            .into_iter()
+            .find(|series| series.id == selected_id)
+        else {
+            return;
+        };
+        let binding = series.binding.as_ref().expect("filtered bound series");
         let mut x_column = binding.x_column.clone();
         let mut y_column = binding.y_column.clone();
         let (mut x_error_column, mut y_error_column) = self
@@ -2376,6 +2495,21 @@ impl StudioApp {
                         .then(|| self.binding_error.clone()),
                 },
                 self.language.text(Text::ApplyBinding),
+            );
+        }
+        let mut axes = series.axes.unwrap_or_default();
+        if axis_binding_editor(
+            ui,
+            ("sidebar-series-axis-binding", &group.key, &series.id),
+            self.document.axis_mode(),
+            &mut axes,
+        ) {
+            self.execute_document_edit(
+                EditCommand::SetSeriesAxisBinding {
+                    artist_id: series.id.clone(),
+                    axes,
+                },
+                "更改曲线坐标轴",
             );
         }
         egui::CollapsingHeader::new("误差棒")
@@ -2691,16 +2825,22 @@ impl StudioApp {
                             .find(|series| series.id == candidate.project_id)
                             .map_or_else(
                                 || {
-                                    let axes = &self.document.project().figure.axes[0];
-                                    if candidate.project_id == axes.x.id {
-                                        self.language.text(Text::XAxis).to_owned()
-                                    } else if candidate.project_id == axes.y.id {
-                                        self.language.text(Text::YAxis).to_owned()
+                                    if let Some(identity) = axis_identity_for_project_id(
+                                        &self.document,
+                                        &candidate.project_id,
+                                    ) {
+                                        axis_title(self.language, identity)
                                     } else {
                                         self.language.text(Text::FixedFigure).to_owned()
                                     }
                                 },
-                                |series| canvas_series_title(self.language, &series),
+                                |series| {
+                                    canvas_logical_series_title(
+                                        self.language,
+                                        &self.document,
+                                        &series,
+                                    )
+                                },
                             );
                         if ui.button(label).clicked() {
                             chosen = Some(candidate.clone());
@@ -2759,25 +2899,13 @@ impl StudioApp {
             .find(|series| series.id == selected_id);
         let axes = &self.document.project().figure.axes[0];
         let axes_id = axes.id.clone();
-        let x_axis_id = axes.x.id.clone();
-        let y_axis_id = axes.y.id.clone();
+        let selected_axis_identity = axis_identity_for_project_id(&self.document, &selected_id);
         let title = if let Some(series) = &series {
-            canvas_series_title(self.language, series)
-        } else if selected_id == x_axis_id {
+            canvas_logical_series_title(self.language, &self.document, series)
+        } else if let Some(identity) = selected_axis_identity {
             format!(
                 "{} · {}",
-                self.language.text(Text::XAxis),
-                self.language
-                    .text(if selected_role == Some(SelectableRole::AxisLabel) {
-                        Text::AxisLabel
-                    } else {
-                        Text::MajorTicks
-                    })
-            )
-        } else if selected_id == y_axis_id {
-            format!(
-                "{} · {}",
-                self.language.text(Text::YAxis),
+                axis_title(self.language, identity),
                 self.language
                     .text(if selected_role == Some(SelectableRole::AxisLabel) {
                         Text::AxisLabel
@@ -2822,17 +2950,11 @@ impl StudioApp {
                 .show(ui, |ui| {
                     if let Some(series) = &series {
                         this.artist_editor(ui, &series.id, true);
-                    } else if selected_id == x_axis_id {
+                    } else if let Some(identity) = selected_axis_identity {
                         if selected_role == Some(SelectableRole::AxisLabel) {
-                            this.axis_label_editor(ui, AxisDimension::X);
+                            this.axis_label_editor_by_identity(ui, identity);
                         } else {
-                            this.axis_quick_editor(ui, AxisDimension::X);
-                        }
-                    } else if selected_id == y_axis_id {
-                        if selected_role == Some(SelectableRole::AxisLabel) {
-                            this.axis_label_editor(ui, AxisDimension::Y);
-                        } else {
-                            this.axis_quick_editor(ui, AxisDimension::Y);
+                            this.axis_quick_editor_by_identity(ui, identity);
                         }
                     } else if selected_id == axes_id {
                         this.figure_size_editor(ui);
@@ -3119,6 +3241,7 @@ impl StudioApp {
         let mut apply_marker_interval_to_all = None;
         let mut apply_marker_fill_to_all = None;
         let mut series_style_change = None;
+        let mut axis_binding_change = None;
         let properties_title = self.language.text(Text::ArtistProperties);
         let mut draw_properties = |ui: &mut egui::Ui| {
             if matches!(record.role, ArtistRole::Annotation | ArtistRole::Legend) {
@@ -3138,7 +3261,7 @@ impl StudioApp {
                 ui.horizontal(|ui| {
                     ui.label("图形类型");
                     egui::ComboBox::from_id_salt(("series-style", artist_id))
-                        .selected_text(series_style_name(selected_style))
+                        .selected_text(series_style_name(self.language, selected_style))
                         .show_ui(ui, |ui| {
                             for style in [
                                 SeriesCreationStyle::Scatter,
@@ -3148,13 +3271,62 @@ impl StudioApp {
                                 ui.selectable_value(
                                     &mut selected_style,
                                     style,
-                                    series_style_name(style),
+                                    series_style_name(self.language, style),
                                 );
                             }
                         });
                 });
                 if selected_style != current_style {
                     series_style_change = Some(selected_style);
+                }
+            }
+            if matches!(
+                record.properties,
+                ArtistProperties::Line { .. } | ArtistProperties::Scatter { .. }
+            ) && let Some(current_axes) = self.document.series_axis_binding(artist_id)
+            {
+                let mode = self.document.axis_mode();
+                let mut selected_axes = current_axes;
+                ui.horizontal(|ui| {
+                    ui.label("坐标轴");
+                    egui::ComboBox::from_id_salt(("series-axis-binding", artist_id))
+                        .selected_text(axis_binding_name(current_axes))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut selected_axes,
+                                AxisBinding::PRIMARY,
+                                "X1 / Y1",
+                            );
+                            if mode == AxisMode::DualY {
+                                ui.selectable_value(
+                                    &mut selected_axes,
+                                    AxisBinding {
+                                        x: XAxisSlot::X1,
+                                        y: YAxisSlot::Y2,
+                                    },
+                                    "X1 / Y2",
+                                );
+                            }
+                            if mode == AxisMode::DualX {
+                                ui.selectable_value(
+                                    &mut selected_axes,
+                                    AxisBinding {
+                                        x: XAxisSlot::X2,
+                                        y: YAxisSlot::Y1,
+                                    },
+                                    "X2 / Y1",
+                                );
+                            }
+                        });
+                });
+                if !current_axes.is_enabled_in(mode) {
+                    ui.weak("该曲线绑定的副轴当前已关闭；重新启用对应模式后会恢复显示。");
+                }
+                for warning in explicit_axis_unit_conflicts(&self.document, current_axes) {
+                    ui.colored_label(egui::Color32::YELLOW, warning);
+                }
+                if selected_axes != current_axes {
+                    axis_binding_change = Some(selected_axes);
                 }
             }
             match &mut record.properties {
@@ -3288,9 +3460,15 @@ impl StudioApp {
                 ArtistProperties::ReferenceLine {
                     orientation,
                     value,
+                    axes,
                     stroke,
-                    ..
                 } => {
+                    changed |= axis_binding_editor(
+                        ui,
+                        ("reference-axis-binding", artist_id),
+                        self.document.axis_mode(),
+                        axes,
+                    );
                     let response = ui
                         .horizontal_wrapped(|ui| {
                             ui.label(self.language.text(Text::Orientation));
@@ -3361,6 +3539,12 @@ impl StudioApp {
                             .id_salt(("annotation-connector", artist_id, index))
                             .default_open(true)
                             .show(ui, |ui| {
+                                changed |= axis_binding_editor(
+                                    ui,
+                                    ("annotation-connector-axis-binding", artist_id, index),
+                                    self.document.axis_mode(),
+                                    &mut connector.axes,
+                                );
                                 ui.horizontal_wrapped(|ui| {
                                     let x_response = ui.add(
                                         egui::DragValue::new(&mut connector.target_x).prefix("X: "),
@@ -3680,6 +3864,15 @@ impl StudioApp {
             }
             return;
         }
+        if let Some(axes) = axis_binding_change {
+            self.execute_document_edit(
+                EditCommand::SetSeriesAxisBinding {
+                    artist_id: artist_id.to_owned(),
+                    axes,
+                },
+                "更改曲线坐标轴",
+            );
+        }
         if changed
             && self.execute_document_edit_with_group(
                 EditCommand::SetArtistRecord(record),
@@ -3897,10 +4090,12 @@ impl StudioApp {
                         .on_hover_text(label_input::display_text(&nodes));
                     if changed && nodes != current {
                         let command = match target {
-                            LabelInputTarget::Axis(dimension) => EditCommand::SetAxisLabel {
-                                dimension,
-                                nodes: nodes.clone(),
-                            },
+                            LabelInputTarget::Axis(identity) => {
+                                EditCommand::SetAxisLabelByIdentity {
+                                    identity,
+                                    nodes: nodes.clone(),
+                                }
+                            }
                             LabelInputTarget::Semantic(label_id) => EditCommand::SetSemanticLabel {
                                 label_id: label_id.to_owned(),
                                 nodes: nodes.clone(),
@@ -3924,6 +4119,160 @@ impl StudioApp {
             self.edit_history.finish_coalescing();
         }
     }
+}
+
+fn axis_dimension(identity: AxisIdentity) -> AxisDimension {
+    match identity {
+        AxisIdentity::X1 | AxisIdentity::X2 => AxisDimension::X,
+        AxisIdentity::Y1 | AxisIdentity::Y2 => AxisDimension::Y,
+    }
+}
+
+fn axis_title(language: UiLanguage, identity: AxisIdentity) -> String {
+    let suffix = match language {
+        UiLanguage::Chinese => "轴",
+        UiLanguage::English => "Axis",
+    };
+    match identity {
+        AxisIdentity::X1 => format!("X1 {suffix}"),
+        AxisIdentity::X2 => format!("X2 {suffix}"),
+        AxisIdentity::Y1 => format!("Y1 {suffix}"),
+        AxisIdentity::Y2 => format!("Y2 {suffix}"),
+    }
+}
+
+fn axis_binding_name(binding: AxisBinding) -> &'static str {
+    match (binding.x, binding.y) {
+        (XAxisSlot::X1, YAxisSlot::Y1) => "X1 / Y1",
+        (XAxisSlot::X2, YAxisSlot::Y1) => "X2 / Y1",
+        (XAxisSlot::X1, YAxisSlot::Y2) => "X1 / Y2",
+        (XAxisSlot::X2, YAxisSlot::Y2) => "不支持",
+    }
+}
+
+fn axis_binding_editor(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    mode: AxisMode,
+    binding: &mut AxisBinding,
+) -> bool {
+    let before = *binding;
+    ui.horizontal(|ui| {
+        ui.label("坐标轴");
+        egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(axis_binding_name(*binding))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(binding, AxisBinding::PRIMARY, "X1 / Y1");
+                if mode == AxisMode::DualY {
+                    ui.selectable_value(
+                        binding,
+                        AxisBinding {
+                            x: XAxisSlot::X1,
+                            y: YAxisSlot::Y2,
+                        },
+                        "X1 / Y2",
+                    );
+                }
+                if mode == AxisMode::DualX {
+                    ui.selectable_value(
+                        binding,
+                        AxisBinding {
+                            x: XAxisSlot::X2,
+                            y: YAxisSlot::Y1,
+                        },
+                        "X2 / Y1",
+                    );
+                }
+            });
+    });
+    if !binding.is_enabled_in(mode) {
+        ui.weak("所绑定的副轴当前已关闭；此数据坐标对象暂时隐藏。");
+    }
+    *binding != before
+}
+
+fn axis_identity_for_project_id(
+    document: &FigureDocument,
+    project_id: &str,
+) -> Option<AxisIdentity> {
+    let axes = &document.project().figure.axes[0];
+    if axes.x.id == project_id || axes.x.label_id == project_id {
+        Some(AxisIdentity::X1)
+    } else if axes
+        .x2
+        .as_ref()
+        .is_some_and(|axis| axis.id == project_id || axis.label_id == project_id)
+    {
+        Some(AxisIdentity::X2)
+    } else if axes.y.id == project_id || axes.y.label_id == project_id {
+        Some(AxisIdentity::Y1)
+    } else if axes
+        .y2
+        .as_ref()
+        .is_some_and(|axis| axis.id == project_id || axis.label_id == project_id)
+    {
+        Some(AxisIdentity::Y2)
+    } else {
+        None
+    }
+}
+
+fn explicit_axis_unit_conflicts(document: &FigureDocument, selected: AxisBinding) -> Vec<String> {
+    let mut x_units = BTreeSet::new();
+    let mut y_units = BTreeSet::new();
+    for series in document.series() {
+        let Some(binding) = series.binding.as_ref() else {
+            continue;
+        };
+        let Some(axes) = series.axes else {
+            continue;
+        };
+        if axes.x == selected.x
+            && let Some(unit) = explicit_column_unit(&binding.x_column)
+        {
+            x_units.insert(unit.to_owned());
+        }
+        if axes.y == selected.y
+            && let Some(unit) = explicit_column_unit(&binding.y_column)
+        {
+            y_units.insert(unit.to_owned());
+        }
+    }
+    let mut warnings = Vec::new();
+    if x_units.len() > 1 {
+        warnings.push(format!(
+            "{} 上存在明确且不一致的单位：{}；请检查曲线分配。",
+            match selected.x {
+                XAxisSlot::X1 => "X1",
+                XAxisSlot::X2 => "X2",
+            },
+            x_units.into_iter().collect::<Vec<_>>().join("、")
+        ));
+    }
+    if y_units.len() > 1 {
+        warnings.push(format!(
+            "{} 上存在明确且不一致的单位：{}；请检查曲线分配。",
+            match selected.y {
+                YAxisSlot::Y1 => "Y1",
+                YAxisSlot::Y2 => "Y2",
+            },
+            y_units.into_iter().collect::<Vec<_>>().join("、")
+        ));
+    }
+    warnings
+}
+
+pub(super) fn explicit_column_unit(column: &str) -> Option<&str> {
+    let trimmed = column.trim();
+    for (open, close) in [('(', ')'), ('[', ']')] {
+        let Some(start) = trimmed.rfind(open) else {
+            continue;
+        };
+        if trimmed.ends_with(close) && start + open.len_utf8() < trimmed.len() - close.len_utf8() {
+            return Some(&trimmed[start + open.len_utf8()..trimmed.len() - close.len_utf8()]);
+        }
+    }
+    None
 }
 
 fn managed_format_from_path(path: &Path) -> Option<ManagedDataFormat> {

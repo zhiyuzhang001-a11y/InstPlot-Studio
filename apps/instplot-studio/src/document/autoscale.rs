@@ -176,17 +176,6 @@ pub fn apply_visual_padding(
     })
 }
 
-pub(super) fn apply_autoscale(
-    project: &mut ProjectDocument,
-    dimension: AxisDimension,
-) -> Result<(), String> {
-    let identity = match dimension {
-        AxisDimension::X => AxisIdentity::X1,
-        AxisDimension::Y => AxisIdentity::Y1,
-    };
-    apply_autoscale_for_axis(project, identity, false)
-}
-
 pub(super) fn refresh_active_autoscales(project: &mut ProjectDocument) -> Result<(), String> {
     let identities: &[AxisIdentity] = match project.figure.axes[0].mode {
         AxisMode::Single => &[AxisIdentity::X1, AxisIdentity::Y1],

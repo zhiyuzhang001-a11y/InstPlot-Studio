@@ -229,6 +229,34 @@ impl eframe::App for StudioApp {
                     {
                         self.prepare_manual_data_window();
                     }
+                    let current_axis_mode = self.document.axis_mode();
+                    let mut selected_axis_mode = current_axis_mode;
+                    egui::ComboBox::from_id_salt("axis-mode-selector")
+                        .selected_text(match current_axis_mode {
+                            AxisMode::Single => "单轴",
+                            AxisMode::DualY => "双 Y 轴",
+                            AxisMode::DualX => "双 X 轴",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut selected_axis_mode, AxisMode::Single, "单轴");
+                            ui.selectable_value(
+                                &mut selected_axis_mode,
+                                AxisMode::DualY,
+                                "双 Y 轴",
+                            );
+                            ui.selectable_value(
+                                &mut selected_axis_mode,
+                                AxisMode::DualX,
+                                "双 X 轴",
+                            );
+                        });
+                    if selected_axis_mode != current_axis_mode {
+                        self.execute_document_edit(
+                            EditCommand::SetAxisMode(selected_axis_mode),
+                            "切换坐标轴模式",
+                        );
+                        self.sync_axis_editors();
+                    }
                     if ui
                         .selectable_label(self.show_palette, self.language.text(Text::ColorScheme))
                         .clicked()
@@ -278,13 +306,20 @@ impl eframe::App for StudioApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.weak(self.branding.footer_label());
-                    if let Some((x, y)) = self.hover_data_coordinates {
+                    if let Some(coordinates) = self.hover_data_coordinates {
                         ui.separator();
-                        ui.monospace(format!(
-                            "x: {}   y: {}",
-                            format_data_coordinate(x),
-                            format_data_coordinate(y)
-                        ));
+                        let mut text = format!(
+                            "X1: {}   Y1: {}",
+                            format_data_coordinate(coordinates.x1),
+                            format_data_coordinate(coordinates.y1)
+                        );
+                        if let Some(x2) = coordinates.x2 {
+                            text.push_str(&format!("   X2: {}", format_data_coordinate(x2)));
+                        }
+                        if let Some(y2) = coordinates.y2 {
+                            text.push_str(&format!("   Y2: {}", format_data_coordinate(y2)));
+                        }
+                        ui.monospace(text);
                     }
                     if let Some((status, _)) = &self.status {
                         ui.separator();
@@ -770,7 +805,7 @@ impl eframe::App for StudioApp {
                             Vec::new()
                         };
                         let data_coordinates = pointer.and_then(|point| {
-                            data_coordinates_at(
+                            active_data_coordinates_at(
                                 &self.resolved,
                                 &self.document,
                                 point,

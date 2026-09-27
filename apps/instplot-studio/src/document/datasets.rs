@@ -141,6 +141,26 @@ impl FigureDocument {
             .collect()
     }
 
+    pub fn logical_series(&self) -> Vec<SeriesDescriptor> {
+        let descriptors = self
+            .series()
+            .into_iter()
+            .map(|series| (series.id.clone(), series))
+            .collect::<BTreeMap<_, _>>();
+        self.project.figure.axes[0]
+            .series_groups
+            .iter()
+            .filter_map(|group| {
+                group.artist_ids.iter().find_map(|artist_id| {
+                    descriptors.get(artist_id).filter(|series| {
+                        matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter)
+                    })
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
     pub fn linked_series_ids(&self, artist_id: &str) -> Vec<String> {
         self.project
             .series_group_for_artist(artist_id)

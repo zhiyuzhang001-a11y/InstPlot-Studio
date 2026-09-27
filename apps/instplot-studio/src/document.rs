@@ -502,7 +502,7 @@ pub use autoscale::{
     AutoscalePolicy, DataBounds, VisualBounds, apply_visual_padding, compute_axis_data_bounds,
     compute_data_bounds,
 };
-use autoscale::{apply_autoscale, refresh_active_autoscales};
+use autoscale::{apply_autoscale_for_axis, refresh_active_autoscales};
 
 fn reset_empty_axes(project: &mut ProjectDocument) {
     let axes = &mut project.figure.axes[0];
@@ -728,38 +728,52 @@ fn default_series_color(
         .unwrap_or_else(|| "blue".to_owned())
 }
 
-fn default_series_marker(project: &ProjectDocument, data_source_id: &str) -> MarkerShape {
-    let family_id = project
-        .data_sources
-        .iter()
-        .find(|source| source.id == data_source_id)
-        .and_then(|source| source.fit.as_ref())
-        .map_or(data_source_id, |fit| fit.parent_data_source_id.as_str());
+fn default_series_marker(
+    project: &ProjectDocument,
+    data_source_id: &str,
+    x_column: &str,
+    y_column: &str,
+) -> MarkerShape {
+    let requested = DataBinding {
+        data_source_id: data_source_id.to_owned(),
+        x_column: x_column.to_owned(),
+        y_column: y_column.to_owned(),
+    };
+    let requested_key = series_color_key(project, &requested);
     for artist in &project.figure.artists {
         let Some(binding) = artist_binding(artist) else {
             continue;
         };
-        let binding_family = project
-            .data_sources
-            .iter()
-            .find(|source| source.id == binding.data_source_id)
-            .and_then(|source| source.fit.as_ref())
-            .map_or(binding.data_source_id.as_str(), |fit| {
-                fit.parent_data_source_id.as_str()
-            });
-        if binding_family == family_id
+        if series_color_key(project, binding) == requested_key
             && let ArtistProperties::Scatter { marker, .. } = &artist.properties
         {
             return marker.shape;
         }
     }
-    let family_index = project
-        .data_sources
+    let used = project
+        .figure
+        .artists
         .iter()
-        .filter(|source| source.fit.is_none())
-        .position(|source| source.id == family_id)
-        .unwrap_or(0);
-    HANDOFF_MARKERS[family_index % HANDOFF_MARKERS.len()]
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Scatter { marker, .. } => Some(marker.shape),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    HANDOFF_MARKERS
+        .iter()
+        .copied()
+        .find(|shape| !used.contains(shape))
+        .unwrap_or_else(|| {
+            let existing_series = project
+                .figure
+                .artists
+                .iter()
+                .filter_map(artist_binding)
+                .map(|binding| series_color_key(project, binding))
+                .collect::<BTreeSet<_>>()
+                .len();
+            HANDOFF_MARKERS[existing_series % HANDOFF_MARKERS.len()]
+        })
 }
 
 fn dependent_source_ids(project: &ProjectDocument, data_source_id: &str) -> Vec<String> {
