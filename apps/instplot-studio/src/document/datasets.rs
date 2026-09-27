@@ -90,6 +90,12 @@ impl FigureDocument {
         self.project.figure.axes[0]
             .artist_ids
             .retain(|id| !artist_ids.contains(id));
+        for group in &mut self.project.figure.axes[0].series_groups {
+            group.artist_ids.retain(|id| !artist_ids.contains(id));
+        }
+        self.project.figure.axes[0]
+            .series_groups
+            .retain(|group| !group.artist_ids.is_empty());
         prune_legend_entries(&mut self.project, &artist_ids);
         if self.project.data_sources.is_empty() {
             reset_empty_axes(&mut self.project);

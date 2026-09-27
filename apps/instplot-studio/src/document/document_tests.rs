@@ -80,6 +80,7 @@ fn multiline_annotation_and_multiple_arrow_modes_round_trip_and_render() {
         connectors.push(crate::AnnotationConnectorRecord {
             target_x: -1.0 + index as f64,
             target_y: 0.5 + index as f64 * 0.2,
+            axes: AxisBinding::PRIMARY,
             stroke: StrokeStyle {
                 color_id: "blue".to_owned(),
                 width_pt: 0.8,

@@ -147,9 +147,14 @@ pub(super) fn validate_artist(
             }
             ArtistKind::ErrorBar
         }
-        ArtistProperties::ReferenceLine { value, stroke, .. } => {
+        ArtistProperties::ReferenceLine {
+            value,
+            axes,
+            stroke,
+            ..
+        } => {
             validate_stroke(artist, stroke, palette_colors)?;
-            if !value.is_finite() {
+            if !value.is_finite() || !axes.is_supported() {
                 return Err(ProjectError::Validation(format!(
                     "artist {} has a non-finite reference value",
                     artist.id
@@ -169,6 +174,7 @@ pub(super) fn validate_artist(
                 || connectors.iter().any(|connector| {
                     !connector.target_x.is_finite()
                         || !connector.target_y.is_finite()
+                        || !connector.axes.is_supported()
                         || !connector.arrow_size_pt.is_finite()
                         || !(2.0..=18.0).contains(&connector.arrow_size_pt)
                         || validate_stroke(artist, &connector.stroke, palette_colors).is_err()

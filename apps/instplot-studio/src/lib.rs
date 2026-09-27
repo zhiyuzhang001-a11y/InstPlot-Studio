@@ -45,16 +45,16 @@ pub use palette::{
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
     AnnotationConnectorRecord, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord,
-    AxisAppearanceRecord, AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT,
-    DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind, DataSourceOrigin, DataSourcePayload,
-    DataSourceRecord, EmbeddedColumn, ExportPreferences, FigureRecord, FitIdentity, FontFaceRecord,
-    FontStyle, FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
-    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, ManualErrorStatistic,
-    ManualMeasurementRecord, ManualPlotStyle, MarkerShape, MarkerStyle, OpenProjectReport,
-    OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor, PaletteRegistry,
-    ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
-    SourceFingerprint, SourceState, StrokeStyle, TickDirection, TypographyProfile, decode_project,
-    open_project, save_project,
+    AxisAppearanceRecord, AxisBinding, AxisEdge, AxisIdentity, AxisMode, AxisRecord, AxisScale,
+    DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
+    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, ExportPreferences,
+    FigureRecord, FitIdentity, FontFaceRecord, FontStyle, FormatterSpec, LabelNode, LegendEntry,
+    LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFile, ManagedDataFormat, ManualDataRecipe,
+    ManualErrorStatistic, ManualMeasurementRecord, ManualPlotStyle, MarkerShape, MarkerStyle,
+    OpenProjectReport, OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor,
+    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
+    SemanticLabel, SeriesGroupRecord, SourceFingerprint, SourceState, StrokeStyle, TickDirection,
+    TypographyProfile, XAxisSlot, YAxisSlot, decode_project, open_project, save_project,
 };
 pub use publication::{
     CVD_SIMULATION_VERSION, CheckSeverity, PUBLICATION_RULES_VERSION, PublicationFinding,

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 7;
+pub const PROJECT_SCHEMA_VERSION: u32 = 8;
 /// Default physical stroke used by newly created data curves.
 pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
 /// Default physical stroke used by newly created error bars.
@@ -46,7 +46,102 @@ pub struct AxesRecord {
     pub id: String,
     pub x: AxisRecord,
     pub y: AxisRecord,
+    #[serde(default)]
+    pub mode: AxisMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x2: Option<AxisRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y2: Option<AxisRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series_groups: Vec<SeriesGroupRecord>,
     pub artist_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisMode {
+    #[default]
+    Single,
+    DualX,
+    DualY,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisEdge {
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisIdentity {
+    X1,
+    X2,
+    Y1,
+    Y2,
+}
+
+impl AxisMode {
+    /// Returns the single axis that owns an edge in this mode. Far-edge ticks
+    /// remain owned by the primary axis until an independent secondary axis is enabled.
+    pub const fn edge_owner(self, edge: AxisEdge) -> AxisIdentity {
+        match (self, edge) {
+            (_, AxisEdge::Bottom) => AxisIdentity::X1,
+            (AxisMode::DualX, AxisEdge::Top) => AxisIdentity::X2,
+            (_, AxisEdge::Top) => AxisIdentity::X1,
+            (_, AxisEdge::Left) => AxisIdentity::Y1,
+            (AxisMode::DualY, AxisEdge::Right) => AxisIdentity::Y2,
+            (_, AxisEdge::Right) => AxisIdentity::Y1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XAxisSlot {
+    #[default]
+    X1,
+    X2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YAxisSlot {
+    #[default]
+    Y1,
+    Y2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxisBinding {
+    #[serde(default)]
+    pub x: XAxisSlot,
+    #[serde(default)]
+    pub y: YAxisSlot,
+}
+
+impl AxisBinding {
+    pub const PRIMARY: Self = Self {
+        x: XAxisSlot::X1,
+        y: YAxisSlot::Y1,
+    };
+
+    pub fn is_supported(self) -> bool {
+        !matches!((self.x, self.y), (XAxisSlot::X2, YAxisSlot::Y2))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesGroupRecord {
+    pub id: String,
+    pub artist_ids: Vec<String>,
+    #[serde(default)]
+    pub axes: AxisBinding,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,6 +272,8 @@ pub enum ArtistRole {
 pub struct AnnotationConnectorRecord {
     pub target_x: f64,
     pub target_y: f64,
+    #[serde(default)]
+    pub axes: AxisBinding,
     pub stroke: StrokeStyle,
     #[serde(default)]
     pub start_arrow: bool,
@@ -211,6 +308,8 @@ pub enum ArtistProperties {
     ReferenceLine {
         orientation: ReferenceOrientation,
         value: f64,
+        #[serde(default)]
+        axes: AxisBinding,
         stroke: StrokeStyle,
     },
     Annotation {
@@ -711,6 +810,30 @@ impl ProjectDocument {
             insert_id(&mut ids, &axes.y.id)?;
             validate_axis(&axes.x, &labels)?;
             validate_axis(&axes.y, &labels)?;
+            if let Some(axis) = &axes.x2 {
+                insert_id(&mut ids, &axis.id)?;
+                validate_axis(axis, &labels)?;
+            }
+            if let Some(axis) = &axes.y2 {
+                insert_id(&mut ids, &axis.id)?;
+                validate_axis(axis, &labels)?;
+            }
+            match axes.mode {
+                AxisMode::Single => {}
+                AxisMode::DualX if axes.x2.is_none() => {
+                    return Err(ProjectError::Validation(format!(
+                        "axes {} enables X2 without an X2 record",
+                        axes.id
+                    )));
+                }
+                AxisMode::DualY if axes.y2.is_none() => {
+                    return Err(ProjectError::Validation(format!(
+                        "axes {} enables Y2 without a Y2 record",
+                        axes.id
+                    )));
+                }
+                AxisMode::DualX | AxisMode::DualY => {}
+            }
             let mut axes_artists = BTreeSet::new();
             for artist_id in &axes.artist_ids {
                 if !artists.contains(artist_id) {
@@ -729,6 +852,47 @@ impl ProjectDocument {
             if axes_artists.len() != artists.len() {
                 return Err(ProjectError::Validation(format!(
                     "axes {} must reference every V1 artist exactly once",
+                    axes.id
+                )));
+            }
+            let data_artists = self
+                .figure
+                .artists
+                .iter()
+                .filter(|artist| {
+                    matches!(
+                        artist.kind,
+                        ArtistKind::Line | ArtistKind::Scatter | ArtistKind::ErrorBar
+                    )
+                })
+                .map(|artist| artist.id.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut grouped_artists = BTreeSet::new();
+            for group in &axes.series_groups {
+                insert_id(&mut ids, &group.id)?;
+                if group.artist_ids.is_empty() || !group.axes.is_supported() {
+                    return Err(ProjectError::Validation(format!(
+                        "series group {} is empty or uses an unsupported axis combination",
+                        group.id
+                    )));
+                }
+                for artist_id in &group.artist_ids {
+                    if !data_artists.contains(artist_id.as_str()) {
+                        return Err(ProjectError::Validation(format!(
+                            "series group {} references non-data artist {artist_id}",
+                            group.id
+                        )));
+                    }
+                    if !grouped_artists.insert(artist_id.as_str()) {
+                        return Err(ProjectError::Validation(format!(
+                            "data artist {artist_id} belongs to more than one series group"
+                        )));
+                    }
+                }
+            }
+            if grouped_artists != data_artists {
+                return Err(ProjectError::Validation(format!(
+                    "axes {} must assign every data artist to exactly one series group",
                     axes.id
                 )));
             }
@@ -1038,7 +1202,7 @@ struct LegacyProjectV0 {
 mod migration;
 
 use migration::{
-    migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6,
+    migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
 };
 
 #[cfg(test)]

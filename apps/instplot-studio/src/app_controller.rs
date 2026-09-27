@@ -3286,6 +3286,7 @@ impl StudioApp {
                     orientation,
                     value,
                     stroke,
+                    ..
                 } => {
                     let response = ui
                         .horizontal_wrapped(|ui| {
@@ -3437,6 +3438,7 @@ impl StudioApp {
                         connectors.push(AnnotationConnectorRecord {
                             target_x: (axes.x.minimum + axes.x.maximum) / 2.0,
                             target_y: (axes.y.minimum + axes.y.maximum) / 2.0,
+                            axes: AxisBinding::PRIMARY,
                             stroke: StrokeStyle {
                                 color_id: ANNOTATION_CONNECTOR_DEFAULT_COLOR_ID.to_owned(),
                                 width_pt: ANNOTATION_CONNECTOR_DEFAULT_WIDTH_PT,

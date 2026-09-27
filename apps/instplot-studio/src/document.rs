@@ -16,14 +16,14 @@ use instplot_text::Label;
 
 use crate::project::fingerprint;
 use crate::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisRecord, AxisScale,
     DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
     DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, FitIdentity,
     FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
     ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
     OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
-    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry,
-    open_project, palette_series_color_ids, save_project,
+    ProvenanceRecord, ReferenceOrientation, SemanticLabel, SeriesGroupRecord, StrokeStyle,
+    builtin_palette_registry, open_project, palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -186,6 +186,7 @@ impl FigureDocument {
         project.data_sources.clear();
         project.figure.artists.clear();
         project.figure.axes[0].artist_ids.clear();
+        project.figure.axes[0].series_groups.clear();
         project.overrides.clear();
         project.provenance.clear();
         add_handoff_palette_colors(&mut project);
@@ -311,6 +312,13 @@ impl FigureDocument {
                 visible: true,
             });
             project.figure.axes[0].artist_ids.push(artist_id);
+            project.figure.axes[0]
+                .series_groups
+                .push(SeriesGroupRecord {
+                    id: format!("series-group-handoff-{}", dataset.plot_id),
+                    artist_ids: vec![format!("handoff-artist-{}", dataset.plot_id)],
+                    axes: AxisBinding::PRIMARY,
+                });
             collect_plotted_values(dataset, &x_column, &y_column, &mut plotted_values);
         }
         let legend_id = "handoff-legend".to_owned();
@@ -545,6 +553,13 @@ fn next_stable_id(project: &ProjectDocument, prefix: &str) -> String {
         .iter()
         .map(|item| item.id.as_str())
         .chain(project.figure.artists.iter().map(|item| item.id.as_str()))
+        .chain(
+            project
+                .figure
+                .axes
+                .iter()
+                .flat_map(|axes| axes.series_groups.iter().map(|group| group.id.as_str())),
+        )
         .chain(
             project
                 .semantic_registry
@@ -1072,6 +1087,7 @@ fn formal_series(
                 orientation,
                 value,
                 stroke,
+                ..
             } => {
                 let points = match orientation {
                     ReferenceOrientation::Horizontal => vec![

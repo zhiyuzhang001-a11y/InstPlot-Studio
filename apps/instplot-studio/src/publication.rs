@@ -1187,6 +1187,13 @@ mod tests {
         binding.data_source_id = "fixture-risk-copy".to_owned();
         stroke.color_id = "near-blue".to_owned();
         project.figure.axes[0].artist_ids.push(duplicate.id.clone());
+        project.figure.axes[0]
+            .series_groups
+            .push(crate::SeriesGroupRecord {
+                id: "series-group-node-16".to_owned(),
+                artist_ids: vec![duplicate.id.clone()],
+                axes: crate::AxisBinding::PRIMARY,
+            });
         project.figure.artists.push(duplicate);
         let document = FigureDocument::from_project(project).unwrap();
         let risk_report = report(&document, 300);

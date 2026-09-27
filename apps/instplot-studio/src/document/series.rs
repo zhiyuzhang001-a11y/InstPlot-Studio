@@ -28,6 +28,7 @@ impl FigureDocument {
             SeriesCreationStyle::LineAndMarker => vec![ArtistKind::Line, ArtistKind::Scatter],
         };
         let mut created = Vec::new();
+        let group_id = next_stable_id(&self.project, "series-group");
         let label_id = next_stable_id(&self.project, "series-label");
         self.project.semantic_registry.push(SemanticLabel {
             id: label_id.clone(),
@@ -71,6 +72,13 @@ impl FigureDocument {
             self.project.figure.axes[0].artist_ids.push(id.clone());
             created.push(id);
         }
+        self.project.figure.axes[0]
+            .series_groups
+            .push(SeriesGroupRecord {
+                id: group_id,
+                artist_ids: created.clone(),
+                axes: AxisBinding::PRIMARY,
+            });
         let legend_entry = LegendEntry {
             artist_id: created[0].clone(),
             label_id,
@@ -166,6 +174,44 @@ impl FigureDocument {
             },
         });
         self.project.figure.axes[0].artist_ids.push(id.clone());
+        let binding = DataBinding {
+            data_source_id: data_source_id.to_owned(),
+            x_column: x_column.to_owned(),
+            y_column: y_column.to_owned(),
+        };
+        let matching_groups = self.project.figure.axes[0]
+            .series_groups
+            .iter()
+            .enumerate()
+            .filter_map(|(index, group)| {
+                group
+                    .artist_ids
+                    .iter()
+                    .filter_map(|artist_id| {
+                        self.project
+                            .figure
+                            .artists
+                            .iter()
+                            .find(|artist| artist.id == *artist_id)
+                    })
+                    .any(|artist| artist_binding(artist) == Some(&binding))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if let [index] = matching_groups.as_slice() {
+            self.project.figure.axes[0].series_groups[*index]
+                .artist_ids
+                .push(id.clone());
+        } else {
+            let group_id = next_stable_id(&self.project, "series-group");
+            self.project.figure.axes[0]
+                .series_groups
+                .push(SeriesGroupRecord {
+                    id: group_id,
+                    artist_ids: vec![id.clone()],
+                    axes: AxisBinding::PRIMARY,
+                });
+        }
         Ok(id)
     }
 
@@ -195,6 +241,20 @@ impl FigureDocument {
             .position(|id| id == artist_id)
             .ok_or_else(|| format!("artist {artist_id} is not attached to the axes"))?;
         axes.artist_ids.insert(position + 1, new_id.clone());
+        let inherited_axes = self.project.figure.axes[0]
+            .series_groups
+            .iter()
+            .find(|group| group.artist_ids.iter().any(|id| id == artist_id))
+            .map(|group| group.axes)
+            .unwrap_or(AxisBinding::PRIMARY);
+        let group_id = next_stable_id(&self.project, "series-group");
+        self.project.figure.axes[0]
+            .series_groups
+            .push(SeriesGroupRecord {
+                id: group_id,
+                artist_ids: vec![new_id.clone()],
+                axes: inherited_axes,
+            });
         for candidate in &mut self.project.figure.artists {
             if let ArtistProperties::Legend { entries, .. } = &mut candidate.properties
                 && let Some(entry) = entries
@@ -228,6 +288,12 @@ impl FigureDocument {
         self.project.figure.axes[0]
             .artist_ids
             .retain(|id| id != artist_id);
+        for group in &mut self.project.figure.axes[0].series_groups {
+            group.artist_ids.retain(|id| id != artist_id);
+        }
+        self.project.figure.axes[0]
+            .series_groups
+            .retain(|group| !group.artist_ids.is_empty());
         prune_legend_entries(&mut self.project, &[artist_id.to_owned()]);
         self.project
             .overrides
@@ -260,17 +326,22 @@ impl FigureDocument {
     }
 
     pub fn series_style(&self, artist_id: &str) -> Option<SeriesCreationStyle> {
+        let group = self.project.figure.axes[0]
+            .series_groups
+            .iter()
+            .find(|group| group.artist_ids.iter().any(|id| id == artist_id))?;
+        let grouped_ids = group.artist_ids.iter().collect::<BTreeSet<_>>();
         let selected = self
             .project
             .figure
             .artists
             .iter()
             .find(|artist| artist.id == artist_id)?;
-        let binding = artist_binding(selected)?;
+        artist_binding(selected)?;
         let mut line = false;
         let mut scatter = false;
         for artist in &self.project.figure.artists {
-            if artist_binding(artist) != Some(binding) {
+            if !grouped_ids.contains(&artist.id) {
                 continue;
             }
             line |= artist.kind == ArtistKind::Line;
@@ -303,13 +374,23 @@ impl FigureDocument {
         let binding = artist_binding(&selected)
             .cloned()
             .ok_or_else(|| "the selected series has no data binding".to_owned())?;
+        let group_index = candidate.figure.axes[0]
+            .series_groups
+            .iter()
+            .position(|group| group.artist_ids.iter().any(|id| id == artist_id))
+            .ok_or_else(|| format!("artist {artist_id} has no logical series group"))?;
+        let grouped_ids = candidate.figure.axes[0].series_groups[group_index]
+            .artist_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let related = candidate
             .figure
             .artists
             .iter()
             .filter(|artist| {
                 matches!(artist.kind, ArtistKind::Line | ArtistKind::Scatter)
-                    && artist_binding(artist) == Some(&binding)
+                    && grouped_ids.contains(&artist.id)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -375,6 +456,9 @@ impl FigureDocument {
         candidate.figure.axes[0]
             .artist_ids
             .retain(|id| !removed_ids.contains(id));
+        candidate.figure.axes[0].series_groups[group_index]
+            .artist_ids
+            .retain(|id| !removed_ids.contains(id));
         for artist in &mut candidate.figure.artists {
             if let ArtistProperties::Legend { entries, .. } = &mut artist.properties {
                 for entry in entries {
@@ -418,7 +502,10 @@ impl FigureDocument {
                 .iter()
                 .position(|id| id == artist_id)
                 .ok_or_else(|| format!("artist {artist_id} is not attached to the axes"))?;
-            axes.insert(position + 1, complement_id);
+            axes.insert(position + 1, complement_id.clone());
+            candidate.figure.axes[0].series_groups[group_index]
+                .artist_ids
+                .push(complement_id);
         }
         let selected_index = candidate
             .figure

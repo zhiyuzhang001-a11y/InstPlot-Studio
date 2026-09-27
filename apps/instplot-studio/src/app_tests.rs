@@ -1716,6 +1716,7 @@ fn annotation_connector_endpoint_drag_updates_data_coordinates() {
     connectors.push(AnnotationConnectorRecord {
         target_x: 0.0,
         target_y: 0.0,
+        axes: AxisBinding::PRIMARY,
         stroke: StrokeStyle {
             color_id: "blue".to_owned(),
             width_pt: 0.7,

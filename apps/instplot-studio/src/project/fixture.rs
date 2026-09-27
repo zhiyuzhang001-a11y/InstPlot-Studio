@@ -71,6 +71,21 @@ impl ProjectDocument {
                         autoscale: false,
                         appearance: AxisAppearanceRecord::default(),
                     },
+                    mode: AxisMode::Single,
+                    x2: None,
+                    y2: None,
+                    series_groups: vec![
+                        SeriesGroupRecord {
+                            id: "series-group-node-11".to_owned(),
+                            artist_ids: vec![artist_ids[1].clone()],
+                            axes: AxisBinding::PRIMARY,
+                        },
+                        SeriesGroupRecord {
+                            id: "series-group-node-13".to_owned(),
+                            artist_ids: vec![artist_ids[2].clone(), artist_ids[3].clone()],
+                            axes: AxisBinding::PRIMARY,
+                        },
+                    ],
                     artist_ids: artist_ids.to_vec(),
                 }],
                 artists: vec![
@@ -82,6 +97,7 @@ impl ProjectDocument {
                         properties: ArtistProperties::ReferenceLine {
                             orientation: ReferenceOrientation::Horizontal,
                             value: 0.0,
+                            axes: AxisBinding::PRIMARY,
                             stroke: StrokeStyle {
                                 color_id: "gray".to_owned(),
                                 width_pt: 0.7,
@@ -273,6 +289,7 @@ impl ProjectDocument {
     pub fn showcase_fixture() -> Self {
         let mut project = Self::fixed_fixture();
         project.figure.axes[0].artist_ids.clear();
+        project.figure.axes[0].series_groups.clear();
         project
             .figure
             .artists
@@ -430,6 +447,13 @@ impl ProjectDocument {
             });
             project.figure.axes[0].artist_ids.push(line_id);
             project.figure.axes[0].artist_ids.push(marker_id.clone());
+            project.figure.axes[0]
+                .series_groups
+                .push(SeriesGroupRecord {
+                    id: format!("series-group-showcase-{letter}"),
+                    artist_ids: vec![format!("node-{}", 16 + index * 2), marker_id.clone()],
+                    axes: AxisBinding::PRIMARY,
+                });
             legend_entries.push(LegendEntry {
                 artist_id: marker_id,
                 label_id: label_id.clone(),
