@@ -1,13 +1,17 @@
 [workspace]
-members = ["apps/instplot-studio", "crates/instplot-layout"]
+members = [
+    "apps/instplot-studio",
+    "apps/instplot-demo",
+    "crates/instplot-export",
+    "crates/instplot-layout",
+    "crates/instplot-render",
+    "crates/instplot-text",
+    "crates/instplot-ui",
+]
 exclude = [
-    "prototypes/export-backend-spike",
     "prototypes/layout-engine-spike",
     "prototypes/plotine-comparison",
     "prototypes/shared-core-consumer-spike",
-    "prototypes/studio-render-spike",
-    "prototypes/text-shaping-spike",
-    "prototypes/ui-shell-spike",
 ]
 resolver = "3"
 
@@ -20,17 +24,19 @@ license = "MIT"
 [workspace.dependencies]
 atomicwrites = "=0.4.4"
 eframe = { version = "=0.36.1", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-export-backend-spike = { path = "prototypes/export-backend-spike" }
+instplot-export = { path = "crates/instplot-export" }
 instplot-core = { git = "https://github.com/zhiyuzhang001-a11y/InstPlot-Lite.git", rev = "80ad374044d91dd3c306a384fc7f07ba82cac429" }
 instplot-io = { git = "https://github.com/zhiyuzhang001-a11y/InstPlot-Lite.git", rev = "80ad374044d91dd3c306a384fc7f07ba82cac429" }
 instplot-layout = { path = "crates/instplot-layout" }
 rfd = { version = "=0.17.2", default-features = false }
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.145"
+serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }
 sha2 = "=0.10.9"
-studio-render-spike = { path = "prototypes/studio-render-spike" }
-text-shaping-spike = { path = "prototypes/text-shaping-spike" }
-ui-shell-spike = { path = "prototypes/ui-shell-spike", features = ["publication-stack"] }
+instplot-render = { path = "crates/instplot-render" }
+instplot-text = { path = "crates/instplot-text" }
+instplot-ui = { path = "crates/instplot-ui", features = ["publication-stack"] }
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSArray", "NSObject", "NSURL"] }
 
 [profile.release]
 opt-level = "z"

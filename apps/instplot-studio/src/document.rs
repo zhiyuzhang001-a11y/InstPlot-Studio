@@ -1,23 +1,29 @@
 use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use instplot_core::{DataSet, DataSetKind};
+use instplot_core::{DataSet, DataSetKind, NumericColumn};
+use instplot_io::save_retained_rows_selected_with_fits;
 use instplot_layout::{
-    Annotation, AnnotationPosition, AxisAppearance as LayoutAxisAppearance, AxisSpec, Bounds,
-    Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec, LayoutError,
-    LayoutResult, LegendPosition, LegendSpec, LineStyle, Locator, MarkerShape as LayoutMarkerShape,
+    Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance as LayoutAxisAppearance,
+    AxisSpec, Bounds, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle, Formatter, GridSpec,
+    LayoutError, LayoutResult, LegendErrorStyle, LegendGrid as LayoutLegendGrid, LegendPosition,
+    LegendSpec, LineStyle, Locator, MarkerShape as LayoutMarkerShape,
     MarkerStyle as LayoutMarkerStyle, Scale, Series, TickDirection as LayoutTickDirection, layout,
 };
-use studio_render_spike::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
-use text_shaping_spike::Label;
+use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
+use instplot_text::Label;
 
+use crate::project::fingerprint;
 use crate::{
-    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale, DataBinding,
-    DataSourceKind, DataSourcePayload, EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode,
-    LegendEntry, LocatorSpec, MarkerShape, MarkerStyle, OpenProjectReport, PaletteColor,
-    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
-    SemanticLabel, StrokeStyle, open_project, save_project,
+    ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisRecord, AxisScale,
+    DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
+    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, FitIdentity,
+    FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
+    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
+    OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
+    ProvenanceRecord, ReferenceOrientation, SemanticLabel, StrokeStyle, builtin_palette_registry,
+    open_project, palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -162,6 +168,12 @@ impl FigureDocument {
         }
     }
 
+    pub fn showcase() -> Self {
+        Self {
+            project: ProjectDocument::showcase_fixture(),
+        }
+    }
+
     pub fn from_datasets(datasets: &[DataSet]) -> Result<Self, ProjectError> {
         if datasets.is_empty() {
             return Err(ProjectError::Validation(
@@ -190,6 +202,7 @@ impl FigureDocument {
                 DataSourceKind::Source,
                 None,
             )?;
+            set_dataset_origin(&mut project, dataset);
         }
         for dataset in datasets
             .iter()
@@ -213,6 +226,7 @@ impl FigureDocument {
                     display_equation: link.display_equation.clone(),
                 }),
             )?;
+            set_dataset_origin(&mut project, dataset);
         }
 
         let source_colors = datasets
@@ -266,6 +280,8 @@ impl FigureDocument {
                             color_id: color_id.clone(),
                             shape: HANDOFF_MARKERS[index % HANDOFF_MARKERS.len()],
                             size_pt: 4.0,
+                            filled: true,
+                            interval: 1,
                         },
                     },
                 ),
@@ -276,7 +292,7 @@ impl FigureDocument {
                         binding,
                         stroke: StrokeStyle {
                             color_id: color_id.clone(),
-                            width_pt: 0.9,
+                            width_pt: DEFAULT_CURVE_WIDTH_PT,
                             dash_pt: Vec::new(),
                         },
                     },
@@ -305,8 +321,11 @@ impl FigureDocument {
             visible: true,
             properties: ArtistProperties::Legend {
                 entries: legend_entries,
-                x_pt: 164.0,
-                y_pt: 30.0,
+                x_pt: 110.0,
+                y_pt: 12.0,
+                placement: LegendPlacement::Auto,
+                position_custom: false,
+                grid: LegendGrid::Auto,
             },
         });
         project.figure.axes[0].artist_ids.push(legend_id);
@@ -409,696 +428,37 @@ impl FigureDocument {
             project_ids,
         })
     }
-
-    pub fn axis_ranges(&self) -> AxisRanges {
-        let axes = &self.project.figure.axes[0];
-        AxisRanges {
-            x_min: axes.x.minimum,
-            x_max: axes.x.maximum,
-            y_min: axes.y.minimum,
-            y_max: axes.y.maximum,
-        }
-    }
-
-    pub fn set_axis_ranges(&mut self, ranges: AxisRanges) -> Result<(), &'static str> {
-        if !ranges.x_min.is_finite()
-            || !ranges.x_max.is_finite()
-            || !ranges.y_min.is_finite()
-            || !ranges.y_max.is_finite()
-        {
-            return Err("axis ranges must be finite");
-        }
-        if ranges.x_min >= ranges.x_max || ranges.y_min >= ranges.y_max {
-            return Err("each axis minimum must be smaller than its maximum");
-        }
-        let axes = &mut self.project.figure.axes[0];
-        axes.x.minimum = ranges.x_min;
-        axes.x.maximum = ranges.x_max;
-        axes.x.autoscale = false;
-        axes.y.minimum = ranges.y_min;
-        axes.y.maximum = ranges.y_max;
-        axes.y.autoscale = false;
-        Ok(())
-    }
-
-    pub fn axis_record(&self, dimension: AxisDimension) -> crate::AxisRecord {
-        let axes = &self.project.figure.axes[0];
-        match dimension {
-            AxisDimension::X => axes.x.clone(),
-            AxisDimension::Y => axes.y.clone(),
-        }
-    }
-
-    pub fn set_axis_record(
-        &mut self,
-        dimension: AxisDimension,
-        record: crate::AxisRecord,
-    ) -> Result<(), String> {
-        let current = match dimension {
-            AxisDimension::X => &self.project.figure.axes[0].x,
-            AxisDimension::Y => &self.project.figure.axes[0].y,
-        };
-        if record.id != current.id || record.label_id != current.label_id {
-            return Err("axis identity and label identity cannot be replaced".to_owned());
-        }
-        let mut candidate = self.project.clone();
-        match dimension {
-            AxisDimension::X => candidate.figure.axes[0].x = record,
-            AxisDimension::Y => candidate.figure.axes[0].y = record,
-        }
-        apply_autoscale(&mut candidate, dimension)?;
-        candidate.validate().map_err(|error| error.to_string())?;
-        self.project = candidate;
-        Ok(())
-    }
-
-    pub fn set_axis_label(
-        &mut self,
-        dimension: AxisDimension,
-        nodes: Vec<LabelNode>,
-    ) -> Result<(), String> {
-        if nodes.is_empty() {
-            return Err("axis label cannot be empty".to_owned());
-        }
-        let label_id = match dimension {
-            AxisDimension::X => self.project.figure.axes[0].x.label_id.clone(),
-            AxisDimension::Y => self.project.figure.axes[0].y.label_id.clone(),
-        };
-        let label = self
-            .project
-            .semantic_registry
-            .iter_mut()
-            .find(|label| label.id == label_id)
-            .ok_or_else(|| format!("semantic label {label_id} is missing"))?;
-        label.nodes = nodes;
-        Ok(())
-    }
-
-    pub fn axis_label(&self, dimension: AxisDimension) -> &[LabelNode] {
-        let label_id = match dimension {
-            AxisDimension::X => &self.project.figure.axes[0].x.label_id,
-            AxisDimension::Y => &self.project.figure.axes[0].y.label_id,
-        };
-        self.project
-            .semantic_registry
-            .iter()
-            .find(|label| label.id == *label_id)
-            .map(|label| label.nodes.as_slice())
-            .unwrap_or(&[])
-    }
-
-    pub fn figure_size_mm(&self) -> (f64, f64) {
-        (self.project.figure.width_mm, self.project.figure.height_mm)
-    }
-
-    pub fn set_figure_size_mm(&mut self, width: f64, height: f64) -> Result<(), String> {
-        if !width.is_finite()
-            || !height.is_finite()
-            || !(20.0..=500.0).contains(&width)
-            || !(20.0..=500.0).contains(&height)
-        {
-            return Err("figure width and height must be within 20..=500 mm".to_owned());
-        }
-        self.project.figure.width_mm = width;
-        self.project.figure.height_mm = height;
-        Ok(())
-    }
-
-    pub fn artist_record(&self, artist_id: &str) -> Option<ArtistRecord> {
-        self.project
-            .figure
-            .artists
-            .iter()
-            .find(|artist| artist.id == artist_id)
-            .cloned()
-    }
-
-    pub fn set_artist_record(&mut self, record: ArtistRecord) -> Result<(), String> {
-        let mut candidate = self.project.clone();
-        let artist = candidate
-            .figure
-            .artists
-            .iter_mut()
-            .find(|artist| artist.id == record.id)
-            .ok_or_else(|| format!("artist {} is missing", record.id))?;
-        if artist.kind != record.kind {
-            return Err("artist kind cannot be replaced".to_owned());
-        }
-        *artist = record.clone();
-        let value = serde_json::to_value(&record.properties)
-            .map_err(|error| format!("artist style cannot be recorded: {error}"))?;
-        if let Some(existing) = candidate
-            .overrides
-            .iter_mut()
-            .find(|item| item.target_id == record.id && item.property == "artist_style")
-        {
-            existing.value = value;
-        } else {
-            candidate.overrides.push(crate::OverrideRecord {
-                target_id: record.id,
-                property: "artist_style".to_owned(),
-                value,
-            });
-        }
-        candidate.validate().map_err(|error| error.to_string())?;
-        self.project = candidate;
-        Ok(())
-    }
-
-    pub fn semantic_label_nodes(&self, label_id: &str) -> Option<&[LabelNode]> {
-        self.project
-            .semantic_registry
-            .iter()
-            .find(|label| label.id == label_id)
-            .map(|label| label.nodes.as_slice())
-    }
-
-    pub fn set_semantic_label_nodes(
-        &mut self,
-        label_id: &str,
-        nodes: Vec<LabelNode>,
-    ) -> Result<(), String> {
-        if nodes.is_empty() {
-            return Err("semantic label cannot be empty".to_owned());
-        }
-        let label = self
-            .project
-            .semantic_registry
-            .iter_mut()
-            .find(|label| label.id == label_id)
-            .ok_or_else(|| format!("semantic label {label_id} is missing"))?;
-        label.nodes = nodes;
-        Ok(())
-    }
-
-    pub fn palette_colors(&self) -> &[PaletteColor] {
-        &self.project.palette.colors
-    }
-
-    pub fn export_preferences(&self) -> &crate::ExportPreferences {
-        &self.project.export_preferences
-    }
-
-    pub fn set_export_preferences(
-        &mut self,
-        preferences: crate::ExportPreferences,
-    ) -> Result<(), String> {
-        let mut candidate = self.project.clone();
-        candidate.export_preferences = preferences;
-        candidate.validate().map_err(|error| error.to_string())?;
-        self.project = candidate;
-        Ok(())
-    }
-
-    pub fn create_series(
-        &mut self,
-        data_source_id: &str,
-        x_column: &str,
-        y_column: &str,
-        style: SeriesCreationStyle,
-    ) -> Result<Vec<String>, String> {
-        validate_binding_columns(&self.project, data_source_id, x_column, y_column)?;
-        let source = self
-            .project
-            .data_sources
-            .iter()
-            .find(|source| source.id == data_source_id)
-            .ok_or_else(|| format!("data source {data_source_id} is missing"))?;
-        let role = match source.kind {
-            DataSourceKind::Source => ArtistRole::Data,
-            DataSourceKind::Fit => ArtistRole::Fit,
-        };
-        let source_label = source.label.clone();
-        let color_id = default_series_color(&self.project, data_source_id);
-        let kinds = match style {
-            SeriesCreationStyle::Line => vec![ArtistKind::Line],
-            SeriesCreationStyle::Scatter => vec![ArtistKind::Scatter],
-            SeriesCreationStyle::LineAndMarker => vec![ArtistKind::Line, ArtistKind::Scatter],
-        };
-        let mut created = Vec::new();
-        let label_id = next_stable_id(&self.project, "series-label");
-        self.project.semantic_registry.push(SemanticLabel {
-            id: label_id.clone(),
-            nodes: vec![LabelNode::Text(source_label)],
-        });
-        for kind in kinds {
-            let id = next_stable_id(&self.project, "series");
-            let binding = DataBinding {
-                data_source_id: data_source_id.to_owned(),
-                x_column: x_column.to_owned(),
-                y_column: y_column.to_owned(),
-            };
-            let properties = match kind {
-                ArtistKind::Line => ArtistProperties::Line {
-                    binding,
-                    stroke: StrokeStyle {
-                        color_id: color_id.clone(),
-                        width_pt: 0.9,
-                        dash_pt: Vec::new(),
-                    },
-                },
-                ArtistKind::Scatter => ArtistProperties::Scatter {
-                    binding,
-                    marker: MarkerStyle {
-                        color_id: color_id.clone(),
-                        shape: MarkerShape::Circle,
-                        size_pt: 4.0,
-                    },
-                },
-                _ => unreachable!("series creation only constructs line/scatter artists"),
-            };
-            self.project.figure.artists.push(ArtistRecord {
-                id: id.clone(),
-                kind,
-                role,
-                visible: true,
-                properties,
-            });
-            self.project.figure.axes[0].artist_ids.push(id.clone());
-            created.push(id);
-        }
-        let legend_entry = LegendEntry {
-            artist_id: created[0].clone(),
-            label_id,
-            visible: true,
-        };
-        if let Some(legend) = self
-            .project
-            .figure
-            .artists
-            .iter_mut()
-            .find(|artist| artist.kind == ArtistKind::Legend)
-        {
-            let ArtistProperties::Legend { entries, .. } = &mut legend.properties else {
-                unreachable!("legend kind and properties are validated together")
-            };
-            entries.push(legend_entry);
-        } else {
-            let legend_id = next_stable_id(&self.project, "legend");
-            self.project.figure.artists.push(ArtistRecord {
-                id: legend_id.clone(),
-                kind: ArtistKind::Legend,
-                role: ArtistRole::Legend,
-                visible: true,
-                properties: ArtistProperties::Legend {
-                    entries: vec![legend_entry],
-                    x_pt: 164.0,
-                    y_pt: 30.0,
-                },
-            });
-            self.project.figure.axes[0].artist_ids.push(legend_id);
-        }
-        Ok(created)
-    }
-
-    pub fn duplicate_series(&mut self, artist_id: &str) -> Result<String, String> {
-        let artist = self
-            .project
-            .figure
-            .artists
-            .iter()
-            .find(|artist| artist.id == artist_id)
-            .cloned()
-            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
-        if !matches!(
-            artist.kind,
-            ArtistKind::Line | ArtistKind::Scatter | ArtistKind::ErrorBar
-        ) {
-            return Err("only data series can be duplicated".to_owned());
-        }
-        let new_id = next_stable_id(&self.project, "series");
-        let mut duplicate = artist;
-        duplicate.id = new_id.clone();
-        self.project.figure.artists.push(duplicate);
-        let axes = &mut self.project.figure.axes[0];
-        let position = axes
-            .artist_ids
-            .iter()
-            .position(|id| id == artist_id)
-            .ok_or_else(|| format!("artist {artist_id} is not attached to the axes"))?;
-        axes.artist_ids.insert(position + 1, new_id.clone());
-        for candidate in &mut self.project.figure.artists {
-            if let ArtistProperties::Legend { entries, .. } = &mut candidate.properties
-                && let Some(entry) = entries
-                    .iter()
-                    .find(|entry| entry.artist_id == artist_id)
-                    .cloned()
-            {
-                entries.push(LegendEntry {
-                    artist_id: new_id.clone(),
-                    label_id: entry.label_id,
-                    visible: entry.visible,
-                });
-                break;
-            }
-        }
-        Ok(new_id)
-    }
-
-    pub fn delete_series(&mut self, artist_id: &str) -> Result<(), String> {
-        let position = self
-            .project
-            .figure
-            .artists
-            .iter()
-            .position(|artist| artist.id == artist_id)
-            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
-        if self.project.figure.artists[position].kind == ArtistKind::Legend {
-            return Err("the legend is managed separately from data series".to_owned());
-        }
-        self.project.figure.artists.remove(position);
-        self.project.figure.axes[0]
-            .artist_ids
-            .retain(|id| id != artist_id);
-        prune_legend_entries(&mut self.project, &[artist_id.to_owned()]);
-        Ok(())
-    }
-
-    pub fn set_series_visible(&mut self, artist_id: &str, visible: bool) -> Result<(), String> {
-        let artist = self
-            .project
-            .figure
-            .artists
-            .iter_mut()
-            .find(|artist| artist.id == artist_id)
-            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
-        artist.visible = visible;
-        Ok(())
-    }
-
-    pub fn move_series(&mut self, artist_id: &str, direction: MoveDirection) -> Result<(), String> {
-        let artist_ids = &mut self.project.figure.axes[0].artist_ids;
-        let position = artist_ids
-            .iter()
-            .position(|id| id == artist_id)
-            .ok_or_else(|| format!("artist {artist_id} is not attached to the axes"))?;
-        let destination = match direction {
-            MoveDirection::Earlier if position > 0 => position - 1,
-            MoveDirection::Later if position + 1 < artist_ids.len() => position + 1,
-            _ => return Ok(()),
-        };
-        artist_ids.swap(position, destination);
-        let order = artist_ids
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (id.clone(), index))
-            .collect::<BTreeMap<_, _>>();
-        for artist in &mut self.project.figure.artists {
-            if let ArtistProperties::Legend { entries, .. } = &mut artist.properties {
-                entries.sort_by_key(|entry| {
-                    order.get(&entry.artist_id).copied().unwrap_or(usize::MAX)
-                });
-            }
-        }
-        Ok(())
-    }
-
-    pub fn rebind_series(
-        &mut self,
-        artist_id: &str,
-        data_source_id: &str,
-        x_column: &str,
-        y_column: &str,
-        y_error_column: Option<&str>,
-    ) -> Result<(), String> {
-        validate_binding_columns(&self.project, data_source_id, x_column, y_column)?;
-        if let Some(error_column) = y_error_column {
-            validate_column(&self.project, data_source_id, error_column)?;
-        }
-        let artist = self
-            .project
-            .figure
-            .artists
-            .iter_mut()
-            .find(|artist| artist.id == artist_id)
-            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
-        let replacement = DataBinding {
-            data_source_id: data_source_id.to_owned(),
-            x_column: x_column.to_owned(),
-            y_column: y_column.to_owned(),
-        };
-        match &mut artist.properties {
-            ArtistProperties::Line { binding, .. } | ArtistProperties::Scatter { binding, .. } => {
-                *binding = replacement
-            }
-            ArtistProperties::ErrorBar {
-                binding,
-                y_error_column: current,
-                ..
-            } => {
-                *binding = replacement;
-                *current = y_error_column
-                    .ok_or_else(|| "error bars require an error column".to_owned())?
-                    .to_owned();
-            }
-            _ => return Err("the selected object has no data binding".to_owned()),
-        }
-        Ok(())
-    }
-
-    pub fn data_source_dependency_count(&self, data_source_id: &str) -> usize {
-        let dependent_sources = dependent_source_ids(&self.project, data_source_id);
-        let mut source_ids = dependent_sources.clone();
-        source_ids.push(data_source_id.to_owned());
-        dependent_sources.len()
-            + self
-                .project
-                .figure
-                .artists
-                .iter()
-                .filter(|artist| source_ids.iter().any(|id| artist_uses_source(artist, id)))
-                .count()
-    }
-
-    pub fn delete_data_source(
-        &mut self,
-        data_source_id: &str,
-        cascade: bool,
-    ) -> Result<(), String> {
-        if !self
-            .project
-            .data_sources
-            .iter()
-            .any(|source| source.id == data_source_id)
-        {
-            return Err(format!("data source {data_source_id} is missing"));
-        }
-        let mut source_ids = dependent_source_ids(&self.project, data_source_id);
-        source_ids.push(data_source_id.to_owned());
-        let artist_ids = self
-            .project
-            .figure
-            .artists
-            .iter()
-            .filter(|artist| source_ids.iter().any(|id| artist_uses_source(artist, id)))
-            .map(|artist| artist.id.clone())
-            .collect::<Vec<_>>();
-        if !cascade && (source_ids.len() > 1 || !artist_ids.is_empty()) {
-            return Err(format!(
-                "data source has {} dependent source(s) and {} bound artist(s)",
-                source_ids.len() - 1,
-                artist_ids.len()
-            ));
-        }
-        self.project
-            .data_sources
-            .retain(|source| !source_ids.contains(&source.id));
-        self.project
-            .figure
-            .artists
-            .retain(|artist| !artist_ids.contains(&artist.id));
-        self.project.figure.axes[0]
-            .artist_ids
-            .retain(|id| !artist_ids.contains(id));
-        prune_legend_entries(&mut self.project, &artist_ids);
-        Ok(())
-    }
-
-    pub fn series(&self) -> Vec<SeriesDescriptor> {
-        self.project
-            .figure
-            .artists
-            .iter()
-            .map(|artist| {
-                let kind = match artist.kind {
-                    crate::ArtistKind::Line => SeriesKind::Line,
-                    crate::ArtistKind::Scatter => SeriesKind::Scatter,
-                    crate::ArtistKind::ErrorBar => SeriesKind::ErrorBar,
-                    crate::ArtistKind::ReferenceLine => SeriesKind::ReferenceLine,
-                    crate::ArtistKind::Annotation => SeriesKind::Annotation,
-                    crate::ArtistKind::Legend => SeriesKind::Legend,
-                };
-                SeriesDescriptor {
-                    id: artist.id.clone(),
-                    kind,
-                    role: artist.role,
-                    visible: artist.visible,
-                    label: artist_binding(artist)
-                        .and_then(|binding| {
-                            self.project
-                                .data_sources
-                                .iter()
-                                .find(|source| source.id == binding.data_source_id)
-                        })
-                        .map_or_else(|| artist.id.clone(), |source| source.label.clone()),
-                    binding: artist_binding(artist).cloned(),
-                }
-            })
-            .collect()
-    }
-
-    pub fn project(&self) -> &ProjectDocument {
-        &self.project
-    }
-
-    pub fn from_project(project: ProjectDocument) -> Result<Self, ProjectError> {
-        project.validate()?;
-        Ok(Self { project })
-    }
-
-    pub fn open(path: &Path) -> Result<(Self, OpenProjectReport), ProjectError> {
-        let report = open_project(path)?;
-        let document = Self::from_project(report.document.clone())?;
-        Ok((document, report))
-    }
-
-    pub fn save(&self, path: &Path) -> Result<(), ProjectError> {
-        save_project(path, &self.project)
-    }
-
-    pub fn sync_datasets(&mut self, datasets: &[DataSet]) -> Result<(), ProjectError> {
-        let mut candidate = self.project.clone();
-        for dataset in datasets
-            .iter()
-            .filter(|dataset| dataset.kind == DataSetKind::Source)
-        {
-            candidate.upsert_embedded_source(
-                dataset.plot_id.clone(),
-                dataset.display_name(),
-                embedded_columns(dataset),
-                dataset.alive.clone(),
-                DataSourceKind::Source,
-                None,
-            )?;
-        }
-        for dataset in datasets
-            .iter()
-            .filter(|dataset| dataset.kind == DataSetKind::Fit)
-        {
-            let fit = dataset.fit_link.as_ref().ok_or_else(|| {
-                ProjectError::Validation(format!(
-                    "fit data source {} is missing its fit link",
-                    dataset.plot_id
-                ))
-            })?;
-            candidate.upsert_embedded_source(
-                dataset.plot_id.clone(),
-                dataset.display_name(),
-                embedded_columns(dataset),
-                dataset.alive.clone(),
-                DataSourceKind::Fit,
-                Some(FitIdentity {
-                    parent_data_source_id: fit.parent_dataset_id.clone().ok_or_else(|| {
-                        ProjectError::Validation(format!(
-                            "fit data source {} is missing its parent identity",
-                            dataset.plot_id
-                        ))
-                    })?,
-                    source_x_column: fit.source_x_column.clone(),
-                    source_y_column: fit.source_y_column.clone(),
-                    equation: fit.equation.clone(),
-                    display_equation: fit.display_equation.clone(),
-                }),
-            )?;
-        }
-        apply_autoscale(&mut candidate, AxisDimension::X).map_err(ProjectError::Validation)?;
-        apply_autoscale(&mut candidate, AxisDimension::Y).map_err(ProjectError::Validation)?;
-        self.project = candidate;
-        Ok(())
-    }
 }
 
-fn apply_autoscale(project: &mut ProjectDocument, dimension: AxisDimension) -> Result<(), String> {
-    let axis = match dimension {
-        AxisDimension::X => &project.figure.axes[0].x,
-        AxisDimension::Y => &project.figure.axes[0].y,
-    };
-    if !axis.autoscale {
-        return Ok(());
+mod autoscale;
+mod autoscale_api;
+mod axes;
+mod datasets;
+mod objects;
+mod series;
+
+use autoscale::apply_autoscale;
+pub use autoscale::{
+    AutoscalePolicy, DataBounds, VisualBounds, apply_visual_padding, compute_data_bounds,
+};
+
+fn reset_empty_axes(project: &mut ProjectDocument) {
+    let axes = &mut project.figure.axes[0];
+    for axis in [&mut axes.x, &mut axes.y] {
+        axis.minimum = 0.0;
+        axis.maximum = 1.0;
+        axis.scale = AxisScale::Linear;
+        axis.locator = LocatorSpec::Auto { target_count: 6 };
+        axis.minor_interval = None;
+        axis.formatter = FormatterSpec::Auto;
+        axis.autoscale = false;
     }
-    let scale = axis.scale;
-    let mut values = Vec::new();
-    for artist in &project.figure.artists {
-        if !artist.visible {
-            continue;
-        }
-        match &artist.properties {
-            ArtistProperties::Line { binding, .. }
-            | ArtistProperties::Scatter { binding, .. }
-            | ArtistProperties::ErrorBar { binding, .. } => {
-                let column_name = match dimension {
-                    AxisDimension::X => &binding.x_column,
-                    AxisDimension::Y => &binding.y_column,
-                };
-                let Some(source) = project
-                    .data_sources
-                    .iter()
-                    .find(|source| source.id == binding.data_source_id)
-                else {
-                    continue;
-                };
-                let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
-                    continue;
-                };
-                if let Some(column) = columns.iter().find(|column| column.name == *column_name) {
-                    values.extend(
-                        column
-                            .values
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
-                            .map(|(_, value)| *value),
-                    );
-                }
-            }
-            ArtistProperties::ReferenceLine {
-                orientation, value, ..
-            } if matches!(
-                (dimension, orientation),
-                (AxisDimension::X, ReferenceOrientation::Vertical)
-                    | (AxisDimension::Y, ReferenceOrientation::Horizontal)
-            ) =>
-            {
-                values.push(*value)
-            }
-            _ => {}
+    let label_ids = [axes.x.label_id.clone(), axes.y.label_id.clone()];
+    for label in &mut project.semantic_registry {
+        if label_ids.contains(&label.id) {
+            label.nodes = vec![LabelNode::Text(String::new())];
         }
     }
-    if values.is_empty() {
-        return Err("autoscale requires at least one visible bound value".to_owned());
-    }
-    if scale == AxisScale::Log10 && values.iter().any(|value| *value <= 0.0) {
-        return Err("log autoscale requires every visible value to be positive".to_owned());
-    }
-    let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let (minimum, maximum) = if scale == AxisScale::Log10 {
-        (minimum / 1.1, maximum * 1.1)
-    } else {
-        let pad = if minimum == maximum {
-            (minimum.abs() * 0.05).max(0.5)
-        } else {
-            (maximum - minimum) * 0.05
-        };
-        (minimum - pad, maximum + pad)
-    };
-    let axis = match dimension {
-        AxisDimension::X => &mut project.figure.axes[0].x,
-        AxisDimension::Y => &mut project.figure.axes[0].y,
-    };
-    axis.minimum = minimum;
-    axis.maximum = maximum;
-    Ok(())
 }
 
 fn artist_binding(artist: &ArtistRecord) -> Option<&DataBinding> {
@@ -1138,6 +498,37 @@ fn validate_column(
     }
 }
 
+fn validate_error_column(
+    project: &ProjectDocument,
+    data_source_id: &str,
+    column_name: &str,
+) -> Result<(), String> {
+    validate_column(project, data_source_id, column_name)?;
+    let source = project
+        .data_sources
+        .iter()
+        .find(|source| source.id == data_source_id)
+        .expect("validate_column confirmed the data source");
+    let DataSourcePayload::Embedded { columns, .. } = &source.payload else {
+        return Err(format!(
+            "data source {data_source_id} is external and unavailable for error validation"
+        ));
+    };
+    let column = columns
+        .iter()
+        .find(|column| column.name == column_name)
+        .expect("validate_column confirmed the column");
+    for (index, value) in column.values.iter().enumerate() {
+        if embedded_value_is_valid(column, index) && (!value.is_finite() || *value < 0.0) {
+            return Err(format!(
+                "error column {column_name} contains an invalid value at row {}",
+                index + 1
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_binding_columns(
     project: &ProjectDocument,
     data_source_id: &str,
@@ -1167,7 +558,91 @@ fn next_stable_id(project: &ProjectDocument, prefix: &str) -> String {
         .expect("the stable ID sequence is practically unbounded")
 }
 
-fn default_series_color(project: &ProjectDocument, data_source_id: &str) -> String {
+fn series_color_key(project: &ProjectDocument, binding: &DataBinding) -> String {
+    if let Some(fit) = project
+        .data_sources
+        .iter()
+        .find(|source| source.id == binding.data_source_id)
+        .and_then(|source| source.fit.as_ref())
+    {
+        return format!(
+            "{}\u{0}{}\u{0}{}",
+            fit.parent_data_source_id, fit.source_x_column, fit.source_y_column
+        );
+    }
+    format!(
+        "{}\u{0}{}\u{0}{}",
+        binding.data_source_id, binding.x_column, binding.y_column
+    )
+}
+
+fn default_series_color(
+    project: &ProjectDocument,
+    data_source_id: &str,
+    x_column: &str,
+    y_column: &str,
+) -> String {
+    let requested = DataBinding {
+        data_source_id: data_source_id.to_owned(),
+        x_column: x_column.to_owned(),
+        y_column: y_column.to_owned(),
+    };
+    let requested_key = series_color_key(project, &requested);
+    for artist in &project.figure.artists {
+        let Some(binding) = artist_binding(artist) else {
+            continue;
+        };
+        if series_color_key(project, binding) != requested_key {
+            continue;
+        }
+        return match &artist.properties {
+            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
+                stroke.color_id.clone()
+            }
+            ArtistProperties::Scatter { marker, .. } => marker.color_id.clone(),
+            _ => continue,
+        };
+    }
+    let available = palette_series_color_ids(&project.palette.id)
+        .iter()
+        .copied()
+        .filter(|id| project.palette.colors.iter().any(|color| color.id == *id))
+        .collect::<Vec<_>>();
+    let used = project
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
+                Some(stroke.color_id.as_str())
+            }
+            ArtistProperties::Scatter { marker, .. } => Some(marker.color_id.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    available
+        .iter()
+        .copied()
+        .find(|id| !used.contains(id))
+        .or_else(|| {
+            (!available.is_empty()).then(|| {
+                let existing_series = project
+                    .figure
+                    .artists
+                    .iter()
+                    .filter_map(artist_binding)
+                    .map(|binding| series_color_key(project, binding))
+                    .collect::<BTreeSet<_>>()
+                    .len();
+                available[existing_series % available.len()]
+            })
+        })
+        .map(str::to_owned)
+        .or_else(|| project.palette.colors.first().map(|color| color.id.clone()))
+        .unwrap_or_else(|| "blue".to_owned())
+}
+
+fn default_series_marker(project: &ProjectDocument, data_source_id: &str) -> MarkerShape {
     let family_id = project
         .data_sources
         .iter()
@@ -1186,25 +661,19 @@ fn default_series_color(project: &ProjectDocument, data_source_id: &str) -> Stri
             .map_or(binding.data_source_id.as_str(), |fit| {
                 fit.parent_data_source_id.as_str()
             });
-        if binding_family != family_id {
-            continue;
+        if binding_family == family_id
+            && let ArtistProperties::Scatter { marker, .. } = &artist.properties
+        {
+            return marker.shape;
         }
-        return match &artist.properties {
-            ArtistProperties::Line { stroke, .. } | ArtistProperties::ErrorBar { stroke, .. } => {
-                stroke.color_id.clone()
-            }
-            ArtistProperties::Scatter { marker, .. } => marker.color_id.clone(),
-            _ => continue,
-        };
     }
-    project
-        .palette
-        .colors
+    let family_index = project
+        .data_sources
         .iter()
-        .find(|color| color.id == "blue")
-        .or_else(|| project.palette.colors.first())
-        .map(|color| color.id.clone())
-        .unwrap_or_else(|| "blue".to_owned())
+        .filter(|source| source.fit.is_none())
+        .position(|source| source.id == family_id)
+        .unwrap_or(0);
+    HANDOFF_MARKERS[family_index % HANDOFF_MARKERS.len()]
 }
 
 fn dependent_source_ids(project: &ProjectDocument, data_source_id: &str) -> Vec<String> {
@@ -1230,9 +699,16 @@ fn dependent_source_ids(project: &ProjectDocument, data_source_id: &str) -> Vec<
 
 fn prune_legend_entries(project: &mut ProjectDocument, removed_artist_ids: &[String]) {
     let mut empty_legends = Vec::new();
+    let mut removed_label_ids = Vec::new();
     for artist in &mut project.figure.artists {
         if let ArtistProperties::Legend { entries, .. } = &mut artist.properties {
-            entries.retain(|entry| !removed_artist_ids.contains(&entry.artist_id));
+            entries.retain(|entry| {
+                let keep = !removed_artist_ids.contains(&entry.artist_id);
+                if !keep {
+                    removed_label_ids.push(entry.label_id.clone());
+                }
+                keep
+            });
             if entries.is_empty() {
                 empty_legends.push(artist.id.clone());
             }
@@ -1245,6 +721,27 @@ fn prune_legend_entries(project: &mut ProjectDocument, removed_artist_ids: &[Str
     project.figure.axes[0]
         .artist_ids
         .retain(|id| !empty_legends.contains(id));
+    let mut removed_targets = removed_artist_ids.to_vec();
+    removed_targets.extend(empty_legends);
+    project
+        .overrides
+        .retain(|record| !removed_targets.contains(&record.target_id));
+    let axes = &project.figure.axes[0];
+    let mut retained_label_ids = BTreeSet::from([axes.x.label_id.clone(), axes.y.label_id.clone()]);
+    for artist in &project.figure.artists {
+        match &artist.properties {
+            ArtistProperties::Annotation { label_id, .. } => {
+                retained_label_ids.insert(label_id.clone());
+            }
+            ArtistProperties::Legend { entries, .. } => {
+                retained_label_ids.extend(entries.iter().map(|entry| entry.label_id.clone()));
+            }
+            _ => {}
+        }
+    }
+    project.semantic_registry.retain(|label| {
+        !removed_label_ids.contains(&label.id) || retained_label_ids.contains(&label.id)
+    });
 }
 
 const HANDOFF_COLORS: [(&str, [u8; 4]); 7] = [
@@ -1257,11 +754,14 @@ const HANDOFF_COLORS: [(&str, [u8; 4]); 7] = [
     ("object-light-gray", [187, 187, 187, 255]),
 ];
 
-const HANDOFF_MARKERS: [MarkerShape; 4] = [
+const HANDOFF_MARKERS: [MarkerShape; 7] = [
     MarkerShape::Circle,
     MarkerShape::Square,
     MarkerShape::Triangle,
+    MarkerShape::TriangleDown,
     MarkerShape::Diamond,
+    MarkerShape::Pentagon,
+    MarkerShape::Star,
 ];
 
 fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
@@ -1290,11 +790,6 @@ fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
                 .columns
                 .iter()
                 .any(|column| column.values.len() != dataset.row_count)
-            || dataset
-                .columns
-                .iter()
-                .flat_map(|column| &column.values)
-                .any(|value| !value.is_finite())
             || dataset.alive.len() != dataset.row_count
         {
             return Err(ProjectError::Validation(format!(
@@ -1347,13 +842,39 @@ fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
     Ok(())
 }
 
+fn set_dataset_origin(project: &mut ProjectDocument, dataset: &DataSet) {
+    if dataset.source.to_string_lossy().starts_with("embedded://") {
+        return;
+    }
+    if let Some(source) = project
+        .data_sources
+        .iter_mut()
+        .find(|source| source.id == dataset.plot_id)
+    {
+        source.origin_path = dataset.source.to_str().map(ToOwned::to_owned);
+    }
+}
+
 fn embedded_columns(dataset: &DataSet) -> Vec<EmbeddedColumn> {
     dataset
         .columns
         .iter()
-        .map(|column| EmbeddedColumn {
-            name: column.name.clone(),
-            values: column.values.clone(),
+        .map(|column| {
+            let valid = column
+                .values
+                .iter()
+                .map(|value| value.is_finite())
+                .collect::<Vec<_>>();
+            let has_missing = valid.iter().any(|valid| !valid);
+            EmbeddedColumn {
+                name: column.name.clone(),
+                values: column
+                    .values
+                    .iter()
+                    .map(|value| if value.is_finite() { *value } else { 0.0 })
+                    .collect(),
+                valid: if has_missing { valid } else { Vec::new() },
+            }
         })
         .collect()
 }
@@ -1414,7 +935,7 @@ fn collect_plotted_values(
             .iter()
             .zip(&y.values)
             .enumerate()
-            .filter(|(index, _)| dataset.alive[*index])
+            .filter(|(index, (x, y))| dataset.alive[*index] && x.is_finite() && y.is_finite())
             .map(|(_, (x, y))| (*x, *y)),
     );
 }
@@ -1456,25 +977,37 @@ fn set_handoff_axes(
     axes.x.maximum = x_max;
     axes.y.minimum = y_min;
     axes.y.maximum = y_max;
+    // These bounds were derived from the visible data. Preserve that semantic state so
+    // adding error bars or rebinding columns can extend the range automatically later.
+    axes.x.autoscale = true;
+    axes.y.autoscale = true;
     let x_label = project
         .semantic_registry
         .iter_mut()
         .find(|label| label.id == axes.x.label_id)
         .expect("fixed document has an X label");
-    x_label.nodes = vec![LabelNode::Variable(x_column)];
+    x_label.nodes = vec![LabelNode::Text(x_column)];
     let y_label = project
         .semantic_registry
         .iter_mut()
         .find(|label| label.id == axes.y.label_id)
         .expect("fixed document has a Y label");
-    y_label.nodes = vec![LabelNode::Variable(y_column)];
+    y_label.nodes = vec![LabelNode::Text(y_column)];
     Ok(())
+}
+
+fn axis_label_is_column(nodes: &[LabelNode], column: &str) -> bool {
+    matches!(
+        nodes,
+        [LabelNode::Text(value) | LabelNode::Variable(value) | LabelNode::Upright(value)]
+            if value == column
+    )
 }
 
 fn formal_series(
     axes: &crate::AxesRecord,
     project: &ProjectDocument,
-    legend_labels: &BTreeMap<String, String>,
+    legend_labels: &BTreeMap<String, instplot_text::Label>,
     project_ids: &mut BTreeMap<NodeId, String>,
 ) -> Result<Vec<Series>, DocumentLayoutError> {
     let mut output = Vec::new();
@@ -1506,7 +1039,8 @@ fn formal_series(
                 Some(LayoutMarkerStyle {
                     shape: marker_shape(marker.shape),
                     size: marker.size_pt,
-                    filled: true,
+                    filled: marker.filled,
+                    interval: marker.interval.max(1),
                 }),
                 Vec::new(),
                 None,
@@ -1514,32 +1048,18 @@ fn formal_series(
             ),
             ArtistProperties::ErrorBar {
                 binding,
+                x_error_column,
                 y_error_column,
                 cap_width_pt,
                 stroke,
             } => {
-                let points = bound_points(binding, project)?;
-                let values = bound_column(&binding.data_source_id, y_error_column, project)?;
-                if points.len() != values.len() {
-                    return Err(DocumentLayoutError::ColumnLengthMismatch {
-                        source: binding.data_source_id.clone(),
-                        x: points.len(),
-                        y: values.len(),
-                    });
-                }
+                let (points, values) =
+                    bound_error_data(binding, x_error_column.as_deref(), y_error_column, project)?;
                 (
                     points,
                     None,
                     None,
-                    values
-                        .into_iter()
-                        .map(|value| ErrorBar {
-                            x_minus: 0.0,
-                            x_plus: 0.0,
-                            y_minus: value,
-                            y_plus: value,
-                        })
-                        .collect(),
+                    values,
                     Some(ErrorStyle {
                         width: stroke.width_pt,
                         cap_width: *cap_width_pt,
@@ -1589,12 +1109,81 @@ fn formal_series(
             }
             ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => continue,
         };
+        let legend_label = legend_labels.get(&artist.id).cloned();
+        let label = legend_label
+            .as_ref()
+            .map(instplot_text::Label::normalized_text)
+            .unwrap_or_default();
+        let binding = artist_binding(artist);
+        let legend_marker = if !label.is_empty() && marker.is_none() {
+            binding.and_then(|binding| {
+                axes.artist_ids.iter().find_map(|candidate_id| {
+                    let candidate = project
+                        .figure
+                        .artists
+                        .iter()
+                        .find(|candidate| candidate.id == *candidate_id && candidate.visible)?;
+                    let ArtistProperties::Scatter {
+                        binding: candidate_binding,
+                        marker,
+                    } = &candidate.properties
+                    else {
+                        return None;
+                    };
+                    (candidate_binding == binding).then_some(LayoutMarkerStyle {
+                        shape: marker_shape(marker.shape),
+                        size: marker.size_pt,
+                        filled: marker.filled,
+                        interval: marker.interval.max(1),
+                    })
+                })
+            })
+        } else {
+            None
+        };
+        let legend_error = if label.is_empty() {
+            None
+        } else {
+            binding
+                .and_then(|binding| {
+                    axes.artist_ids.iter().find_map(|candidate_id| {
+                        let candidate =
+                            project.figure.artists.iter().find(|candidate| {
+                                candidate.id == *candidate_id && candidate.visible
+                            })?;
+                        let ArtistProperties::ErrorBar {
+                            binding: error_binding,
+                            cap_width_pt,
+                            stroke,
+                            ..
+                        } = &candidate.properties
+                        else {
+                            return None;
+                        };
+                        (error_binding == binding).then_some((cap_width_pt, stroke))
+                    })
+                })
+                .map(|(cap_width_pt, stroke)| {
+                    Ok::<_, DocumentLayoutError>(LegendErrorStyle {
+                        style: ErrorStyle {
+                            width: stroke.width_pt,
+                            cap_width: *cap_width_pt,
+                            dash: dash_style(stroke),
+                        },
+                        color: palette_color(&stroke.color_id, &project.palette)?,
+                    })
+                })
+                .transpose()?
+        };
         output.push(Series {
             id: register_node_id(&artist.id, project_ids)?,
-            label: legend_labels.get(&artist.id).cloned().unwrap_or_default(),
+            label,
+            legend_label,
             points,
             line,
             marker,
+            legend_marker,
+            legend_error,
             errors,
             error_style,
             color: palette_color(color_id, &project.palette)?,
@@ -1623,15 +1212,35 @@ fn formal_annotations(
             label_id,
             x_pt,
             y_pt,
+            connectors,
         } = &artist.properties
         else {
             continue;
         };
         output.push(Annotation {
             id: register_node_id(&artist.id, project_ids)?,
-            label: semantic_label(label_id, &project.semantic_registry)?,
+            labels: split_layout_label_lines(semantic_label(label_id, &project.semantic_registry)?),
             position: AnnotationPosition::FigurePoints { x: *x_pt, y: *y_pt },
             offset_pt: (0.0, 0.0),
+            connectors: connectors
+                .iter()
+                .map(|connector| {
+                    Ok(AnnotationConnector {
+                        target: DataPoint {
+                            x: connector.target_x,
+                            y: connector.target_y,
+                        },
+                        stroke: LineStyle {
+                            width: connector.stroke.width_pt,
+                            dash: dash_style(&connector.stroke),
+                        },
+                        color: palette_color(&connector.stroke.color_id, &project.palette)?,
+                        start_arrow: connector.start_arrow,
+                        end_arrow: connector.end_arrow,
+                        arrow_size: connector.arrow_size_pt,
+                    })
+                })
+                .collect::<Result<Vec<_>, DocumentLayoutError>>()?,
         });
     }
     Ok(output)
@@ -1641,7 +1250,7 @@ fn legend_spec(
     axes: &crate::AxesRecord,
     project: &ProjectDocument,
     project_ids: &mut BTreeMap<NodeId, String>,
-) -> Result<(Option<LegendSpec>, BTreeMap<String, String>), DocumentLayoutError> {
+) -> Result<(Option<LegendSpec>, BTreeMap<String, instplot_text::Label>), DocumentLayoutError> {
     for artist_id in &axes.artist_ids {
         let artist = project
             .figure
@@ -1656,11 +1265,14 @@ fn legend_spec(
             entries,
             x_pt,
             y_pt,
+            placement,
+            position_custom,
+            grid,
         } = &artist.properties
         else {
             continue;
         };
-        let labels = entries
+        let visible_entries: Vec<_> = entries
             .iter()
             .filter(|entry| {
                 entry.visible
@@ -1670,17 +1282,44 @@ fn legend_spec(
                         .iter()
                         .any(|candidate| candidate.id == entry.artist_id && candidate.visible)
             })
+            .collect();
+        let labels = visible_entries
+            .iter()
             .map(|entry| {
                 Ok((
                     entry.artist_id.clone(),
-                    semantic_label(&entry.label_id, &project.semantic_registry)?.normalized_text(),
+                    semantic_label(&entry.label_id, &project.semantic_registry)?,
                 ))
             })
             .collect::<Result<_, DocumentLayoutError>>()?;
+        let entry_order = visible_entries
+            .iter()
+            .map(|entry| register_node_id(&entry.artist_id, project_ids))
+            .collect::<Result<Vec<_>, _>>()?;
         return Ok((
             Some(LegendSpec {
                 id: register_node_id(&artist.id, project_ids)?,
-                position: LegendPosition::FigurePoints { x: *x_pt, y: *y_pt },
+                position: match placement {
+                    LegendPlacement::Auto => LegendPosition::Auto,
+                    LegendPlacement::Inside => LegendPosition::FigurePoints { x: *x_pt, y: *y_pt },
+                    LegendPlacement::Above => LegendPosition::Above,
+                    LegendPlacement::Right => LegendPosition::Right,
+                },
+                manual_position: if *position_custom
+                    && matches!(placement, LegendPlacement::Above | LegendPlacement::Right)
+                {
+                    Some((*x_pt, *y_pt))
+                } else {
+                    None
+                },
+                grid: match grid {
+                    LegendGrid::Auto => LayoutLegendGrid::Auto,
+                    LegendGrid::Rows(rows) => LayoutLegendGrid::Rows(usize::from(*rows)),
+                    LegendGrid::Columns(columns) => {
+                        LayoutLegendGrid::Columns(usize::from(*columns))
+                    }
+                },
+                entry_order,
             }),
             labels,
         ));
@@ -1706,7 +1345,6 @@ fn bound_points(
         columns
             .iter()
             .find(|column| column.name == name)
-            .map(|column| column.values.as_slice())
             .ok_or_else(|| DocumentLayoutError::MissingColumn {
                 source: source.id.clone(),
                 column: name.to_owned(),
@@ -1714,52 +1352,91 @@ fn bound_points(
     };
     let x = column(&binding.x_column)?;
     let y = column(&binding.y_column)?;
-    if x.len() != y.len() {
+    if x.values.len() != y.values.len() {
         return Err(DocumentLayoutError::ColumnLengthMismatch {
             source: source.id.clone(),
-            x: x.len(),
-            y: y.len(),
+            x: x.values.len(),
+            y: y.values.len(),
         });
     }
-    Ok(x.iter()
-        .zip(y)
+    Ok(x.values
+        .iter()
+        .zip(&y.values)
         .enumerate()
-        .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
+        .filter(|(index, _)| {
+            alive.get(*index).copied().unwrap_or(true)
+                && embedded_value_is_valid(x, *index)
+                && embedded_value_is_valid(y, *index)
+        })
         .map(|(_, (x, y))| DataPoint { x: *x, y: *y })
         .collect())
 }
 
-fn bound_column(
-    source_id: &str,
-    column_name: &str,
+fn bound_error_data(
+    binding: &DataBinding,
+    x_error_column: Option<&str>,
+    y_error_column: &str,
     project: &ProjectDocument,
-) -> Result<Vec<f64>, DocumentLayoutError> {
+) -> Result<(Vec<DataPoint>, Vec<ErrorBar>), DocumentLayoutError> {
     let source = project
         .data_sources
         .iter()
-        .find(|source| source.id == source_id)
-        .ok_or_else(|| DocumentLayoutError::MissingDataSource(source_id.to_owned()))?;
+        .find(|source| source.id == binding.data_source_id)
+        .ok_or_else(|| DocumentLayoutError::MissingDataSource(binding.data_source_id.clone()))?;
     let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
         return Err(DocumentLayoutError::ExternalDataUnavailable(
             source.id.clone(),
         ));
     };
-    columns
-        .iter()
-        .find(|column| column.name == column_name)
-        .map(|column| {
-            column
-                .values
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
-                .map(|(_, value)| *value)
-                .collect()
-        })
-        .ok_or_else(|| DocumentLayoutError::MissingColumn {
+    let find_column = |name: &str| {
+        columns
+            .iter()
+            .find(|column| column.name == name)
+            .ok_or_else(|| DocumentLayoutError::MissingColumn {
+                source: source.id.clone(),
+                column: name.to_owned(),
+            })
+    };
+    let x = find_column(&binding.x_column)?;
+    let y = find_column(&binding.y_column)?;
+    let y_error = find_column(y_error_column)?;
+    let x_error = x_error_column.map(find_column).transpose()?;
+    if x.values.len() != y.values.len()
+        || x.values.len() != y_error.values.len()
+        || x_error.is_some_and(|error| x.values.len() != error.values.len())
+    {
+        return Err(DocumentLayoutError::ColumnLengthMismatch {
             source: source.id.clone(),
-            column: column_name.to_owned(),
-        })
+            x: x.values.len(),
+            y: y.values.len().min(y_error.values.len()),
+        });
+    }
+    let mut points = Vec::new();
+    let mut errors = Vec::new();
+    for index in 0..x.values.len() {
+        if alive.get(index).copied().unwrap_or(true)
+            && embedded_value_is_valid(x, index)
+            && embedded_value_is_valid(y, index)
+            && embedded_value_is_valid(y_error, index)
+            && x_error.is_none_or(|error| embedded_value_is_valid(error, index))
+        {
+            points.push(DataPoint {
+                x: x.values[index],
+                y: y.values[index],
+            });
+            errors.push(ErrorBar {
+                x_minus: x_error.map_or(0.0, |error| error.values[index].abs()),
+                x_plus: x_error.map_or(0.0, |error| error.values[index].abs()),
+                y_minus: y_error.values[index].abs(),
+                y_plus: y_error.values[index].abs(),
+            });
+        }
+    }
+    Ok((points, errors))
+}
+
+fn embedded_value_is_valid(column: &EmbeddedColumn, index: usize) -> bool {
+    column.valid.get(index).copied().unwrap_or(true)
 }
 
 fn semantic_label(label_id: &str, labels: &[SemanticLabel]) -> Result<Label, DocumentLayoutError> {
@@ -1768,6 +1445,59 @@ fn semantic_label(label_id: &str, labels: &[SemanticLabel]) -> Result<Label, Doc
         .find(|label| label.id == label_id)
         .map(|label| Label::Group(label.nodes.iter().map(label_node).collect()))
         .ok_or_else(|| DocumentLayoutError::MissingLabel(label_id.to_owned()))
+}
+
+fn split_layout_label_lines(label: Label) -> Vec<Label> {
+    fn split_text(value: String, wrap: impl Fn(String) -> Label) -> Vec<Label> {
+        value
+            .split('\n')
+            .map(|part| wrap(part.to_owned()))
+            .collect()
+    }
+    fn split(label: Label) -> Vec<Label> {
+        match label {
+            Label::Text(value) => split_text(value, Label::Text),
+            Label::Variable(value) => split_text(value, Label::Variable),
+            Label::Upright(value) => split_text(value, Label::Upright),
+            Label::Number(value) => split_text(value, Label::Number),
+            Label::Unit(value) => split_text(value, Label::Unit),
+            Label::Operator(value) => split_text(value, Label::Operator),
+            Label::Emphasis(value) => split_text(value, Label::Emphasis),
+            Label::BoldVariable(value) => split_text(value, Label::BoldVariable),
+            Label::DescriptiveSubscript(inner) => split(*inner)
+                .into_iter()
+                .map(|line| Label::DescriptiveSubscript(Box::new(line)))
+                .collect(),
+            Label::VariableSubscript(inner) => split(*inner)
+                .into_iter()
+                .map(|line| Label::VariableSubscript(Box::new(line)))
+                .collect(),
+            Label::Superscript(inner) => split(*inner)
+                .into_iter()
+                .map(|line| Label::Superscript(Box::new(line)))
+                .collect(),
+            Label::Group(children) => {
+                let mut lines = vec![Vec::new()];
+                for child in children {
+                    let parts = split(child);
+                    for (index, part) in parts.into_iter().enumerate() {
+                        if index > 0 {
+                            lines.push(Vec::new());
+                        }
+                        lines.last_mut().expect("one label line").push(part);
+                    }
+                }
+                lines.into_iter().map(Label::Group).collect()
+            }
+            other => vec![other],
+        }
+    }
+    let lines = split(label);
+    if lines.is_empty() {
+        vec![Label::Text(String::new())]
+    } else {
+        lines
+    }
 }
 
 fn palette_color(color_id: &str, palette: &PaletteRegistry) -> Result<Color, DocumentLayoutError> {
@@ -1782,6 +1512,9 @@ fn palette_color(color_id: &str, palette: &PaletteRegistry) -> Result<Color, Doc
 fn dash_style(stroke: &StrokeStyle) -> DashStyle {
     match stroke.dash_pt.as_slice() {
         [] => DashStyle::Solid,
+        [8.0, 3.0] => DashStyle::LongDash,
+        [8.0, 2.0, 2.0, 2.0] => DashStyle::LongShortDash,
+        [6.0, 2.0, 0.8, 2.0, 0.8, 2.0] => DashStyle::DashDotDot,
         [dash, gap] if *dash <= stroke.width_pt * 2.0 && *gap > 0.0 => DashStyle::Dotted,
         [_, _] => DashStyle::Dashed,
         _ => DashStyle::DashDot,
@@ -1793,7 +1526,12 @@ fn marker_shape(shape: MarkerShape) -> LayoutMarkerShape {
         MarkerShape::Circle => LayoutMarkerShape::Circle,
         MarkerShape::Square => LayoutMarkerShape::Square,
         MarkerShape::Triangle => LayoutMarkerShape::TriangleUp,
+        MarkerShape::TriangleDown => LayoutMarkerShape::TriangleDown,
         MarkerShape::Diamond => LayoutMarkerShape::Diamond,
+        MarkerShape::Pentagon => LayoutMarkerShape::Pentagon,
+        MarkerShape::Star => LayoutMarkerShape::Star,
+        MarkerShape::Plus => LayoutMarkerShape::Plus,
+        MarkerShape::Cross => LayoutMarkerShape::Cross,
     }
 }
 
@@ -1815,6 +1553,7 @@ fn axis_spec(
         LocatorSpec::Auto { target_count } => Locator::Auto {
             target_spacing_pt: available_pt / f64::from(*target_count),
         },
+        LocatorSpec::Interval { step } => Locator::Interval { step: *step },
         LocatorSpec::Fixed { values } => Locator::Fixed(values.clone()),
     };
     let formatter = match axis.formatter {
@@ -1826,22 +1565,22 @@ fn axis_spec(
             precision: usize::from(precision),
         },
     };
-    let tick_direction = match axis.appearance.tick_direction {
-        crate::TickDirection::In => LayoutTickDirection::In,
-        crate::TickDirection::Out => LayoutTickDirection::Out,
-        crate::TickDirection::InOut => LayoutTickDirection::InOut,
-    };
+    // Preserve legacy project data but render the product's inward-only rule.
+    let tick_direction = LayoutTickDirection::In;
     Ok(AxisSpec {
         id: register_node_id(&axis.id, project_ids)?,
-        label: Label::Group(semantic.nodes.iter().map(label_node).collect()),
+        label: layout_label_from_nodes(&semantic.nodes),
         minimum: axis.minimum,
         maximum: axis.maximum,
         scale,
         locator,
+        minor_interval: axis.minor_interval,
         formatter,
+        // Legacy projects may still carry grid flags. Keep them readable, but
+        // the canvas-first product does not draw a grid.
         grid: GridSpec {
-            major: axis.appearance.grid_major,
-            minor: axis.appearance.grid_minor,
+            major: false,
+            minor: false,
         },
         appearance: LayoutAxisAppearance {
             near_spine: axis.appearance.near_spine,
@@ -1858,6 +1597,11 @@ fn axis_spec(
             label_tick_pad_pt: axis.appearance.label_tick_pad_pt,
         },
     })
+}
+
+/// Convert persisted label semantics using the same shaping rules as preview and export.
+pub fn layout_label_from_nodes(nodes: &[LabelNode]) -> Label {
+    Label::Group(nodes.iter().map(label_node).collect())
 }
 
 fn label_node(node: &LabelNode) -> Label {
@@ -1913,680 +1657,4 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use instplot_core::NumericColumn;
-    use instplot_layout::SelectableRole;
-    use studio_render_spike::{Color, DisplayItem};
-
-    #[test]
-    fn fixed_document_compiles_to_one_deterministic_display_list() {
-        let document = FigureDocument::fixed();
-        let display = document.compile().unwrap();
-        assert!(display.validation_errors().is_empty());
-        assert_eq!(document.series().len(), 6);
-        assert_eq!(document.series()[1].kind, SeriesKind::Line);
-        assert_eq!(document.series()[1].id, "node-11");
-    }
-
-    #[test]
-    fn axis_edits_mutate_document_state_and_recompile() {
-        let mut document = FigureDocument::fixed();
-        let ranges = AxisRanges {
-            x_min: -4.0,
-            x_max: 4.0,
-            y_min: -3.0,
-            y_max: 3.0,
-        };
-        document.set_axis_ranges(ranges).unwrap();
-        assert_eq!(document.axis_ranges(), ranges);
-        assert!(document.compile().is_ok());
-    }
-
-    #[test]
-    fn invalid_axis_edits_do_not_change_the_document() {
-        let mut document = FigureDocument::fixed();
-        let before = document.axis_ranges();
-        let invalid = AxisRanges {
-            x_min: 2.0,
-            x_max: 1.0,
-            ..before
-        };
-        assert!(document.set_axis_ranges(invalid).is_err());
-        assert_eq!(document.axis_ranges(), before);
-    }
-
-    #[test]
-    fn empty_and_non_finite_handoff_data_fail_with_specific_errors() {
-        let empty = DataSet {
-            source: PathBuf::from("empty.txt"),
-            label: Some("Empty".to_owned()),
-            kind: DataSetKind::Source,
-            plot_id: "empty-source".to_owned(),
-            fit_link: None,
-            encoding: "UTF-8".to_owned(),
-            separator: "tab".to_owned(),
-            columns: vec![
-                NumericColumn {
-                    name: "x".to_owned(),
-                    values: Vec::new(),
-                },
-                NumericColumn {
-                    name: "y".to_owned(),
-                    values: Vec::new(),
-                },
-            ],
-            row_count: 0,
-            alive: Vec::new(),
-        };
-        assert!(
-            FigureDocument::from_datasets(&[])
-                .unwrap_err()
-                .to_string()
-                .contains("no datasets")
-        );
-        assert!(
-            FigureDocument::from_datasets(std::slice::from_ref(&empty))
-                .unwrap_err()
-                .to_string()
-                .contains("no alive plotted rows")
-        );
-
-        let mut non_finite = empty;
-        non_finite.row_count = 1;
-        non_finite.alive = vec![true];
-        non_finite.columns[0].values = vec![f64::NAN];
-        non_finite.columns[1].values = vec![1.0];
-        assert!(
-            FigureDocument::from_datasets(&[non_finite])
-                .unwrap_err()
-                .to_string()
-                .contains("inconsistent columns or alive state")
-        );
-    }
-
-    #[test]
-    fn extreme_finite_scientific_ranges_compile_without_changing_precision() {
-        let mut document = FigureDocument::fixed();
-        let mut x = document.axis_record(AxisDimension::X);
-        x.minimum = -1.0e12;
-        x.maximum = 1.0e12;
-        x.formatter = FormatterSpec::Scientific { precision: 6 };
-        document
-            .set_axis_record(AxisDimension::X, x.clone())
-            .unwrap();
-
-        let mut y = document.axis_record(AxisDimension::Y);
-        y.minimum = -1.0e-9;
-        y.maximum = 1.0e-9;
-        y.formatter = FormatterSpec::Scientific { precision: 8 };
-        document
-            .set_axis_record(AxisDimension::Y, y.clone())
-            .unwrap();
-
-        let display = document.compile().unwrap();
-        assert!(display.validation_errors().is_empty());
-        assert_eq!(document.axis_record(AxisDimension::X), x);
-        assert_eq!(document.axis_record(AxisDimension::Y), y);
-    }
-
-    #[test]
-    fn p4_axis_size_and_semantic_label_settings_round_trip() {
-        let mut document = FigureDocument::fixed();
-        document.set_figure_size_mm(89.0, 65.0).unwrap();
-
-        let mut x_axis = document.axis_record(AxisDimension::X);
-        x_axis.autoscale = false;
-        x_axis.minimum = -2.0;
-        x_axis.maximum = 2.0;
-        x_axis.locator = LocatorSpec::Fixed {
-            values: vec![-2.0, 0.0, 2.0],
-        };
-        x_axis.formatter = FormatterSpec::Scientific { precision: 3 };
-        x_axis.appearance.tick_direction = crate::TickDirection::InOut;
-        x_axis.appearance.far_tick_labels = true;
-        x_axis.appearance.grid_minor = true;
-        document
-            .set_axis_record(AxisDimension::X, x_axis.clone())
-            .unwrap();
-        let label = vec![
-            LabelNode::GreekVariable('μ'),
-            LabelNode::VariableSubscript(vec![LabelNode::Text("eff".to_owned())]),
-            LabelNode::UnitSeparator,
-            LabelNode::Unit("mA cm^-2".to_owned()),
-        ];
-        document
-            .set_axis_label(AxisDimension::X, label.clone())
-            .unwrap();
-
-        let encoded = serde_json::to_vec(document.project()).unwrap();
-        let reopened =
-            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
-                .unwrap();
-        assert_eq!(reopened.figure_size_mm(), (89.0, 65.0));
-        assert_eq!(reopened.axis_record(AxisDimension::X), x_axis);
-        assert_eq!(reopened.axis_label(AxisDimension::X), label.as_slice());
-        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
-    }
-
-    #[test]
-    fn p4_autoscale_is_stable_and_failed_log_autoscale_is_atomic() {
-        let mut document = FigureDocument::fixed();
-        let mut x_axis = document.axis_record(AxisDimension::X);
-        x_axis.autoscale = true;
-        document.set_axis_record(AxisDimension::X, x_axis).unwrap();
-        let autoscaled = document.axis_record(AxisDimension::X);
-        assert!(autoscaled.minimum < autoscaled.maximum);
-
-        let before = document.project().clone();
-        let mut y_axis = document.axis_record(AxisDimension::Y);
-        y_axis.autoscale = true;
-        y_axis.scale = AxisScale::Log10;
-        assert!(document.set_axis_record(AxisDimension::Y, y_axis).is_err());
-        assert_eq!(document.project(), &before);
-    }
-
-    #[test]
-    fn p5_all_artist_properties_and_legend_entries_round_trip() {
-        let mut document = FigureDocument::fixed();
-
-        let mut line = document.artist_record("node-11").unwrap();
-        line.role = ArtistRole::Theory;
-        let ArtistProperties::Line { stroke, .. } = &mut line.properties else {
-            panic!("node-11 must be a line")
-        };
-        stroke.color_id = "gray".to_owned();
-        stroke.width_pt = 1.4;
-        stroke.dash_pt = vec![4.0, 2.4];
-        document.set_artist_record(line).unwrap();
-
-        let mut scatter = document.artist_record("node-13").unwrap();
-        let ArtistProperties::Scatter { marker, .. } = &mut scatter.properties else {
-            panic!("node-13 must be a scatter")
-        };
-        marker.shape = MarkerShape::Diamond;
-        marker.size_pt = 5.5;
-        document.set_artist_record(scatter).unwrap();
-
-        let mut errors = document.artist_record("node-12").unwrap();
-        let ArtistProperties::ErrorBar {
-            cap_width_pt,
-            stroke,
-            ..
-        } = &mut errors.properties
-        else {
-            panic!("node-12 must be an error bar")
-        };
-        *cap_width_pt = 3.0;
-        stroke.width_pt = 0.8;
-        document.set_artist_record(errors).unwrap();
-
-        let mut reference = document.artist_record("node-10").unwrap();
-        let ArtistProperties::ReferenceLine {
-            orientation, value, ..
-        } = &mut reference.properties
-        else {
-            panic!("node-10 must be a reference line")
-        };
-        *orientation = ReferenceOrientation::Vertical;
-        *value = 1.0;
-        document.set_artist_record(reference).unwrap();
-
-        let mut annotation = document.artist_record("node-14").unwrap();
-        let ArtistProperties::Annotation { x_pt, y_pt, .. } = &mut annotation.properties else {
-            panic!("node-14 must be an annotation")
-        };
-        *x_pt = 55.0;
-        *y_pt = 22.0;
-        document.set_artist_record(annotation).unwrap();
-        document
-            .set_semantic_label_nodes(
-                "label-temperature",
-                vec![
-                    LabelNode::Variable("T".to_owned()),
-                    LabelNode::Operator("=".to_owned()),
-                    LabelNode::Number("250".to_owned()),
-                    LabelNode::Unit("K".to_owned()),
-                ],
-            )
-            .unwrap();
-
-        let mut legend = document.artist_record("node-15").unwrap();
-        let ArtistProperties::Legend {
-            entries,
-            x_pt,
-            y_pt,
-        } = &mut legend.properties
-        else {
-            panic!("node-15 must be a legend")
-        };
-        entries.reverse();
-        entries[0].visible = false;
-        *x_pt = 150.0;
-        *y_pt = 25.0;
-        document.set_artist_record(legend).unwrap();
-
-        let resolved = document.layout_figure().unwrap();
-        assert!(resolved.result.display_list.validation_errors().is_empty());
-        assert_eq!(
-            document
-                .project()
-                .overrides
-                .iter()
-                .filter(|record| record.property == "artist_style")
-                .count(),
-            6
-        );
-        let encoded = serde_json::to_vec(document.project()).unwrap();
-        let reopened =
-            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
-                .unwrap();
-        assert_eq!(document.project(), reopened.project());
-        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
-    }
-
-    #[test]
-    fn p7_export_preferences_round_trip_and_drive_publication_dpi() {
-        let mut document = FigureDocument::fixed();
-        let mut preferences = document.export_preferences().clone();
-        preferences.selected_raster_dpi = 600;
-        preferences.transparent_background = true;
-        document
-            .set_export_preferences(preferences.clone())
-            .unwrap();
-
-        let encoded = serde_json::to_vec(document.project()).unwrap();
-        let reopened =
-            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
-                .unwrap();
-        assert_eq!(reopened.export_preferences(), &preferences);
-        let resolved = crate::resolve_document(&reopened).unwrap();
-        let report = crate::check_publication(
-            &reopened,
-            &resolved,
-            reopened.export_preferences().selected_raster_dpi,
-        );
-        assert_eq!(report.raster_dpi, 600);
-        assert!(
-            report
-                .findings
-                .iter()
-                .all(|finding| { !finding.impact.is_empty() && !finding.remediation.is_empty() })
-        );
-    }
-
-    #[test]
-    fn project_round_trip_preserves_the_resolved_display_list() {
-        let document = FigureDocument::fixed();
-        let encoded = serde_json::to_vec(document.project()).unwrap();
-        let decoded = crate::project::decode_project(&encoded).unwrap();
-        let reopened = FigureDocument::from_project(decoded).unwrap();
-        assert_eq!(document.compile().unwrap(), reopened.compile().unwrap());
-    }
-
-    #[test]
-    fn formal_axes_layout_is_deterministic_and_retains_project_identity() {
-        let document = FigureDocument::fixed();
-        let first = document.layout_axes().unwrap();
-        let second = document.layout_axes().unwrap();
-
-        assert_eq!(first.result.snapshot(), second.result.snapshot());
-        assert_eq!(first.data_clip, first.result.axes);
-        assert!(first.result.display_list.validation_errors().is_empty());
-        assert!(first.result.warnings.is_empty());
-        assert_eq!(first.project_ids.get(&NodeId(2)).unwrap(), "node-2");
-        assert_eq!(first.project_ids.get(&NodeId(3)).unwrap(), "node-3");
-        assert_eq!(first.project_ids.get(&NodeId(4)).unwrap(), "node-4");
-
-        let grid_count = first
-            .result
-            .display_list
-            .items
-            .iter()
-            .filter(|item| match item {
-                DisplayItem::Path {
-                    stroke: Some(stroke),
-                    ..
-                } => stroke.color == Color(218, 221, 224, 255),
-                _ => false,
-            })
-            .count();
-        assert_eq!(
-            grid_count,
-            first.result.x_axis.major.len() + first.result.y_axis.major.len()
-        );
-
-        let semantic_runs: Vec<_> = first
-            .result
-            .display_list
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                DisplayItem::GlyphRun(run)
-                    if run.source == NodeId(3) || run.source == NodeId(4) =>
-                {
-                    Some((
-                        run.source,
-                        run.label.normalized_text(),
-                        run.rotation_degrees,
-                    ))
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(semantic_runs.iter().any(|(source, text, rotation)| {
-            *source == NodeId(3) && text.contains("μ0HDL") && *rotation == 0.0
-        }));
-        assert!(semantic_runs.iter().any(|(source, text, rotation)| {
-            *source == NodeId(4) && text.contains("Current density") && *rotation == -90.0
-        }));
-    }
-
-    #[test]
-    fn formal_axes_layout_honors_ranges_locators_and_formatters() {
-        let mut project = ProjectDocument::fixed_fixture();
-        let axes = &mut project.figure.axes[0];
-        axes.x.minimum = -1.0;
-        axes.x.maximum = 1.0;
-        axes.x.locator = LocatorSpec::Fixed {
-            values: vec![-1.0, 0.0, 1.0],
-        };
-        axes.x.formatter = FormatterSpec::Decimal { precision: 2 };
-        let document = FigureDocument::from_project(project).unwrap();
-        let output = document.layout_axes().unwrap();
-
-        assert_eq!(
-            output
-                .result
-                .x_axis
-                .major
-                .iter()
-                .map(|tick| (tick.value, tick.label.as_str()))
-                .collect::<Vec<_>>(),
-            vec![(-1.0, "-1"), (0.0, "0"), (1.0, "1")]
-        );
-    }
-
-    #[test]
-    fn non_numeric_project_ids_have_a_stable_reverse_mapping() {
-        let mut project = ProjectDocument::fixed_fixture();
-        project.figure.axes[0].id = "axes-primary".to_owned();
-        project.figure.axes[0].x.id = "axis-horizontal".to_owned();
-        project.figure.axes[0].y.id = "axis-vertical".to_owned();
-        let document = FigureDocument::from_project(project).unwrap();
-        let first = document.layout_axes().unwrap();
-        let second = document.layout_axes().unwrap();
-
-        assert_eq!(first.project_ids, second.project_ids);
-        assert!(first.project_ids.values().any(|id| id == "axes-primary"));
-        assert!(first.project_ids.values().any(|id| id == "axis-horizontal"));
-        assert!(first.project_ids.values().any(|id| id == "axis-vertical"));
-    }
-
-    #[test]
-    fn formal_figure_layout_resolves_basic_line_and_scatter_artists() {
-        let output = FigureDocument::fixed().layout_figure().unwrap();
-
-        assert_eq!(output.project_ids.get(&NodeId(11)).unwrap(), "node-11");
-        assert_eq!(output.project_ids.get(&NodeId(13)).unwrap(), "node-13");
-        assert_eq!(output.project_ids.get(&NodeId(12)).unwrap(), "node-12");
-        assert!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .any(|item| { item.node == NodeId(11) && item.role == SelectableRole::Series })
-        );
-        assert_eq!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .filter(|item| {
-                    item.node == NodeId(13) && item.role == SelectableRole::DataPoint
-                })
-                .count(),
-            3
-        );
-        assert!(output.result.display_list.validation_errors().is_empty());
-    }
-
-    #[test]
-    fn matching_line_and_scatter_bindings_form_a_combined_visual_series() {
-        let mut project = ProjectDocument::fixed_fixture();
-        let scatter = project
-            .figure
-            .artists
-            .iter_mut()
-            .find(|artist| artist.id == "node-13")
-            .unwrap();
-        let ArtistProperties::Scatter { binding, .. } = &mut scatter.properties else {
-            panic!("fixed node-13 must remain a scatter artist")
-        };
-        binding.x_column = "line_x".to_owned();
-        binding.y_column = "line_y".to_owned();
-
-        let output = FigureDocument::from_project(project)
-            .unwrap()
-            .layout_figure()
-            .unwrap();
-        let line_points = output
-            .result
-            .hit_map
-            .items
-            .iter()
-            .find(|item| item.node == NodeId(11) && item.role == SelectableRole::Series)
-            .unwrap()
-            .path_proximity
-            .clone();
-        let marker_points: Vec<_> = output
-            .result
-            .hit_map
-            .items
-            .iter()
-            .filter(|item| item.node == NodeId(13) && item.role == SelectableRole::DataPoint)
-            .flat_map(|item| item.path_proximity.iter().copied())
-            .collect();
-        assert_eq!(line_points, marker_points);
-    }
-
-    #[test]
-    fn series_management_is_valid_deterministic_and_round_trips() {
-        let mut document = FigureDocument::fixed();
-        let created = document
-            .create_series(
-                "fixture-data",
-                "line_x",
-                "line_y",
-                SeriesCreationStyle::LineAndMarker,
-            )
-            .unwrap();
-        assert_eq!(created, ["series-1", "series-2"]);
-        document.project().validate().unwrap();
-        document.layout_figure().unwrap();
-
-        document.set_series_visible(&created[0], false).unwrap();
-        assert!(
-            !document
-                .series()
-                .iter()
-                .find(|item| item.id == created[0])
-                .unwrap()
-                .visible
-        );
-        let duplicate = document.duplicate_series(&created[1]).unwrap();
-        assert_eq!(duplicate, "series-3");
-        document
-            .move_series(&duplicate, MoveDirection::Earlier)
-            .unwrap();
-        document
-            .rebind_series(&duplicate, "fixture-data", "scatter_x", "scatter_y", None)
-            .unwrap();
-        document.delete_series(&created[1]).unwrap();
-        document.project().validate().unwrap();
-
-        let encoded = serde_json::to_vec(document.project()).unwrap();
-        let reopened =
-            FigureDocument::from_project(crate::project::decode_project(&encoded).unwrap())
-                .unwrap();
-        assert_eq!(reopened.project(), document.project());
-        assert!(
-            !reopened
-                .series()
-                .iter()
-                .find(|item| item.id == created[0])
-                .unwrap()
-                .visible
-        );
-    }
-
-    #[test]
-    fn data_source_deletion_requires_explicit_cascade_and_cleans_dependencies() {
-        let mut document = FigureDocument::fixed();
-        let before = document.clone();
-        assert!(document.delete_data_source("fixture-data", false).is_err());
-        assert_eq!(document, before);
-
-        document.delete_data_source("fixture-data", true).unwrap();
-        assert!(document.project().data_sources.is_empty());
-        assert!(document.project().figure.artists.iter().all(|artist| {
-            !matches!(
-                artist.kind,
-                ArtistKind::Line | ArtistKind::Scatter | ArtistKind::ErrorBar | ArtistKind::Legend
-            )
-        }));
-        document.project().validate().unwrap();
-        document.layout_figure().unwrap();
-    }
-
-    #[test]
-    fn ordinary_import_is_embedded_before_series_creation() {
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("smoke.csv");
-        let datasets = instplot_io::read_data_file(&fixture).unwrap();
-        let imported_id = datasets[0].plot_id.clone();
-        let mut document = FigureDocument::fixed();
-        document.sync_datasets(&datasets).unwrap();
-        let source = document
-            .project()
-            .data_sources
-            .iter()
-            .find(|source| source.id == imported_id)
-            .unwrap();
-        assert!(matches!(source.payload, DataSourcePayload::Embedded { .. }));
-        document
-            .create_series(
-                &imported_id,
-                "field",
-                "response",
-                SeriesCreationStyle::Scatter,
-            )
-            .unwrap();
-        document.project().validate().unwrap();
-        document.layout_figure().unwrap();
-    }
-
-    #[test]
-    fn formal_figure_layout_includes_remaining_single_axes_artists() {
-        let output = FigureDocument::fixed().layout_figure().unwrap();
-
-        assert!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .any(|item| { item.node == NodeId(10) && item.role == SelectableRole::Series })
-        );
-        assert_eq!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .filter(|item| item.node == NodeId(12) && item.role == SelectableRole::ErrorBar)
-                .count(),
-            3
-        );
-        assert!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .any(|item| { item.node == NodeId(14) && item.role == SelectableRole::Annotation })
-        );
-        assert!(
-            output
-                .result
-                .hit_map
-                .items
-                .iter()
-                .any(|item| { item.node == NodeId(15) && item.role == SelectableRole::Legend })
-        );
-        assert_eq!(output.project_ids.get(&NodeId(14)).unwrap(), "node-14");
-        assert_eq!(output.project_ids.get(&NodeId(15)).unwrap(), "node-15");
-
-        let labels: Vec<_> = output
-            .result
-            .display_list
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                DisplayItem::GlyphRun(run) => Some((run.source, run.label.normalized_text())),
-                _ => None,
-            })
-            .collect();
-        assert!(labels.contains(&(NodeId(14), "T ≤ 300 K".to_owned())));
-        assert!(labels.contains(&(NodeId(13), "Experiment".to_owned())));
-        assert!(labels.contains(&(NodeId(11), "Fit".to_owned())));
-    }
-
-    #[test]
-    fn formal_figure_layout_supports_positive_log_data() {
-        let mut document = FigureDocument::fixed();
-        let axes = &mut document.project.figure.axes[0];
-        axes.x.minimum = 0.1;
-        axes.x.maximum = 10.0;
-        axes.x.scale = AxisScale::Log10;
-        axes.y.minimum = 0.1;
-        axes.y.maximum = 10.0;
-        axes.y.scale = AxisScale::Log10;
-        if let ArtistProperties::ReferenceLine { value, .. } =
-            &mut document.project.figure.artists[0].properties
-        {
-            *value = 1.0;
-        }
-        let DataSourcePayload::Embedded { columns, .. } =
-            &mut document.project.data_sources[0].payload
-        else {
-            unreachable!()
-        };
-        for column in columns {
-            match column.name.as_str() {
-                "line_x" | "scatter_x" => column.values = vec![0.1, 1.0, 10.0],
-                "line_y" | "scatter_y" => column.values = vec![0.2, 2.0, 8.0],
-                _ => {}
-            }
-        }
-
-        let output = document.layout_figure().unwrap();
-        assert_eq!(
-            output
-                .result
-                .x_axis
-                .major
-                .iter()
-                .map(|tick| tick.value)
-                .collect::<Vec<_>>(),
-            vec![0.1, 1.0, 10.0]
-        );
-        assert!(output.result.display_list.validation_errors().is_empty());
-    }
-}
+mod document_tests;

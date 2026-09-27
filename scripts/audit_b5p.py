@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import struct
 import subprocess
@@ -75,6 +76,26 @@ def png_dimensions(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", data[16:24])
 
 
+def pdf_page_size_pt(data: bytes) -> tuple[float, float]:
+    match = re.search(rb"/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]", data)
+    if match is None:
+        raise ValueError("PDF page has no explicit MediaBox")
+    return float(match[1]), float(match[2])
+
+
+def pdf_fonts_are_approved(data: bytes) -> bool:
+    approved = {
+        b"TeXGyreHeros-Regular",
+        b"TeXGyreHeros-Italic",
+        b"STIXTwoMath-Regular",
+    }
+    fonts = {
+        name.removesuffix(b"-Identity-H")
+        for name in re.findall(rb"/BaseFont/(?:[A-Z]{6}\+)?([A-Za-z0-9-]+)", data)
+    }
+    return b"TeXGyreHeros-Regular" in fonts and fonts <= approved
+
+
 def main() -> int:
     if OUTPUT.exists():
         shutil.rmtree(OUTPUT)
@@ -120,6 +141,28 @@ def main() -> int:
         run("p0-workflows", [sys.executable, "scripts/validate_b5p_p0.py"]),
     ]
 
+    # Formal InstPlot crates are workspace members. Only the remaining historical
+    # comparison prototypes need separate test invocations.
+    for prototype in (
+        "layout-engine-spike",
+        "plotine-comparison",
+        "shared-core-consumer-spike",
+    ):
+        checks.append(
+            run(
+                f"prototype-{prototype}",
+                [
+                    "cargo",
+                    "test",
+                    "--manifest-path",
+                    f"prototypes/{prototype}/Cargo.toml",
+                    "--locked",
+                    "--all-targets",
+                    "--all-features",
+                ],
+            )
+        )
+
     try:
         p0_summary = json.loads((P0_OUTPUT / "summary.json").read_text(encoding="utf-8"))
         failed_p0 = [
@@ -142,7 +185,7 @@ def main() -> int:
         projects = sorted(artifact_root.glob("*.instplot"))
         project_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in projects]
         complete = all(
-            payload.get("schema_version") == 3
+            payload.get("schema_version") == 6
             and payload.get("figure", {}).get("axes", [{}])[0]
             .get("x", {})
             .get("appearance", {})
@@ -160,8 +203,8 @@ def main() -> int:
         checks.append(
             fact(
                 "document-contract",
-                len(project_payloads) == 4 and complete,
-                f"projects={len(project_payloads)} schema=3 axis/export/legend fields={complete}",
+                len(project_payloads) == 5 and complete,
+                f"projects={len(project_payloads)} schema=6 axis/export/legend fields={complete}",
             )
         )
     except (OSError, json.JSONDecodeError, IndexError, TypeError) as error:
@@ -170,23 +213,39 @@ def main() -> int:
     try:
         pdfs = sorted(artifact_root.glob("*.pdf"))
         pngs = sorted(artifact_root.glob("*.png"))
-        fonts_ok = all(
-            b"TeXGyreHeros-Regular" in path.read_bytes()
-            and b"TeXGyreHeros-Italic" in path.read_bytes()
-            for path in pdfs
-        )
-        dimensions = {path.name: png_dimensions(path) for path in pngs}
+        fonts_ok = all(pdf_fonts_are_approved(path.read_bytes()) for path in pdfs)
+        dimensions = {path.stem: png_dimensions(path) for path in pngs}
+        page_sizes = {path.stem: pdf_page_size_pt(path.read_bytes()) for path in pdfs}
+        dimension_checks = {}
+        for name, png_size in dimensions.items():
+            project = json.loads((artifact_root / f"{name}.instplot").read_text(encoding="utf-8"))
+            base = (
+                float(project["figure"]["width_mm"]) * 72.0 / 25.4,
+                float(project["figure"]["height_mm"]) * 72.0 / 25.4,
+            )
+            page = page_sizes[name]
+            pixel_match = all(
+                abs(actual - round(points * 300.0 / 72.0)) <= 1
+                for actual, points in zip(png_size, page)
+            )
+            # A compact automatic legend may fit inside the fixed figure.  An
+            # outside legend is allowed to extend the export canvas, but must
+            # never crop or shrink the requested figure size.
+            layout_match = all(actual + 0.02 >= expected for actual, expected in zip(page, base))
+            dimension_checks[name] = pixel_match and layout_match
         checks.append(
             fact(
                 "export-structure",
-                len(pdfs) == 4
-                and len(pngs) == 4
+                len(pdfs) == 5
+                and len(pngs) == 5
                 and fonts_ok
-                and all(size == (1004, 768) for size in dimensions.values()),
-                f"pdf={len(pdfs)} png={len(pngs)} fonts={fonts_ok} dimensions={dimensions}",
+                and len(dimension_checks) == 5
+                and all(dimension_checks.values()),
+                f"pdf={len(pdfs)} png={len(pngs)} fonts={fonts_ok} "
+                f"dimensions={dimensions} page_sizes={page_sizes} checks={dimension_checks}",
             )
         )
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, KeyError, TypeError) as error:
         checks.append(fact("export-structure", False, str(error)))
 
     executable = ROOT / "target/release" / (
@@ -221,7 +280,13 @@ def main() -> int:
     )
 
     tracked = subprocess.run(
-        ["git", "grep", "-n", "/Users/" + "zhiyu"],
+        [
+            "git",
+            "grep",
+            "-n",
+            "-E",
+            r"/Users/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\",
+        ],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,

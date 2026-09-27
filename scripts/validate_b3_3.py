@@ -57,7 +57,7 @@ def main() -> int:
                 "cargo",
                 "test",
                 "--manifest-path",
-                "prototypes/ui-shell-spike/Cargo.toml",
+                "crates/instplot-ui/Cargo.toml",
                 "--locked",
                 "--all-features",
             ],
@@ -95,12 +95,12 @@ def main() -> int:
     preview = (ROOT / "apps" / "instplot-studio" / "src" / "preview.rs").read_text(
         encoding="utf-8"
     )
-    shell = (ROOT / "prototypes" / "ui-shell-spike" / "src" / "lib.rs").read_text(
+    shell = (ROOT / "prototypes" / "instplot-ui" / "src" / "lib.rs").read_text(
         encoding="utf-8"
     )
-    resolver = (
-        ROOT / "prototypes" / "export-backend-spike" / "src" / "resolve.rs"
-    ).read_text(encoding="utf-8")
+    resolver = (ROOT / "crates" / "instplot-export" / "src" / "resolve.rs").read_text(
+        encoding="utf-8"
+    )
     checks.extend(
         [
             fact(

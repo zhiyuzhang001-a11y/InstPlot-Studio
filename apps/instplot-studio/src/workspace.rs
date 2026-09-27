@@ -71,6 +71,16 @@ impl WorkspaceState {
         self.project_path.as_deref()
     }
 
+    pub fn is_new(&self) -> bool {
+        self.origin == WorkspaceOrigin::New && self.project_path.is_none()
+    }
+
+    /// The new-workspace figure is a disposable example until the first real data import.
+    /// Editing that example does not turn its embedded curves into user data.
+    pub fn should_replace_showcase_on_import(&self) -> bool {
+        self.is_new()
+    }
+
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
@@ -94,5 +104,19 @@ mod tests {
         assert_eq!(workspace.origin, WorkspaceOrigin::RecoveredBackup);
         assert_eq!(workspace.project_path(), None);
         assert_eq!(workspace.display_name(), "figure");
+    }
+
+    #[test]
+    fn showcase_is_replaced_only_on_first_data_import() {
+        let mut workspace = WorkspaceState::new("Untitled");
+        assert!(workspace.should_replace_showcase_on_import());
+        workspace.note_data_import(Path::new("/tmp/measured.csv"));
+        assert!(!workspace.should_replace_showcase_on_import());
+        assert_eq!(workspace.display_name(), "measured");
+        assert!(
+            !WorkspaceState::from_project(Path::new("/tmp/saved.instplot"), false)
+                .should_replace_showcase_on_import()
+        );
+        assert!(!WorkspaceState::from_lite("Untitled").should_replace_showcase_on_import());
     }
 }

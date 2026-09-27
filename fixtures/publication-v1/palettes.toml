@@ -19,6 +19,42 @@ name = "Paul Tol High Contrast"
 colors = ["#004488", "#DDAA33", "#BB5566"]
 expected_grayscale_behavior = "Source describes equal-luminance samples; distinguish by hue and redundant encoding, not grayscale alone."
 
+[okabe_ito]
+name = "Okabe–Ito"
+colors = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
+source_name = "Color Universal Design / Nature Methods Points of View"
+source_version = "Wong 2011, corrected 2023-07-14"
+source_url = "https://www.nature.com/articles/nmeth.1618"
+ordering = "unordered"
+sampling_method = "Use values in listed order; combine colour with marker or dash encoding."
+
+[batlow]
+name = "Batlow"
+colors = ["#011959", "#144E62", "#3C6D56", "#828231", "#D29343", "#FDAC9E", "#FACCFA"]
+source_name = "Scientific Colour Maps"
+source_version = "8.0.1"
+source_url = "https://doi.org/10.5281/zenodo.1243862"
+ordering = "low-to-high"
+sampling_method = "Seven equidistant samples from the 256-entry batlow map at indices 0, 43, 85, 128, 170, 213, and 255."
+
+[viridis]
+name = "Viridis"
+colors = ["#440154", "#443A83", "#31688E", "#21918C", "#35B779", "#90D743", "#FDE725"]
+source_name = "Matplotlib perceptually uniform colormaps"
+source_version = "Matplotlib 3.10.6"
+source_url = "https://github.com/matplotlib/matplotlib/blob/v3.10.6/lib/matplotlib/_cm_listed.py"
+ordering = "low-to-high"
+sampling_method = "Seven equidistant samples from the 256-entry viridis map at indices 0, 43, 85, 128, 170, 213, and 255."
+
+[cividis]
+name = "Cividis"
+colors = ["#00224E", "#2B406D", "#575D6D", "#7D7C78", "#A59C74", "#D2C060", "#FEE838"]
+source_name = "Cividis / Matplotlib perceptually uniform colormaps"
+source_version = "Nuñez et al. 2018; Matplotlib 3.10.6"
+source_url = "https://doi.org/10.1371/journal.pone.0199239"
+ordering = "low-to-high"
+sampling_method = "Seven equidistant samples from the 256-entry cividis map at indices 0, 43, 85, 128, 170, 213, and 255."
+
 [diverging]
 name = "Paul Tol BuRd"
 colors = ["#2166AC", "#4393C3", "#92C5DE", "#D1E5F0", "#F7F7F7", "#FDDBC7", "#F4A582", "#D6604D", "#B2182B"]

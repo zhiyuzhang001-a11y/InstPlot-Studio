@@ -124,7 +124,16 @@ def validate_semantics(manifest: dict, expected: dict) -> None:
 
 def validate_palettes(palettes: dict) -> None:
     require(palettes["status"] == "frozen", "palette contract is not frozen")
-    for key in ("distinct", "high_contrast", "diverging", "neutral"):
+    for key in (
+        "distinct",
+        "high_contrast",
+        "okabe_ito",
+        "batlow",
+        "viridis",
+        "cividis",
+        "diverging",
+        "neutral",
+    ):
         colors = palettes[key]["colors"]
         require(colors and len(colors) == len(set(colors)), f"{key} palette has duplicate or missing colors")
         for color in colors:

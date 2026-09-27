@@ -17,11 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "target" / "part-a-validation"
 PROTOTYPES = (
-    "studio-render-spike",
-    "text-shaping-spike",
-    "export-backend-spike",
     "plotine-comparison",
-    "ui-shell-spike",
     "layout-engine-spike",
 )
 
@@ -102,7 +98,7 @@ def main() -> int:
     ]
     for prototype in selected:
         cwd = ROOT / "prototypes" / prototype
-        feature_args = ["--features", "parley-candidate"] if prototype == "text-shaping-spike" else []
+        feature_args: list[str] = []
         checks.extend(
             (
                 (f"{prototype}:fmt", cwd, ["cargo", "fmt", "--check"]),
@@ -127,38 +123,13 @@ def main() -> int:
                 ),
             )
         )
-    if "text-shaping-spike" in selected:
-        checks.append(
-            (
-                "typography-diagnostic-snapshot",
-                ROOT / "prototypes" / "text-shaping-spike",
-                [
-                    "cargo",
-                    "run",
-                    "--locked",
-                    "--quiet",
-                    "--features",
-                    "parley-candidate",
-                    "--bin",
-                    "parley-probe",
-                ],
-            )
+    checks.append(
+        (
+            "formal-workspace-tests",
+            ROOT,
+            ["cargo", "test", "--workspace", "--locked", "--all-targets"],
         )
-    if "export-backend-spike" in selected:
-        checks.append(
-            (
-                "visual-regression",
-                ROOT / "prototypes" / "export-backend-spike",
-                [
-                    "cargo",
-                    "run",
-                    "--locked",
-                    "--release",
-                    "--bin",
-                    "visual_regression",
-                ],
-            )
-        )
+    )
 
     for index, (name, cwd, argv) in enumerate(checks, start=1):
         relative_cwd = str(cwd.relative_to(ROOT)) if cwd != ROOT else "."

@@ -12,12 +12,12 @@ pub use layout::{
     TickLayout, layout, layout_with_measurer,
 };
 pub use model::{
-    Annotation, AnnotationPosition, AxisAppearance, AxisSpec, Chart, DashStyle, DataPoint,
-    ErrorBar, ErrorStyle, GridSpec, LegendPosition, LegendSpec, LineStyle, MarkerShape,
-    MarkerStyle, Series, TickDirection,
+    Annotation, AnnotationConnector, AnnotationPosition, AxisAppearance, AxisSpec, Chart,
+    DashStyle, DataPoint, ErrorBar, ErrorStyle, GridSpec, LegendErrorStyle, LegendGrid,
+    LegendPosition, LegendSpec, LineStyle, MarkerShape, MarkerStyle, Series, TickDirection,
 };
 pub use scale::{
     FormattedTicks, Formatter, Locator, Scale, collision_stride, format_ticks, format_ticks_with,
-    minor_ticks,
+    minor_ticks, minor_ticks_with_interval,
 };
 pub use text::{ParleyMeasurer, TextMeasurer, TextSize};

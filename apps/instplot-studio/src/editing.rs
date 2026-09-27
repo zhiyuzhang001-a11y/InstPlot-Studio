@@ -1,6 +1,6 @@
 use crate::{
-    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, ExportPreferences, FigureDocument,
-    LabelNode, MoveDirection, ProjectDocument, SeriesCreationStyle,
+    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, DocumentLayout, ExportPreferences,
+    FigureDocument, LabelNode, MoveDirection, ProjectDocument, SeriesCreationStyle,
 };
 
 const MAX_HISTORY: usize = 100;
@@ -21,6 +21,9 @@ pub enum EditGroup {
 
 pub enum EditCommand {
     SetAxisRanges(AxisRanges),
+    AddAnnotation {
+        nodes: Vec<LabelNode>,
+    },
     CreateSeries {
         data_source_id: String,
         x_column: String,
@@ -37,6 +40,10 @@ pub enum EditCommand {
         artist_id: String,
         visible: bool,
     },
+    SetSeriesStyle {
+        artist_id: String,
+        style: SeriesCreationStyle,
+    },
     MoveSeries {
         artist_id: String,
         direction: MoveDirection,
@@ -48,9 +55,17 @@ pub enum EditCommand {
         y_column: String,
         y_error_column: Option<String>,
     },
+    SetSeriesErrorColumns {
+        artist_id: String,
+        x_error_column: Option<String>,
+        y_error_column: Option<String>,
+    },
     DeleteDataSource {
         data_source_id: String,
         cascade: bool,
+    },
+    DeleteDataSources {
+        data_source_ids: Vec<String>,
     },
     SetAxisRecord {
         dimension: AxisDimension,
@@ -65,6 +80,22 @@ pub enum EditCommand {
         height_mm: f64,
     },
     SetArtistRecord(ArtistRecord),
+    SetAllMarkerDensity {
+        size_pt: f64,
+        interval: usize,
+    },
+    SetAllMarkerSizes {
+        size_pt: f64,
+    },
+    SetAllMarkerIntervals {
+        interval: usize,
+    },
+    SetAllMarkerFilled {
+        filled: bool,
+    },
+    SetPalette {
+        palette_id: String,
+    },
     SetSemanticLabel {
         label_id: String,
         nodes: Vec<LabelNode>,
@@ -76,18 +107,27 @@ impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
             Self::SetAxisRanges(_) => "Change axes ranges",
+            Self::AddAnnotation { .. } => "Add text annotation",
             Self::CreateSeries { .. } => "Create series",
             Self::DuplicateSeries { .. } => "Duplicate series",
             Self::DeleteSeries { .. } => "Delete series",
             Self::SetSeriesVisible { visible: true, .. } => "Show series",
             Self::SetSeriesVisible { visible: false, .. } => "Hide series",
+            Self::SetSeriesStyle { .. } => "Change plot type",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
+            Self::SetSeriesErrorColumns { .. } => "Change error columns",
             Self::DeleteDataSource { .. } => "Delete data source",
+            Self::DeleteDataSources { .. } => "Remove imported data",
             Self::SetAxisRecord { .. } => "Change axis settings",
             Self::SetAxisLabel { .. } => "Change axis label",
             Self::SetFigureSize { .. } => "Change figure size",
             Self::SetArtistRecord(_) => "Change artist properties",
+            Self::SetAllMarkerDensity { .. } => "Change all marker density",
+            Self::SetAllMarkerSizes { .. } => "Change all marker sizes",
+            Self::SetAllMarkerIntervals { .. } => "Change all marker intervals",
+            Self::SetAllMarkerFilled { .. } => "Change all marker fill styles",
+            Self::SetPalette { .. } => "Change colour scheme",
             Self::SetSemanticLabel { .. } => "Change semantic label",
             Self::SetExportPreferences(_) => "Change export settings",
         }
@@ -98,20 +138,25 @@ impl EditCommand {
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }
+            Self::AddAnnotation { nodes } => document.add_annotation(nodes).map(|_| ()),
             Self::CreateSeries {
                 data_source_id,
                 x_column,
                 y_column,
                 style,
-            } => document
-                .create_series(&data_source_id, &x_column, &y_column, style)
-                .map(|_| ()),
+            } => {
+                document.create_series(&data_source_id, &x_column, &y_column, style)?;
+                document.refresh_autoscale()
+            }
             Self::DuplicateSeries { artist_id } => {
                 document.duplicate_series(&artist_id).map(|_| ())
             }
             Self::DeleteSeries { artist_id } => document.delete_series(&artist_id),
             Self::SetSeriesVisible { artist_id, visible } => {
                 document.set_series_visible(&artist_id, visible)
+            }
+            Self::SetSeriesStyle { artist_id, style } => {
+                document.set_series_style(&artist_id, style)
             }
             Self::MoveSeries {
                 artist_id,
@@ -130,10 +175,22 @@ impl EditCommand {
                 &y_column,
                 y_error_column.as_deref(),
             ),
+            Self::SetSeriesErrorColumns {
+                artist_id,
+                x_error_column,
+                y_error_column,
+            } => document.set_series_error_columns(
+                &artist_id,
+                x_error_column.as_deref(),
+                y_error_column.as_deref(),
+            ),
             Self::DeleteDataSource {
                 data_source_id,
                 cascade,
             } => document.delete_data_source(&data_source_id, cascade),
+            Self::DeleteDataSources { data_source_ids } => {
+                document.delete_data_sources(&data_source_ids)
+            }
             Self::SetAxisRecord { dimension, record } => {
                 document.set_axis_record(dimension, record)
             }
@@ -143,6 +200,13 @@ impl EditCommand {
                 height_mm,
             } => document.set_figure_size_mm(width_mm, height_mm),
             Self::SetArtistRecord(record) => document.set_artist_record(record),
+            Self::SetAllMarkerDensity { size_pt, interval } => {
+                document.set_all_marker_density(size_pt, interval)
+            }
+            Self::SetAllMarkerSizes { size_pt } => document.set_all_marker_sizes(size_pt),
+            Self::SetAllMarkerIntervals { interval } => document.set_all_marker_intervals(interval),
+            Self::SetAllMarkerFilled { filled } => document.set_all_marker_filled(filled),
+            Self::SetPalette { palette_id } => document.set_palette(&palette_id),
             Self::SetSemanticLabel { label_id, nodes } => {
                 document.set_semantic_label_nodes(&label_id, nodes)
             }
@@ -151,10 +215,11 @@ impl EditCommand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct EditOutcome {
     pub changed: bool,
     pub description: String,
+    pub layout: DocumentLayout,
 }
 
 #[derive(Clone)]
@@ -169,6 +234,7 @@ struct HistoryEntry {
 /// Commands always operate on a clone and validate it before the current
 /// document is replaced. The saved snapshot is deliberately runtime-only:
 /// undo state is not part of the portable project schema.
+#[derive(Clone)]
 pub struct EditHistory {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
@@ -214,13 +280,14 @@ impl EditHistory {
             .project()
             .validate()
             .map_err(|error| error.to_string())?;
-        candidate
+        let layout = candidate
             .layout_figure()
             .map_err(|error| format!("edited document cannot be laid out: {error}"))?;
         if candidate.project() == document.project() {
             return Ok(EditOutcome {
                 changed: false,
                 description,
+                layout,
             });
         }
 
@@ -241,6 +308,7 @@ impl EditHistory {
         Ok(EditOutcome {
             changed: true,
             description,
+            layout,
         })
     }
 
@@ -298,6 +366,101 @@ impl EditHistory {
 mod tests {
     use super::*;
 
+    #[test]
+    fn applying_marker_density_to_all_is_one_undoable_edit() {
+        let mut document = FigureDocument::showcase();
+        let before = document.clone();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAllMarkerDensity {
+                    size_pt: 3.5,
+                    interval: 5,
+                },
+                None,
+            )
+            .unwrap();
+        assert_ne!(document, before);
+        history.undo(&mut document).unwrap();
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn hidden_legend_and_new_annotations_have_recoverable_edit_paths() {
+        let mut document = FigureDocument::showcase();
+        let legend_id = document
+            .series()
+            .into_iter()
+            .find(|series| series.kind == crate::SeriesKind::Legend)
+            .unwrap()
+            .id;
+        assert!(!document.artist_record(&legend_id).unwrap().visible);
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSeriesVisible {
+                    artist_id: legend_id.clone(),
+                    visible: true,
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record(&legend_id).unwrap().visible);
+        history
+            .execute(
+                &mut document,
+                EditCommand::AddAnnotation {
+                    nodes: vec![LabelNode::Text("Text".to_owned())],
+                },
+                None,
+            )
+            .unwrap();
+        let annotation = document.artist_record("annotation-1").unwrap();
+        let crate::ArtistProperties::Annotation { label_id, .. } = annotation.properties else {
+            panic!("new artist should be an annotation")
+        };
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSemanticLabel {
+                    label_id: label_id.clone(),
+                    nodes: vec![LabelNode::Text("New note".to_owned())],
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            document.semantic_label_nodes(&label_id),
+            Some([LabelNode::Text("New note".to_owned())].as_slice())
+        );
+        let encoded = serde_json::to_vec(document.project()).unwrap();
+        let decoded = serde_json::from_slice(&encoded).unwrap();
+        let reopened = FigureDocument::from_project(decoded).unwrap();
+        reopened.layout_figure().unwrap();
+        history.undo(&mut document).unwrap();
+        assert_eq!(
+            document.semantic_label_nodes(&label_id),
+            Some([LabelNode::Text("Text".to_owned())].as_slice())
+        );
+        history.undo(&mut document).unwrap();
+        assert!(document.artist_record("annotation-1").is_none());
+        history.redo(&mut document).unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::DeleteSeries {
+                    artist_id: "annotation-1".to_owned(),
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record("annotation-1").is_none());
+        assert!(document.semantic_label_nodes(&label_id).is_none());
+        document.project().validate().unwrap();
+    }
+
     fn ranges(x_max: f64) -> AxisRanges {
         AxisRanges {
             x_min: -3.0,
@@ -317,6 +480,10 @@ mod tests {
             .execute(&mut document, EditCommand::SetAxisRanges(ranges(4.0)), None)
             .unwrap();
         assert!(outcome.changed);
+        assert_eq!(
+            outcome.layout.result.snapshot(),
+            document.layout_figure().unwrap().result.snapshot()
+        );
         assert!(history.is_dirty(&document));
         assert_eq!(history.undo_description(), Some("Change axes ranges"));
 
@@ -566,5 +733,27 @@ mod tests {
                 .compile()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn palette_selection_is_one_atomic_undoable_edit() {
+        let mut document = FigureDocument::showcase();
+        let original = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetPalette {
+                    palette_id: "tol-burd-v1".to_owned(),
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(document.palette_id(), "tol-burd-v1");
+        assert!(history.is_dirty(&document));
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &original);
+        history.redo(&mut document).unwrap();
+        assert_eq!(document.palette_id(), "tol-burd-v1");
     }
 }

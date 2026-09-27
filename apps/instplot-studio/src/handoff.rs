@@ -196,7 +196,7 @@ pub fn import_handoff(path: &Path, cleanup: HandoffCleanup) -> Result<HandoffImp
     if envelope.schema_version != HANDOFF_SCHEMA_VERSION {
         return Err(HandoffError::UnsupportedSchema(envelope.schema_version));
     }
-    let actual = digest(&serde_json::to_vec(&envelope.payload)?);
+    let actual = digest(&compact_payload_bytes(&bytes)?);
     if actual != envelope.payload_sha256 {
         return Err(HandoffError::ChecksumMismatch);
     }
@@ -220,6 +220,77 @@ pub fn import_handoff(path: &Path, cleanup: HandoffCleanup) -> Result<HandoffImp
         source_path: path.to_path_buf(),
         source_removed,
     })
+}
+
+fn compact_payload_bytes(envelope: &[u8]) -> Result<Vec<u8>, HandoffError> {
+    let key = b"\"payload\"";
+    let key_at = envelope
+        .windows(key.len())
+        .position(|window| window == key)
+        .ok_or_else(|| HandoffError::Decode("handoff payload is missing".to_owned()))?;
+    let mut at = key_at + key.len();
+    while envelope.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    if envelope.get(at) != Some(&b':') {
+        return Err(HandoffError::Decode(
+            "handoff payload key has no value".to_owned(),
+        ));
+    }
+    at += 1;
+    while envelope.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    if !matches!(envelope.get(at), Some(b'{') | Some(b'[')) {
+        return Err(HandoffError::Decode(
+            "handoff payload must be a JSON object or array".to_owned(),
+        ));
+    }
+
+    let mut compact = Vec::new();
+    let mut depth = 0_usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in &envelope[at..] {
+        if in_string {
+            compact.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => {
+                in_string = true;
+                compact.push(byte);
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                compact.push(byte);
+            }
+            b'}' | b']' => {
+                if depth == 0 {
+                    return Err(HandoffError::Decode(
+                        "handoff payload delimiters are unbalanced".to_owned(),
+                    ));
+                }
+                depth -= 1;
+                compact.push(byte);
+                if depth == 0 {
+                    return Ok(compact);
+                }
+            }
+            byte if byte.is_ascii_whitespace() => {}
+            _ => compact.push(byte),
+        }
+    }
+    Err(HandoffError::Decode(
+        "handoff payload is incomplete".to_owned(),
+    ))
 }
 
 impl From<&DataSet> for HandoffDataset {
@@ -399,6 +470,20 @@ mod tests {
                 .all(|source| {
                     matches!(source.payload, crate::DataSourcePayload::Embedded { .. })
                 })
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checksum_round_trip_preserves_high_precision_measurements() {
+        let path = temp_path();
+        let mut expected = datasets();
+        expected[0].columns[0].values = vec![0.1, 2.1019019019019023, 4.103803803803804];
+        write_handoff(&path, &expected, "InstPlot Lite", "0.1.0").unwrap();
+        let imported = import_handoff(&path, HandoffCleanup::Keep).unwrap();
+        assert_eq!(
+            imported.datasets[0].columns[0].values,
+            expected[0].columns[0].values
         );
         fs::remove_file(path).unwrap();
     }

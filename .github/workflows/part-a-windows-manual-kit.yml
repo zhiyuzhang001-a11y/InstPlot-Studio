@@ -18,11 +18,11 @@ jobs:
       - name: Build executable and generate PDF
         shell: pwsh
         run: |
-          Push-Location prototypes/ui-shell-spike
+          Push-Location crates/instplot-ui
           cargo build --release --locked
           Pop-Location
 
-          Push-Location prototypes/export-backend-spike
+          Push-Location crates/instplot-export
           cargo run --release --locked --bin generate_fixture -- artifacts
           Pop-Location
 
@@ -31,12 +31,12 @@ jobs:
         run: |
           $package = Join-Path $PWD "target/part-a-windows-manual-kit"
           New-Item -ItemType Directory -Force -Path $package | Out-Null
-          Copy-Item "prototypes/ui-shell-spike/target/release/ui-shell-spike.exe" "$package/InstPlot-Studio-Part-A.exe"
-          Copy-Item "prototypes/export-backend-spike/artifacts/a4-fixture.pdf" "$package/InstPlot-Studio-Part-A.pdf"
+          Copy-Item "target/release/instplot-ui.exe" "$package/InstPlot-Studio-Part-A.exe"
+          Copy-Item "crates/instplot-export/artifacts/a4-fixture.pdf" "$package/InstPlot-Studio-Part-A.pdf"
           Copy-Item "reports/WINDOWS_PART_A_MANUAL_CHECKLIST.md" "$package/WINDOWS_PART_A_MANUAL_CHECKLIST.md"
-          Copy-Item "prototypes/text-shaping-spike/assets/fonts/GUST-FONT-LICENSE.txt" "$package/GUST-FONT-LICENSE.txt"
-          Copy-Item "prototypes/text-shaping-spike/assets/fonts/MANIFEST-TeX-Gyre-Heros.txt" "$package/MANIFEST-TeX-Gyre-Heros.txt"
-          Copy-Item "prototypes/text-shaping-spike/assets/fonts/README-TeX-Gyre-Heros.txt" "$package/README-TeX-Gyre-Heros.txt"
+          Copy-Item "crates/instplot-text/assets/fonts/GUST-FONT-LICENSE.txt" "$package/GUST-FONT-LICENSE.txt"
+          Copy-Item "crates/instplot-text/assets/fonts/MANIFEST-TeX-Gyre-Heros.txt" "$package/MANIFEST-TeX-Gyre-Heros.txt"
+          Copy-Item "crates/instplot-text/assets/fonts/README-TeX-Gyre-Heros.txt" "$package/README-TeX-Gyre-Heros.txt"
           git rev-parse HEAD | Set-Content -Encoding utf8NoBOM "$package/GIT_COMMIT.txt"
 
           $hashes = Get-ChildItem -File $package |

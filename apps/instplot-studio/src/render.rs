@@ -1,4 +1,4 @@
-use export_backend_spike::{ResolvedDisplayList, resolve};
+use instplot_export::{ResolvedDisplayList, resolve};
 
 use crate::{DocumentLayout, DocumentLayoutError, FigureDocument};
 
@@ -18,8 +18,8 @@ pub fn resolve_document(document: &FigureDocument) -> Result<ResolvedFigure, Doc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use export_backend_spike::ResolvedItem;
-    use studio_render_spike::{DisplayItem, NodeId};
+    use instplot_export::ResolvedItem;
+    use instplot_render::{DisplayItem, NodeId};
 
     #[test]
     fn one_resolution_contains_layout_identity_and_backend_items() {

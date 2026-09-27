@@ -2,28 +2,16 @@ name: InstPlot Studio
 
 on:
   push:
+    branches: [main]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "apps/**"
       - "crates/**"
-      - "prototypes/export-backend-spike/**"
-      - "prototypes/studio-render-spike/**"
-      - "prototypes/text-shaping-spike/**"
-      - "prototypes/ui-shell-spike/**"
-      - "scripts/validate_b1.py"
-      - "scripts/validate_b2.py"
-      - "scripts/validate_b3_1.py"
-      - "scripts/validate_b3_2.py"
-      - "scripts/validate_b3_3.py"
-      - "scripts/validate_b3_4.py"
-      - "scripts/validate_b3_5.py"
-      - "scripts/validate_b3_6.py"
-      - "scripts/validate_b4.py"
-      - "scripts/validate_b5_studio.py"
-      - "scripts/validate_b5p_p0.py"
-      - "adr/022-versioned-project-container.md"
+      - "prototypes/layout-engine-spike/**"
+      - "scripts/**"
+      - "adr/**"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   pull_request:
@@ -33,22 +21,9 @@ on:
       - "rust-toolchain.toml"
       - "apps/**"
       - "crates/**"
-      - "prototypes/export-backend-spike/**"
-      - "prototypes/studio-render-spike/**"
-      - "prototypes/text-shaping-spike/**"
-      - "prototypes/ui-shell-spike/**"
-      - "scripts/validate_b1.py"
-      - "scripts/validate_b2.py"
-      - "scripts/validate_b3_1.py"
-      - "scripts/validate_b3_2.py"
-      - "scripts/validate_b3_3.py"
-      - "scripts/validate_b3_4.py"
-      - "scripts/validate_b3_5.py"
-      - "scripts/validate_b3_6.py"
-      - "scripts/validate_b4.py"
-      - "scripts/validate_b5_studio.py"
-      - "scripts/validate_b5p_p0.py"
-      - "adr/022-versioned-project-container.md"
+      - "prototypes/layout-engine-spike/**"
+      - "scripts/**"
+      - "adr/**"
       - "LICENSE"
       - ".github/workflows/instplot-studio.yml"
   workflow_dispatch:
@@ -80,16 +55,30 @@ jobs:
         run: rustup show
 
       - name: Check formatting
-        run: cargo fmt --all --check
+        run: cargo fmt --all -- --check
 
-      - name: Run tests
-        run: cargo test --workspace --locked
+      - name: Check repository hygiene
+        run: python3 scripts/check_repository_hygiene.py
+
+      - name: Run all tests and examples
+        run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast
+
+      - name: Run documentation tests
+        run: cargo test --workspace --locked --doc
 
       - name: Run promoted A7 compatibility tests
         run: cargo test --manifest-path prototypes/layout-engine-spike/Cargo.toml --locked
 
       - name: Run Clippy
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+
+      - name: Prove the reusable shell with the second product
+        shell: bash
+        run: |
+          cargo run --locked --package instplot-demo -- \
+            apps/instplot-studio/tests/fixtures/smoke.csv \
+            field response "Field (mT)" "Signal (a.u.)" target/instplot-demo.svg
+          test -s target/instplot-demo.svg
 
       - name: Build release binary
         run: cargo build --release --locked --package instplot-studio

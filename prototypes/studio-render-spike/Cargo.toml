@@ -1,9 +1,0 @@
-[package]
-name = "studio-render-spike"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
-publish = false
-
-[dependencies]
-text-shaping-spike = { path = "../text-shaping-spike" }

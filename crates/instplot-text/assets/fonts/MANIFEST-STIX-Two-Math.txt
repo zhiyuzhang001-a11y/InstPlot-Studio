@@ -1,0 +1,9 @@
+STIX Two Math Regular, unmodified OpenType font.
+Source: TeX Live 2025, texmf-dist/fonts/opentype/public/stix2-otf/STIXTwoMath-Regular.otf
+Upstream: https://github.com/stipub/stixfonts
+PostScript name: STIXTwoMath-Regular
+Version: 2.12 b168 (OpenType name table)
+SHA-256: 95bc2729e41faf93b0bcae9e96c4dc4da45855067fd0581e621e30734fe8d90b
+License: SIL Open Font License 1.1; see OFL-STIX-Two.txt.
+Product use: only U+2264 LESS-THAN OR EQUAL TO and U+2265 GREATER-THAN OR EQUAL TO.
+The font is bundled unmodified so its upstream naming and OFL notices are preserved.

@@ -79,7 +79,7 @@ def main() -> int:
                 "cargo",
                 "test",
                 "--manifest-path",
-                "prototypes/ui-shell-spike/Cargo.toml",
+                "crates/instplot-ui/Cargo.toml",
                 "--locked",
                 "--all-features",
             ],
@@ -188,7 +188,13 @@ def main() -> int:
     semantic_source = (ROOT / "apps/instplot-studio/src/semantic.rs").read_text(
         encoding="utf-8"
     )
-    main_source = (ROOT / "apps/instplot-studio/src/main.rs").read_text(encoding="utf-8")
+    ui_source = (ROOT / "apps/instplot-studio/src/ui_text.rs").read_text(encoding="utf-8")
+    controller_source = (ROOT / "apps/instplot-studio/src/app_controller.rs").read_text(
+        encoding="utf-8"
+    )
+    startup_source = (ROOT / "apps/instplot-studio/src/startup.rs").read_text(
+        encoding="utf-8"
+    )
     checks.extend(
         [
             fact(
@@ -224,9 +230,10 @@ def main() -> int:
             ),
             fact(
                 "ui-and-headless-entry",
-                "Publication Check" in main_source
-                and "--publication-check" in main_source
-                and "check_publication(&self.document" in main_source,
+                "Publication Check" in ui_source
+                and "--publication-check" in startup_source
+                and "check_publication(" in controller_source
+                and "check_publication(" in startup_source,
                 "live inspector and structured headless report use the same rule engine",
             ),
         ]

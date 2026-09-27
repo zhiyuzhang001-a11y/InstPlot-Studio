@@ -1,22 +1,24 @@
 use std::borrow::Cow;
 
+use instplot_text::{Label, Span, SpanFlow, Style};
 use parley::fontique::{Blob, FontInfoOverride};
 use parley::{
     FontContext, FontFamily, FontStyle, FontWeight, LayoutContext, PositionedLayoutItem,
     StyleProperty,
 };
-use text_shaping_spike::{Label, Span, Style};
 
 const PRIMARY_FAMILY: &str = "InstPlot Studio TeX Gyre Heros";
+const RELATION_FAMILY: &str = "InstPlot Studio STIX Two Math";
+const RELATION_FONT: &[u8] =
+    include_bytes!("../../../crates/instplot-text/assets/fonts/STIXTwoMath-Regular.otf");
 const REGULAR: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Regular.otf");
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Regular.otf");
 const ITALIC: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Italic.otf");
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Italic.otf");
 const BOLD: &[u8] =
-    include_bytes!("../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-Bold.otf");
-const BOLD_ITALIC: &[u8] = include_bytes!(
-    "../../../prototypes/text-shaping-spike/assets/fonts/TeXGyreHeros-BoldItalic.otf"
-);
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-Bold.otf");
+const BOLD_ITALIC: &[u8] =
+    include_bytes!("../../../crates/instplot-text/assets/fonts/TeXGyreHeros-BoldItalic.otf");
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextSize {
@@ -53,6 +55,13 @@ impl Default for ParleyMeasurer {
                 .collection
                 .register_fonts(Blob::from(data.to_vec()), family_override);
         }
+        fonts.collection.register_fonts(
+            Blob::from(RELATION_FONT.to_vec()),
+            Some(FontInfoOverride {
+                family_name: Some(RELATION_FAMILY),
+                ..Default::default()
+            }),
+        );
         Self {
             fonts,
             layouts: LayoutContext::new(),
@@ -69,6 +78,7 @@ impl TextMeasurer for ParleyMeasurer {
                 scale: 1.0,
                 baseline_shift_em: 0.0,
                 is_unit_separator: false,
+                flow: SpanFlow::Inline,
             },
             size_pt,
         )
@@ -76,19 +86,40 @@ impl TextMeasurer for ParleyMeasurer {
 
     fn measure_label(&mut self, label: &Label, size_pt: f64) -> TextSize {
         let mut width = 0.0_f64;
+        let mut script_widths = std::collections::BTreeMap::<u32, (f64, f64)>::new();
         let mut top = f64::INFINITY;
         let mut bottom = f64::NEG_INFINITY;
         for span in label.spans() {
+            let measured = if span.is_unit_separator {
+                TextSize {
+                    width: size_pt * 0.2,
+                    height: 0.0,
+                    ascent: 0.0,
+                    descent: 0.0,
+                }
+            } else {
+                self.measure_span(&span, size_pt)
+            };
+            match span.flow {
+                SpanFlow::Inline => width += measured.width,
+                SpanFlow::Subscript(group) => {
+                    script_widths.entry(group).or_default().0 += measured.width;
+                }
+                SpanFlow::Superscript(group) => {
+                    script_widths.entry(group).or_default().1 += measured.width;
+                }
+            }
             if span.is_unit_separator {
-                width += size_pt * 0.2;
                 continue;
             }
-            let measured = self.measure_span(&span, size_pt);
             let shift = f64::from(span.baseline_shift_em) * size_pt;
-            width += measured.width;
             top = top.min(shift - measured.ascent);
             bottom = bottom.max(shift + measured.descent);
         }
+        width += script_widths
+            .values()
+            .map(|(subscript, superscript)| subscript.max(*superscript))
+            .sum::<f64>();
         if !top.is_finite() || !bottom.is_finite() {
             return TextSize {
                 width,
@@ -112,8 +143,13 @@ impl ParleyMeasurer {
         let mut builder = self
             .layouts
             .ranged_builder(&mut self.fonts, &span.text, 1.0, false);
+        let family = if matches!(span.text.as_str(), "≤" | "≥") {
+            "'InstPlot Studio STIX Two Math'"
+        } else {
+            "'InstPlot Studio TeX Gyre Heros'"
+        };
         builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed("'InstPlot Studio TeX Gyre Heros'"),
+            Cow::Borrowed(family),
         )));
         builder.push_default(StyleProperty::FontSize(font_size));
         match span.style {

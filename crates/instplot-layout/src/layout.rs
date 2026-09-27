@@ -1,21 +1,23 @@
 use core::fmt;
 
-use studio_render_spike::{
+use instplot_render::{
     Color, DisplayItem, DisplayList, Fill, FillRule, GlyphRun, LineCap, LineJoin, NodeId, Path,
     PathVerb, Pt, Stroke, TextAnchor,
 };
-use text_shaping_spike::Label;
+use instplot_text::Label;
 
 use crate::model::{
     Annotation, AnnotationPosition, Chart, DashStyle, DataPoint, LegendPosition, MarkerShape,
     MarkerStyle, Series, TickDirection,
 };
-use crate::scale::{Scale, collision_stride, minor_ticks};
+use crate::scale::{Scale, collision_stride, minor_ticks_with_interval};
 use crate::text::{ParleyMeasurer, TextMeasurer, TextSize};
 
 const TICK_FONT: f64 = 8.0;
 const LABEL_FONT: f64 = 9.0;
 const LEGEND_FONT: f64 = 8.0;
+const AXIS_STROKE_WIDTH_PT: f64 = 0.7;
+const FALLBACK_ERROR_BAR_WIDTH_PT: f64 = 0.7;
 const MAX_ITERATIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,6 +61,7 @@ pub enum SelectableRole {
     DataPoint,
     ErrorBar,
     Annotation,
+    AnnotationConnector,
     Legend,
 }
 
@@ -80,7 +83,12 @@ pub struct HitMap {
 
 impl HitMap {
     pub fn hit_test(&self, x: f64, y: f64, tolerance: f64) -> Option<&HitItem> {
-        self.items
+        self.hit_candidates(x, y, tolerance).into_iter().next()
+    }
+
+    pub fn hit_candidates(&self, x: f64, y: f64, tolerance: f64) -> Vec<&HitItem> {
+        let mut matches: Vec<_> = self
+            .items
             .iter()
             .filter(|item| {
                 let expanded = Bounds {
@@ -101,7 +109,9 @@ impl HitMap {
                 item.role != SelectableRole::Series
                     || distance_to_polyline(x, y, &item.path_proximity) <= tolerance
             })
-            .max_by_key(|item| item.z_order)
+            .collect();
+        matches.sort_by_key(|item: &&HitItem| std::cmp::Reverse(item.z_order));
+        matches
     }
 }
 
@@ -218,6 +228,9 @@ struct Margins {
     right: f64,
     top: f64,
     bottom: f64,
+    canvas_right: f64,
+    canvas_top: f64,
+    canvas_bottom: f64,
 }
 
 pub fn layout(chart: &Chart) -> Result<LayoutResult, LayoutError> {
@@ -235,7 +248,26 @@ pub fn layout_with_measurer(
         right: 14.0,
         top: 14.0,
         bottom: 34.0,
+        canvas_right: 0.0,
+        canvas_top: 0.0,
+        canvas_bottom: 0.0,
     };
+    // Freeze automatic placement for this layout pass. Reconsidering it after
+    // reserving space can alternate between an inside and an outside choice.
+    let auto_position = chart.legend.as_ref().and_then(|legend| {
+        if !matches!(legend.position, LegendPosition::Auto) {
+            return None;
+        }
+        let preliminary = choose_legend(chart, axes_from_margins(chart, margins), measurer, None);
+        Some(if preliminary.outside {
+            preliminary.position
+        } else {
+            LegendPosition::FigurePoints {
+                x: preliminary.bounds.x,
+                y: preliminary.bounds.y,
+            }
+        })
+    });
     let mut converged = false;
     let mut iterations = 0;
     for iteration in 1..=MAX_ITERATIONS {
@@ -243,7 +275,7 @@ pub fn layout_with_measurer(
         let axes = axes_from_margins(chart, margins);
         let x = axis_layout(chart, true, axes, measurer);
         let y = axis_layout(chart, false, axes, measurer);
-        let legend = choose_legend(chart, axes, measurer);
+        let legend = choose_legend(chart, axes, measurer, auto_position);
         let y_label = measurer.measure_label(&chart.y.label, LABEL_FONT);
         let x_label = measurer.measure_label(&chart.x.label, LABEL_FONT);
         let max_y_tick = y
@@ -283,9 +315,39 @@ pub fn layout_with_measurer(
                 } else {
                     0.0
                 },
+            canvas_right: 0.0,
+            canvas_top: 0.0,
+            canvas_bottom: 0.0,
         };
         if legend.outside {
-            next.right += legend.bounds.width + 10.0;
+            match legend.position {
+                LegendPosition::Above => {
+                    next.canvas_top = if chart
+                        .legend
+                        .as_ref()
+                        .is_some_and(|spec| spec.manual_position.is_some())
+                    {
+                        (legend.bounds.bottom() + 6.0 - next.top).max(0.0)
+                    } else {
+                        legend.bounds.height + 6.0
+                    };
+                    next.top += next.canvas_top;
+                    next.canvas_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
+                    next.right += next.canvas_right;
+                }
+                LegendPosition::Right => {
+                    next.canvas_right = (legend.bounds.right() + 3.0 - chart.width_pt).max(0.0);
+                    next.right += next.canvas_right;
+                    next.canvas_bottom = (legend.bounds.bottom() + 3.0 - chart.height_pt).max(0.0);
+                    next.bottom += next.canvas_bottom;
+                }
+                _ => {}
+            }
+        } else if legend.visible {
+            next.canvas_right = (legend.bounds.right() - chart.width_pt).max(0.0);
+            next.right += next.canvas_right;
+            next.canvas_bottom = (legend.bounds.bottom() - chart.height_pt).max(0.0);
+            next.bottom += next.canvas_bottom;
         }
         if margins_close(margins, next) {
             margins = next;
@@ -298,7 +360,7 @@ pub fn layout_with_measurer(
     let axes = axes_from_margins(chart, margins);
     let x_axis = axis_layout(chart, true, axes, measurer);
     let y_axis = axis_layout(chart, false, axes, measurer);
-    let legend_choice = choose_legend(chart, axes, measurer);
+    let legend_choice = choose_legend(chart, axes, measurer, auto_position);
     let mut warnings = Vec::new();
     if !converged {
         warnings.push(LayoutWarning::NonConvergent {
@@ -309,15 +371,18 @@ pub fn layout_with_measurer(
     if legend_choice.outside {
         warnings.push(LayoutWarning::LegendMovedOutside { node: chart.id });
     }
-    if chart.width_pt - margins.left - margins.right < 20.0
-        || chart.height_pt - margins.top - margins.bottom < 20.0
+    if chart.width_pt + margins.canvas_right - margins.left - margins.right < 20.0
+        || chart.height_pt + margins.canvas_top + margins.canvas_bottom
+            - margins.top
+            - margins.bottom
+            < 20.0
     {
         warnings.push(LayoutWarning::InsufficientPlotArea { node: chart.id });
     }
 
     let mut display_list = DisplayList {
-        width: pt(chart.width_pt),
-        height: pt(chart.height_pt),
+        width: pt(chart.width_pt + margins.canvas_right),
+        height: pt(chart.height_pt + margins.canvas_top + margins.canvas_bottom),
         items: Vec::new(),
     };
     let mut hit_map = HitMap::default();
@@ -336,15 +401,29 @@ pub fn layout_with_measurer(
         axes,
         &x_axis,
         &y_axis,
+        margins.canvas_bottom,
         measurer,
         &mut display_list,
         &mut hit_map,
         &mut warnings,
     );
     draw_series(chart, axes, &mut display_list, &mut hit_map)?;
-    draw_annotations(chart, axes, measurer, &mut display_list, &mut hit_map)?;
-    if let Some(bounds) = legend_choice.visible.then_some(legend_choice.bounds) {
-        draw_legend(chart, bounds, measurer, &mut display_list, &mut hit_map);
+    draw_annotations(
+        chart,
+        axes,
+        margins.canvas_top,
+        measurer,
+        &mut display_list,
+        &mut hit_map,
+    )?;
+    if legend_choice.visible {
+        draw_legend(
+            chart,
+            legend_choice,
+            measurer,
+            &mut display_list,
+            &mut hit_map,
+        );
     }
 
     Ok(LayoutResult {
@@ -417,15 +496,31 @@ fn validate(chart: &Chart) -> Result<(), LayoutError> {
             }
             AnnotationPosition::FigurePoints { x, y } => x.is_finite() && y.is_finite(),
         };
-        if !valid {
+        let connectors_valid = annotation.connectors.iter().all(|connector| {
+            connector.target.x.is_finite()
+                && connector.target.y.is_finite()
+                && (chart.x.scale != Scale::Log10 || connector.target.x > 0.0)
+                && (chart.y.scale != Scale::Log10 || connector.target.y > 0.0)
+                && connector.stroke.width.is_finite()
+                && connector.stroke.width > 0.0
+                && connector.arrow_size.is_finite()
+                && (2.0..=18.0).contains(&connector.arrow_size)
+        });
+        if !valid || annotation.labels.is_empty() || !connectors_valid {
             return Err(LayoutError::InvalidData(annotation.id));
         }
     }
-    if let Some(legend) = chart.legend
-        && let LegendPosition::FigurePoints { x, y } = legend.position
-        && (!x.is_finite() || !y.is_finite())
-    {
-        return Err(LayoutError::InvalidData(legend.id));
+    if let Some(legend) = chart.legend.as_ref() {
+        if let LegendPosition::FigurePoints { x, y } = legend.position
+            && (!x.is_finite() || !y.is_finite())
+        {
+            return Err(LayoutError::InvalidData(legend.id));
+        }
+        if let Some((x, y)) = legend.manual_position
+            && (!x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0)
+        {
+            return Err(LayoutError::InvalidData(legend.id));
+        }
     }
     Ok(())
 }
@@ -434,8 +529,11 @@ fn axes_from_margins(chart: &Chart, margins: Margins) -> Bounds {
     Bounds {
         x: margins.left,
         y: margins.top,
-        width: (chart.width_pt - margins.left - margins.right).max(20.0),
-        height: (chart.height_pt - margins.top - margins.bottom).max(20.0),
+        width: (chart.width_pt + margins.canvas_right - margins.left - margins.right).max(20.0),
+        height: (chart.height_pt + margins.canvas_top + margins.canvas_bottom
+            - margins.top
+            - margins.bottom)
+            .max(20.0),
     }
 }
 
@@ -444,6 +542,9 @@ fn margins_close(first: Margins, second: Margins) -> bool {
         && (first.right - second.right).abs() < 0.05
         && (first.top - second.top).abs() < 0.05
         && (first.bottom - second.bottom).abs() < 0.05
+        && (first.canvas_right - second.canvas_right).abs() < 0.05
+        && (first.canvas_top - second.canvas_top).abs() < 0.05
+        && (first.canvas_bottom - second.canvas_bottom).abs() < 0.05
 }
 
 fn axis_layout(
@@ -516,7 +617,13 @@ fn axis_layout(
         .collect();
     AxisLayout {
         major,
-        minor: minor_ticks(axis.scale, &values, axis.minimum, axis.maximum),
+        minor: minor_ticks_with_interval(
+            axis.scale,
+            &values,
+            axis.minimum,
+            axis.maximum,
+            axis.minor_interval,
+        ),
         shared_exponent: formatted.shared_exponent,
     }
 }
@@ -526,82 +633,187 @@ struct LegendChoice {
     bounds: Bounds,
     outside: bool,
     visible: bool,
+    position: LegendPosition,
+    columns: usize,
+    rows: usize,
+    column_major: bool,
 }
 
-fn choose_legend(chart: &Chart, axes: Bounds, measurer: &mut dyn TextMeasurer) -> LegendChoice {
-    let Some(legend) = chart.legend else {
-        return LegendChoice {
-            bounds: Bounds {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            },
-            outside: false,
-            visible: false,
-        };
-    };
-    let labels: Vec<&str> = chart
-        .series
-        .iter()
-        .filter(|series| !series.label.is_empty())
-        .map(|series| series.label.as_str())
-        .collect();
-    if labels.is_empty() {
-        return LegendChoice {
-            bounds: Bounds {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-            },
-            outside: false,
-            visible: false,
-        };
+fn legend_grid(
+    grid: crate::LegendGrid,
+    entries: usize,
+    automatic_columns: usize,
+) -> (usize, usize, bool) {
+    match grid {
+        crate::LegendGrid::Auto => {
+            let columns = automatic_columns.clamp(1, entries);
+            (columns, entries.div_ceil(columns), false)
+        }
+        crate::LegendGrid::Columns(requested) => {
+            let columns = requested.clamp(1, entries);
+            (columns, entries.div_ceil(columns), false)
+        }
+        crate::LegendGrid::Rows(requested) => {
+            let rows = requested.clamp(1, entries);
+            (entries.div_ceil(rows), rows, true)
+        }
     }
-    let width = labels
+}
+
+fn legend_series(chart: &Chart) -> Vec<&Series> {
+    let Some(legend) = chart.legend.as_ref() else {
+        return Vec::new();
+    };
+    if legend.entry_order.is_empty() {
+        return chart
+            .series
+            .iter()
+            .filter(|series| !series.label.is_empty())
+            .collect();
+    }
+    legend
+        .entry_order
         .iter()
-        .map(|label| measurer.measure(label, LEGEND_FONT).width)
+        .filter_map(|id| {
+            chart
+                .series
+                .iter()
+                .find(|series| series.id == *id && !series.label.is_empty())
+        })
+        .collect()
+}
+
+fn legend_column_widths(
+    entries: &[&Series],
+    columns: usize,
+    rows: usize,
+    column_major: bool,
+    measurer: &mut dyn TextMeasurer,
+) -> Vec<f64> {
+    let mut widths = vec![0.0_f64; columns.max(1)];
+    for (index, series) in entries.iter().enumerate() {
+        let column = if column_major {
+            index / rows.max(1)
+        } else {
+            index % columns.max(1)
+        };
+        if let Some(width) = widths.get_mut(column) {
+            let size = if let Some(label) = &series.legend_label {
+                measurer.measure_label(label, LEGEND_FONT)
+            } else {
+                measurer.measure(&series.label, LEGEND_FONT)
+            };
+            *width = (*width).max(size.width + 24.0);
+        }
+    }
+    widths
+}
+
+fn choose_legend(
+    chart: &Chart,
+    axes: Bounds,
+    measurer: &mut dyn TextMeasurer,
+    override_position: Option<LegendPosition>,
+) -> LegendChoice {
+    let Some(legend) = chart.legend.as_ref() else {
+        return empty_legend();
+    };
+    let entries = legend_series(chart);
+    if entries.is_empty() {
+        return empty_legend();
+    }
+    let cell_width = entries
+        .iter()
+        .map(|series| {
+            if let Some(label) = &series.legend_label {
+                measurer.measure_label(label, LEGEND_FONT).width
+            } else {
+                measurer.measure(&series.label, LEGEND_FONT).width
+            }
+        })
         .fold(0.0, f64::max)
-        + 31.0;
-    let height = labels.len() as f64 * 12.0 + 8.0;
-    if let LegendPosition::FigurePoints { x, y } = legend.position {
+        + 24.0;
+    let (inside_columns, inside_rows, inside_column_major) =
+        legend_grid(legend.grid, entries.len(), 1);
+    let inside_width = legend_column_widths(
+        &entries,
+        inside_columns,
+        inside_rows,
+        inside_column_major,
+        measurer,
+    )
+    .iter()
+    .sum();
+    let inside_height = inside_rows as f64 * 12.0 + 6.0;
+    let position = override_position.unwrap_or(legend.position);
+    if let LegendPosition::FigurePoints { x, y } = position {
         return LegendChoice {
             bounds: Bounds {
                 x,
                 y,
-                width,
-                height,
+                width: inside_width,
+                height: inside_height,
             },
             outside: false,
             visible: true,
+            position,
+            columns: inside_columns,
+            rows: inside_rows,
+            column_major: inside_column_major,
         };
+    }
+    let mut above = above_legend(chart, axes, &entries, cell_width, legend.grid, measurer);
+    let mut right = LegendChoice {
+        bounds: Bounds {
+            x: axes.right() + 6.0,
+            y: axes.y,
+            width: inside_width,
+            height: inside_height,
+        },
+        outside: true,
+        visible: true,
+        position: LegendPosition::Right,
+        columns: inside_columns,
+        rows: inside_rows,
+        column_major: inside_column_major,
+    };
+    if let Some((x, y)) = legend.manual_position {
+        above.bounds.x = x;
+        above.bounds.y = y;
+        right.bounds.x = x.max(axes.right() + 6.0);
+        right.bounds.y = y;
+    }
+    match position {
+        LegendPosition::Above => return above,
+        LegendPosition::Right => return right,
+        LegendPosition::Auto => {}
+        LegendPosition::FigurePoints { .. } => unreachable!(),
     }
     let inset = 6.0;
     let candidates = [
         Bounds {
-            x: axes.right() - width - inset,
+            x: axes.right() - inside_width - inset,
             y: axes.y + inset,
-            width,
-            height,
+            width: inside_width,
+            height: inside_height,
         },
         Bounds {
             x: axes.x + inset,
             y: axes.y + inset,
-            width,
-            height,
+            width: inside_width,
+            height: inside_height,
         },
         Bounds {
-            x: axes.right() - width - inset,
-            y: axes.bottom() - height - inset,
-            width,
-            height,
+            x: axes.right() - inside_width - inset,
+            y: axes.bottom() - inside_height - inset,
+            width: inside_width,
+            height: inside_height,
         },
         Bounds {
             x: axes.x + inset,
-            y: axes.bottom() - height - inset,
-            width,
-            height,
+            y: axes.bottom() - inside_height - inset,
+            width: inside_width,
+            height: inside_height,
         },
     ];
     let occupied = occupancy(chart, axes);
@@ -626,23 +838,74 @@ fn choose_legend(chart: &Chart, axes: Bounds, measurer: &mut dyn TextMeasurer) -
             best = (score, candidate);
         }
     }
-    if best.0 <= 20.0 {
+    if best.0 <= 20.0
+        && inside_width + 2.0 * inset <= axes.width
+        && inside_height + 2.0 * inset <= axes.height
+    {
         LegendChoice {
             bounds: best.1,
             outside: false,
             visible: true,
+            position: LegendPosition::Auto,
+            columns: inside_columns,
+            rows: inside_rows,
+            column_major: inside_column_major,
         }
+    } else if chart.width_pt * (above.bounds.height + 8.0)
+        <= chart.height_pt * (right.bounds.width + 10.0)
+    {
+        above
     } else {
-        LegendChoice {
-            bounds: Bounds {
-                x: axes.right() + 10.0,
-                y: axes.y,
-                width,
-                height,
-            },
-            outside: true,
-            visible: true,
-        }
+        right
+    }
+}
+
+fn empty_legend() -> LegendChoice {
+    LegendChoice {
+        bounds: Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        },
+        outside: false,
+        visible: false,
+        position: LegendPosition::Auto,
+        columns: 1,
+        rows: 1,
+        column_major: false,
+    }
+}
+
+fn above_legend(
+    chart: &Chart,
+    axes: Bounds,
+    entries: &[&Series],
+    cell_width: f64,
+    grid: crate::LegendGrid,
+    measurer: &mut dyn TextMeasurer,
+) -> LegendChoice {
+    let available_width = (chart.width_pt - axes.x - 12.0).max(1.0);
+    let entry_count = entries.len();
+    let automatic_columns = ((available_width / cell_width).floor() as usize).clamp(1, entry_count);
+    let (columns, rows, column_major) = legend_grid(grid, entry_count, automatic_columns);
+    let width = legend_column_widths(entries, columns, rows, column_major, measurer)
+        .iter()
+        .sum::<f64>();
+    let height = rows as f64 * 12.0 + 6.0;
+    LegendChoice {
+        bounds: Bounds {
+            x: axes.x + (available_width - width).max(0.0) / 2.0,
+            y: axes.y - height - 6.0,
+            width,
+            height,
+        },
+        outside: true,
+        visible: true,
+        position: LegendPosition::Above,
+        columns,
+        rows,
+        column_major,
     }
 }
 
@@ -718,9 +981,30 @@ fn occupancy(chart: &Chart, axes: Bounds) -> Vec<Bounds> {
                 });
             }
         }
+        if series.line.is_some() {
+            for segment in series.points.windows(2) {
+                let (Some(start), Some(end)) = (
+                    map_point(chart, axes, segment[0]),
+                    map_point(chart, axes, segment[1]),
+                ) else {
+                    continue;
+                };
+                let distance = (end.0 - start.0).hypot(end.1 - start.1);
+                let samples = (distance / 12.0).ceil().clamp(1.0, 8.0) as usize;
+                for step in 1..samples {
+                    let fraction = step as f64 / samples as f64;
+                    output.push(Bounds {
+                        x: start.0 + (end.0 - start.0) * fraction - 2.0,
+                        y: start.1 + (end.1 - start.1) * fraction - 2.0,
+                        width: 4.0,
+                        height: 4.0,
+                    });
+                }
+            }
+        }
     }
     for annotation in &chart.annotations {
-        if let Some((x, y)) = annotation_position(chart, axes, annotation) {
+        if let Some((x, y)) = annotation_position(chart, axes, annotation, 0.0) {
             output.push(Bounds {
                 x: x + annotation.offset_pt.0,
                 y: y + annotation.offset_pt.1 - 10.0,
@@ -738,13 +1022,18 @@ fn draw_axes(
     axes: Bounds,
     x_axis: &AxisLayout,
     y_axis: &AxisLayout,
+    canvas_bottom: f64,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
     hit_map: &mut HitMap,
     warnings: &mut Vec<LayoutWarning>,
 ) -> (Bounds, Bounds) {
     draw_grid(chart, axes, x_axis, y_axis, list);
-    let spine = stroke(Color(45, 50, 55, 255), 0.6, DashStyle::Solid);
+    let spine = stroke(
+        Color(45, 50, 55, 255),
+        AXIS_STROKE_WIDTH_PT,
+        DashStyle::Solid,
+    );
     if chart.x.appearance.near_spine {
         grid_line(
             list,
@@ -990,7 +1279,7 @@ fn draw_axes(
     let x_size = measurer.measure_label(&chart.x.label, LABEL_FONT);
     let x_bounds = Bounds {
         x: axes.x + (axes.width - x_size.width) / 2.0,
-        y: chart.height_pt - chart.x.appearance.label_edge_pad_pt - x_size.height,
+        y: list.height.get() - canvas_bottom - chart.x.appearance.label_edge_pad_pt - x_size.height,
         width: x_size.width,
         height: x_size.height,
     };
@@ -1025,8 +1314,8 @@ fn draw_axes(
     let figure = Bounds {
         x: 0.0,
         y: 0.0,
-        width: chart.width_pt,
-        height: chart.height_pt,
+        width: list.width.get(),
+        height: list.height.get(),
     };
     for (node, value, bounds) in [
         (chart.x.id, &chart.x.label, x_bounds),
@@ -1228,13 +1517,19 @@ fn draw_series(
                 draw_error_bar(chart, axes, series, index, *point, *error, list, hit_map, z)?;
                 z += 1;
             }
-            if let Some(marker) = series.marker {
+            if let Some(marker) = series.marker
+                && index % marker.interval.max(1) == 0
+            {
                 let path = marker_path(*x, *y, marker);
                 list.items.push(DisplayItem::Path {
                     source: series.id,
                     path,
                     fill: marker_fill(marker, series.color),
-                    stroke: Some(stroke(series.color, 0.8, DashStyle::Solid)),
+                    stroke: Some(stroke(
+                        series.color,
+                        marker_outline_width(marker),
+                        DashStyle::Solid,
+                    )),
                 });
                 let radius = marker.size / 2.0 + 2.0;
                 hit_map.items.push(HitItem {
@@ -1315,7 +1610,7 @@ fn draw_error_bar(
         return Err(LayoutError::InvalidData(series.id));
     };
     let style = series.error_style.unwrap_or(crate::model::ErrorStyle {
-        width: 0.65,
+        width: FALLBACK_ERROR_BAR_WIDTH_PT,
         cap_width: 4.0,
         dash: DashStyle::Solid,
     });
@@ -1362,69 +1657,149 @@ fn draw_error_bar(
 fn draw_annotations(
     chart: &Chart,
     axes: Bounds,
+    canvas_top: f64,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
     hit_map: &mut HitMap,
 ) -> Result<(), LayoutError> {
     for (index, annotation) in chart.annotations.iter().enumerate() {
-        let Some((x, y)) = annotation_position(chart, axes, annotation) else {
+        let Some((x, y)) = annotation_position(chart, axes, annotation, canvas_top) else {
             return Err(LayoutError::InvalidData(annotation.id));
         };
         let x = x + annotation.offset_pt.0;
         let y = y + annotation.offset_pt.1;
-        let size = measurer.measure_label(&annotation.label, TICK_FONT);
-        label_text(
-            list,
-            annotation.id,
-            &annotation.label,
-            (x, y),
-            TICK_FONT,
-            TextAnchor::Start,
-            0.0,
-        );
+        let sizes = annotation
+            .labels
+            .iter()
+            .map(|label| measurer.measure_label(label, TICK_FONT))
+            .collect::<Vec<_>>();
+        let line_height = TICK_FONT * 1.25;
+        let width = sizes.iter().map(|size| size.width).fold(0.0, f64::max);
+        let first_ascent = sizes.first().map_or(0.0, |size| size.ascent);
+        let last_descent = sizes.last().map_or(0.0, |size| size.descent);
+        let top = y - first_ascent;
+        let bottom = y + line_height * (sizes.len().saturating_sub(1)) as f64 + last_descent;
+        for (connector_index, connector) in annotation.connectors.iter().enumerate() {
+            let Some(target) = map_point(chart, axes, connector.target) else {
+                return Err(LayoutError::InvalidData(annotation.id));
+            };
+            let start = (target.0.clamp(x, x + width), target.1.clamp(top, bottom));
+            let mut verbs = vec![
+                PathVerb::MoveTo(pt(start.0), pt(start.1)),
+                PathVerb::LineTo(pt(target.0), pt(target.1)),
+            ];
+            if connector.start_arrow {
+                append_arrow_head(&mut verbs, start, target, connector.arrow_size);
+            }
+            if connector.end_arrow {
+                append_arrow_head(&mut verbs, target, start, connector.arrow_size);
+            }
+            list.items.push(DisplayItem::Path {
+                source: annotation.id,
+                path: Path { verbs },
+                fill: None,
+                stroke: Some(stroke(
+                    connector.color,
+                    connector.stroke.width,
+                    connector.stroke.dash,
+                )),
+            });
+            hit_map.items.push(HitItem {
+                node: annotation.id,
+                bounds: Bounds {
+                    x: target.0 - 4.0,
+                    y: target.1 - 4.0,
+                    width: 8.0,
+                    height: 8.0,
+                },
+                z_order: 650 + index as u32,
+                role: SelectableRole::AnnotationConnector,
+                data_index: Some(connector_index),
+                tooltip: Some(format!("connector {}", connector_index + 1)),
+                path_proximity: vec![target],
+            });
+        }
+        for (line, label) in annotation.labels.iter().enumerate() {
+            label_text(
+                list,
+                annotation.id,
+                label,
+                (x, y + line as f64 * line_height),
+                TICK_FONT,
+                TextAnchor::Start,
+                0.0,
+            );
+        }
         hit_map.items.push(HitItem {
             node: annotation.id,
             bounds: Bounds {
                 x,
-                y: y - size.height,
-                width: size.width,
-                height: size.height,
+                y: top,
+                width,
+                height: (bottom - top).max(TICK_FONT),
             },
             z_order: 500 + index as u32,
             role: SelectableRole::Annotation,
             data_index: None,
-            tooltip: Some(annotation.label.normalized_text()),
+            tooltip: Some(
+                annotation
+                    .labels
+                    .iter()
+                    .map(Label::normalized_text)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
             path_proximity: vec![(x, y)],
         });
     }
     Ok(())
 }
 
+fn append_arrow_head(verbs: &mut Vec<PathVerb>, tip: (f64, f64), away: (f64, f64), size: f64) {
+    let dx = away.0 - tip.0;
+    let dy = away.1 - tip.1;
+    let length = dx.hypot(dy);
+    if length <= f64::EPSILON {
+        return;
+    }
+    let ux = dx / length;
+    let uy = dy / length;
+    let wing = size * 0.45;
+    let base = (tip.0 + ux * size, tip.1 + uy * size);
+    let perpendicular = (-uy * wing, ux * wing);
+    verbs.extend([
+        PathVerb::MoveTo(pt(base.0 + perpendicular.0), pt(base.1 + perpendicular.1)),
+        PathVerb::LineTo(pt(tip.0), pt(tip.1)),
+        PathVerb::LineTo(pt(base.0 - perpendicular.0), pt(base.1 - perpendicular.1)),
+    ]);
+}
+
 fn draw_legend(
     chart: &Chart,
-    bounds: Bounds,
+    choice: LegendChoice,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
     hit_map: &mut HitMap,
 ) {
-    let legend_id = chart.legend.map_or(chart.id, |legend| legend.id);
-    list.items.push(DisplayItem::Path {
-        source: legend_id,
-        path: rectangle(bounds),
-        fill: Some(Fill {
-            color: Color(255, 255, 255, 230),
-            rule: FillRule::NonZero,
-        }),
-        stroke: Some(stroke(Color(80, 85, 90, 255), 0.6, DashStyle::Solid)),
-    });
-    let entries: Vec<&Series> = chart
-        .series
-        .iter()
-        .filter(|series| !series.label.is_empty())
-        .collect();
+    let bounds = choice.bounds;
+    let legend_id = chart.legend.as_ref().map_or(chart.id, |legend| legend.id);
+    let entries = legend_series(chart);
+    let column_widths = legend_column_widths(
+        &entries,
+        choice.columns,
+        choice.rows,
+        choice.column_major,
+        measurer,
+    );
     for (index, series) in entries.iter().enumerate() {
-        let y = bounds.y + 10.0 + index as f64 * 12.0;
-        let key_start = bounds.x + 6.0;
+        let (column, row) = if choice.column_major {
+            (index / choice.rows, index % choice.rows)
+        } else {
+            (index % choice.columns, index / choice.columns)
+        };
+        let y = bounds.y + 8.0 + row as f64 * 12.0;
+        let column_offset = column_widths.iter().take(column).sum::<f64>();
+        let key_start = bounds.x + column_offset + 3.0;
         let key_end = key_start + 14.0;
         if let Some(line) = series.line {
             list.items.push(DisplayItem::Path {
@@ -1439,24 +1814,66 @@ fn draw_legend(
                 stroke: Some(stroke(series.color, line.width, line.dash)),
             });
         }
-        if let Some(marker) = series.marker {
+        if let Some(marker) = series.legend_marker.or(series.marker) {
             list.items.push(DisplayItem::Path {
                 source: series.id,
                 path: marker_path((key_start + key_end) / 2.0, y, marker),
                 fill: marker_fill(marker, series.color),
-                stroke: Some(stroke(series.color, 0.8, DashStyle::Solid)),
+                stroke: Some(stroke(
+                    series.color,
+                    marker_outline_width(marker),
+                    DashStyle::Solid,
+                )),
             });
         }
-        let _ = measurer.measure(&series.label, LEGEND_FONT);
-        text(
-            list,
-            series.id,
-            &series.label,
-            (key_end + 5.0, y + 2.5),
-            LEGEND_FONT,
-            TextAnchor::Start,
-            0.0,
-        );
+        if let Some(error) = series.legend_error {
+            let center = (key_start + key_end) / 2.0;
+            let marker_height = series
+                .legend_marker
+                .or(series.marker)
+                .map_or(4.0, |marker| marker.size);
+            let height = (marker_height + 4.0).clamp(9.0, 10.5);
+            let half_height = height / 2.0;
+            let half_cap = error.style.cap_width.clamp(3.0, 10.0) / 2.0;
+            list.items.push(DisplayItem::Path {
+                source: series.id,
+                path: Path {
+                    verbs: vec![
+                        PathVerb::MoveTo(pt(center), pt(y - half_height)),
+                        PathVerb::LineTo(pt(center), pt(y + half_height)),
+                        PathVerb::MoveTo(pt(center - half_cap), pt(y - half_height)),
+                        PathVerb::LineTo(pt(center + half_cap), pt(y - half_height)),
+                        PathVerb::MoveTo(pt(center - half_cap), pt(y + half_height)),
+                        PathVerb::LineTo(pt(center + half_cap), pt(y + half_height)),
+                    ],
+                },
+                fill: None,
+                stroke: Some(stroke(error.color, error.style.width, error.style.dash)),
+            });
+        }
+        if let Some(label) = &series.legend_label {
+            let _ = measurer.measure_label(label, LEGEND_FONT);
+            label_text(
+                list,
+                series.id,
+                label,
+                (key_end + 4.0, y + 2.5),
+                LEGEND_FONT,
+                TextAnchor::Start,
+                0.0,
+            );
+        } else {
+            let _ = measurer.measure(&series.label, LEGEND_FONT);
+            text(
+                list,
+                series.id,
+                &series.label,
+                (key_end + 4.0, y + 2.5),
+                LEGEND_FONT,
+                TextAnchor::Start,
+                0.0,
+            );
+        }
     }
     hit_map.items.push(HitItem {
         node: legend_id,
@@ -1469,10 +1886,17 @@ fn draw_legend(
     });
 }
 
-fn annotation_position(chart: &Chart, axes: Bounds, annotation: &Annotation) -> Option<(f64, f64)> {
+fn annotation_position(
+    chart: &Chart,
+    axes: Bounds,
+    annotation: &Annotation,
+    canvas_top: f64,
+) -> Option<(f64, f64)> {
     match annotation.position {
         AnnotationPosition::Data(point) => map_point(chart, axes, point),
-        AnnotationPosition::FigurePoints { x, y } if x.is_finite() && y.is_finite() => Some((x, y)),
+        AnnotationPosition::FigurePoints { x, y } if x.is_finite() && y.is_finite() => {
+            Some((x, y + canvas_top))
+        }
         AnnotationPosition::FigurePoints { .. } => None,
     }
 }
@@ -1510,7 +1934,11 @@ fn tick_mark(list: &mut DisplayList, node: NodeId, x: f64, y: f64, dx: f64, dy: 
             ],
         },
         fill: None,
-        stroke: Some(stroke(Color(45, 50, 55, 255), 0.6, DashStyle::Solid)),
+        stroke: Some(stroke(
+            Color(45, 50, 55, 255),
+            AXIS_STROKE_WIDTH_PT,
+            DashStyle::Solid,
+        )),
     });
 }
 
@@ -1662,6 +2090,8 @@ fn marker_path(x: f64, y: f64, style: MarkerStyle) -> Path {
             (x, y + radius),
             (x - radius, y),
         ]),
+        MarkerShape::Pentagon => radial_marker_polygon(x, y, radius, 5, None),
+        MarkerShape::Star => radial_marker_polygon(x, y, radius, 5, Some(0.46)),
         MarkerShape::Plus => Path {
             verbs: vec![
                 PathVerb::MoveTo(pt(x - radius), pt(y)),
@@ -1681,6 +2111,32 @@ fn marker_path(x: f64, y: f64, style: MarkerStyle) -> Path {
     }
 }
 
+fn radial_marker_polygon(
+    x: f64,
+    y: f64,
+    radius: f64,
+    points: usize,
+    inner_ratio: Option<f64>,
+) -> Path {
+    let vertices = points * if inner_ratio.is_some() { 2 } else { 1 };
+    let positions = (0..vertices)
+        .map(|index| {
+            let angle = -std::f64::consts::FRAC_PI_2
+                + 2.0 * std::f64::consts::PI * index as f64 / vertices as f64;
+            let current_radius = if index % 2 == 1 {
+                inner_ratio.map_or(radius, |ratio| radius * ratio)
+            } else {
+                radius
+            };
+            (
+                x + current_radius * angle.cos(),
+                y + current_radius * angle.sin(),
+            )
+        })
+        .collect::<Vec<_>>();
+    polygon(&positions)
+}
+
 fn marker_fill(style: MarkerStyle, color: Color) -> Option<Fill> {
     (style.filled && !matches!(style.shape, MarkerShape::Plus | MarkerShape::Cross)).then_some(
         Fill {
@@ -1688,6 +2144,10 @@ fn marker_fill(style: MarkerStyle, color: Color) -> Option<Fill> {
             rule: FillRule::NonZero,
         },
     )
+}
+
+fn marker_outline_width(style: MarkerStyle) -> f64 {
+    if style.filled { 0.8 } else { 1.0 }
 }
 
 fn polygon(points: &[(f64, f64)]) -> Path {
@@ -1712,6 +2172,9 @@ fn stroke(color: Color, width: f64, dash: DashStyle) -> Stroke {
         DashStyle::Dashed => vec![4.0, 2.4],
         DashStyle::Dotted => vec![0.8, 1.8],
         DashStyle::DashDot => vec![4.0, 2.0, 0.8, 2.0],
+        DashStyle::LongDash => vec![8.0, 3.0],
+        DashStyle::LongShortDash => vec![8.0, 2.0, 2.0, 2.0],
+        DashStyle::DashDotDot => vec![6.0, 2.0, 0.8, 2.0, 0.8, 2.0],
     };
     Stroke {
         color,

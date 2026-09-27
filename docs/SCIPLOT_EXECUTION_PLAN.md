@@ -1,7 +1,7 @@
 # InstPlot Studio 执行计划
 
 > 文档性质：技术验证与正式开发执行计划
-> 状态：Part A DONE；Part B ACTIVE（B0–B4、B5 Studio side、B5P DONE；B5Q canvas-first UI ACTIVE；Lite integration deferred）
+> 状态：Part A DONE；Part B ACTIVE（B0–B4、B5 Studio side、B5P DONE；B5Q canvas-first UI 基线完成；B5R workflow refinement DONE on macOS；Lite integration deferred）
 > 制定日期：2026-09-20
 > 适用范围：InstPlot Studio 启动验证、共享核心抽取、V1 开发与发布
 > 前置文档：`SCIPLOT_PRODUCT_BOUNDARY.md`、`SCIPLOT_TECHNICAL_RESEARCH.md`、`INSTPLOT_STUDIO_TYPOGRAPHY_SPEC.md`
@@ -12,10 +12,10 @@
 
 计划分为两个连续部分：
 
-1. **Part A：启动前技术验证**  
+1. **Part A：启动前技术验证**
    通过独立原型消除物理布局、字体、PDF、raster 和跨平台一致性的关键风险；SVG 仅保留为可选研究。
 
-2. **Part B：正式产品开发**  
+2. **Part B：正式产品开发**
    在技术路线通过验证后，抽取 Lite 共享核心并建立独立的 InstPlot Studio。
 
 Part A 未通过最终启动门槛前，不开始完整 Studio UI，不大规模重构 Lite，也不承诺正式项目文件格式。
@@ -131,7 +131,11 @@ B5a Studio 交接协议与接收端（DONE）
  ↓
 B5P Studio 产品细节完善（DONE）
  ↓
-B5Q Studio 画布优先交互简化（ACTIVE）
+B5Q Studio 画布优先交互简化（基线完成，剩余收尾转入 B5R）
+  ↓
+B5R Studio 多文件工作流与界面收尾（DONE on macOS；Windows 实机复核延期）
+ ↓
+B5S Studio 手动数据/error bar 与 marker 自适应（DONE on macOS）
  ↓
 B5b Lite producer/launcher 最终联调
  ↓
@@ -1538,11 +1542,13 @@ Next dependency:
 
 ## 25. 当前第一个可执行任务
 
-Part A、Gate A 与 B5P 已按当前范围完成。当前工作是：
+Part A、Gate A 与 B5P 已按当前范围完成，B5Q 已建立画布优先交互基线。当前工作是：
 
-> **B5Q — 把 Studio 重组为画布优先、点击对象即可编辑的简洁界面。**
+> **B5R — 完成 Studio 多文件工作流、界面一致性与安装应用人工验收。**
 
 具体范围和验收条件见
+[`INSTPLOT_STUDIO_WORKFLOW_REFINEMENT_SHORT_PLAN.md`](INSTPLOT_STUDIO_WORKFLOW_REFINEMENT_SHORT_PLAN.md)；
+画布优先基线见
 [`INSTPLOT_STUDIO_CANVAS_FIRST_SHORT_PLAN.md`](INSTPLOT_STUDIO_CANVAS_FIRST_SHORT_PLAN.md)；已关闭的
 B5P 证据见 [`INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md`](INSTPLOT_STUDIO_PRODUCT_POLISH_SHORT_PLAN.md)，
 其与 Part B 的关系见
