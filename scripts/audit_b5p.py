@@ -185,7 +185,7 @@ def main() -> int:
         projects = sorted(artifact_root.glob("*.instplot"))
         project_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in projects]
         complete = all(
-            payload.get("schema_version") == 6
+            payload.get("schema_version") == 7
             and payload.get("figure", {}).get("axes", [{}])[0]
             .get("x", {})
             .get("appearance", {})
@@ -204,7 +204,7 @@ def main() -> int:
             fact(
                 "document-contract",
                 len(project_payloads) == 5 and complete,
-                f"projects={len(project_payloads)} schema=6 axis/export/legend fields={complete}",
+                f"projects={len(project_payloads)} schema=7 axis/export/legend fields={complete}",
             )
         )
     except (OSError, json.JSONDecodeError, IndexError, TypeError) as error:
