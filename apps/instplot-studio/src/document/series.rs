@@ -63,16 +63,21 @@ impl FigureDocument {
         let group_ids = candidate.figure.axes[0].series_groups[group_index]
             .artist_ids
             .clone();
-        let contributes_visible_data = candidate.figure.artists.iter().any(|artist| {
+        let contributed_visible_data = candidate.figure.artists.iter().any(|artist| {
             group_ids.contains(&artist.id)
                 && candidate.artist_effectively_visible(artist)
                 && artist_binding(artist).is_some()
         });
         candidate.figure.axes[0].series_groups[group_index].axes = axes;
+        let contributes_visible_data = candidate.figure.artists.iter().any(|artist| {
+            group_ids.contains(&artist.id)
+                && candidate.artist_effectively_visible(artist)
+                && artist_binding(artist).is_some()
+        });
         if let Some(binding) = data_binding {
             suggest_empty_secondary_axis_label(&mut candidate, axes, &binding);
         }
-        if contributes_visible_data {
+        if contributed_visible_data || contributes_visible_data {
             restore_autoscale_for_axes(
                 &mut candidate,
                 axis_identities_for_binding(previous_axes)

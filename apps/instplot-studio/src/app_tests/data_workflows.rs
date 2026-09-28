@@ -1004,6 +1004,100 @@ fn manual_multiple_xy_groups_create_distinct_series_and_automatic_errors() {
 }
 
 #[test]
+fn manual_multiple_series_share_axis_exponents_and_dual_axes_scale_independently() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    app.manual_data.input = ManualDataInput {
+        groups: [
+            ("small-a", "0.001 0.002", "0.001 0.002"),
+            ("small-b", "0.003 0.004", "0.003 0.004"),
+            ("large-a", "10000 20000", "10000 20000"),
+            ("large-b", "30000 40000", "30000 40000"),
+        ]
+        .into_iter()
+        .map(|(id, x, y)| ManualDataGroupInput {
+            group_id: id.to_owned(),
+            source_name: id.to_owned(),
+            x: ManualAxisInput {
+                name: format!("x-{id}"),
+                measurements: vec![x.to_owned()],
+            },
+            y: ManualAxisInput {
+                name: format!("y-{id}"),
+                measurements: vec![y.to_owned()],
+            },
+            error_statistic: ErrorStatistic::StandardDeviation,
+            plot_style: ManualPlotStyle::LineAndMarker,
+        })
+        .collect(),
+    };
+
+    app.insert_manual_data().unwrap();
+
+    let layout = app.document.layout_figure().unwrap();
+    assert_eq!(layout.result.x_axis.shared_exponent, Some(4));
+    assert_eq!(layout.result.y_axis.shared_exponent, Some(4));
+
+    let series_by_source = app
+        .document
+        .logical_series()
+        .into_iter()
+        .map(|series| {
+            let source = series.binding.as_ref().unwrap().data_source_id.clone();
+            (source, series.id)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(series_by_source.len(), 4);
+
+    app.document.set_axis_mode(AxisMode::DualY).unwrap();
+    for source in ["large-a", "large-b"] {
+        app.document
+            .set_series_axis_binding(
+                &series_by_source[source],
+                AxisBinding {
+                    x: XAxisSlot::X1,
+                    y: YAxisSlot::Y2,
+                },
+            )
+            .unwrap();
+    }
+    let layout = app.document.layout_figure().unwrap();
+    assert_eq!(layout.result.x_axis.shared_exponent, Some(4));
+    assert_eq!(layout.result.y_axis.shared_exponent, Some(-3));
+    assert_eq!(
+        layout.result.y2_axis.as_ref().unwrap().shared_exponent,
+        Some(4)
+    );
+
+    app.document.set_axis_mode(AxisMode::DualX).unwrap();
+    for source in ["small-a", "small-b"] {
+        app.document
+            .set_series_axis_binding(&series_by_source[source], AxisBinding::PRIMARY)
+            .unwrap();
+    }
+    for source in ["large-a", "large-b"] {
+        app.document
+            .set_series_axis_binding(
+                &series_by_source[source],
+                AxisBinding {
+                    x: XAxisSlot::X2,
+                    y: YAxisSlot::Y1,
+                },
+            )
+            .unwrap();
+    }
+    let layout = app.document.layout_figure().unwrap();
+    let snapshot = layout.result.snapshot();
+    assert_eq!(layout.result.x_axis.shared_exponent, Some(-3), "{snapshot}");
+    assert_eq!(
+        layout.result.x2_axis.as_ref().unwrap().shared_exponent,
+        Some(4),
+        "{snapshot}"
+    );
+    assert_eq!(layout.result.y_axis.shared_exponent, Some(4), "{snapshot}");
+}
+
+#[test]
 fn imported_and_manual_series_share_the_same_dual_axis_binding_path() {
     let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
     let mut app = StudioApp::new(&creation, Instant::now(), None);
