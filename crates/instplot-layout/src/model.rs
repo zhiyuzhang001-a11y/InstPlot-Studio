@@ -32,10 +32,20 @@ pub struct AxisSpec {
     pub locator: Locator,
     pub minor_interval: Option<f64>,
     pub formatter: Formatter,
+    pub display_scale: AxisDisplayScale,
     pub grid: GridSpec,
     pub appearance: AxisAppearance,
     /// False keeps the owned edge/spine available without drawing fabricated ticks.
     pub has_data: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AxisDisplayScale {
+    #[default]
+    AutoFactor,
+    None,
+    ManualFactor(i32),
+    ManualIncorporated(i32),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +65,8 @@ pub enum TickDirection {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxisAppearance {
+    pub label_visible: bool,
+    pub tick_labels_visible: bool,
     pub spine_color: Color,
     pub near_spine: bool,
     pub far_spine: bool,
@@ -73,6 +85,8 @@ pub struct AxisAppearance {
 impl Default for AxisAppearance {
     fn default() -> Self {
         Self {
+            label_visible: true,
+            tick_labels_visible: true,
             spine_color: Color(0, 0, 0, 255),
             near_spine: true,
             far_spine: true,

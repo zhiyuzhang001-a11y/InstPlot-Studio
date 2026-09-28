@@ -47,12 +47,16 @@ pub fn to_pdf(list: &ResolvedDisplayList) -> Result<Vec<u8>, ExportError> {
     let mut surface = page.surface();
     let mut fonts: HashMap<(String, u32), Font> = HashMap::new();
 
+    let (translate_x, translate_y) = list.geometry.export_translation;
+    surface.push_transform(&Transform::from_translate(translate_x, translate_y));
+
     for item in &list.items {
         match item {
             ResolvedItem::Graphics(item) => draw_graphics(item, &list.resources, &mut surface)?,
             ResolvedItem::Text(text) => draw_text(text, &mut surface, &mut fonts)?,
         }
     }
+    surface.pop();
 
     surface.finish();
     page.finish();

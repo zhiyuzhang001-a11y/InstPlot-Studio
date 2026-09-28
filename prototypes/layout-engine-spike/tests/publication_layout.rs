@@ -1,10 +1,10 @@
 use instplot_export::{FontOrigin, resolve};
 use layout_engine_spike::{
-    AnnotationPosition, ArrowHead, AxisPair, Bounds, DashStyle, DataPoint, Formatter, HitItem,
-    HitMap, LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape,
-    MarkerStyle, MeasurementArrow, MeasurementConstraint, ReferenceLine, ReferenceOrientation,
-    Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout, layout_with_measurer,
-    marker_gallery_fixture, publication_fixture,
+    AnnotationConnector, AnnotationPosition, ArrowHead, AxisPair, Bounds, DashStyle, DataPoint,
+    Formatter, HitItem, HitMap, LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator,
+    MarkerShape, MarkerStyle, MeasurementArrow, MeasurementConstraint, ReferenceLine,
+    ReferenceOrientation, Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout,
+    layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
 
 use instplot_render::{Color, DisplayItem, NodeId, PathVerb};
@@ -1076,6 +1076,181 @@ fn scientific_guides_have_distinct_layers_and_hit_roles() {
         .unwrap();
     assert!(reference_item < first_data_item);
     assert!(measurement_item > first_data_item);
+}
+
+#[test]
+fn filled_arrow_shafts_end_at_head_bases_and_tips_stay_on_endpoints() {
+    let mut chart = publication_fixture();
+    chart.measurement_arrows.push(MeasurementArrow {
+        id: NodeId(710),
+        start: DataPoint { x: -1.0, y: 1.0 },
+        end: DataPoint { x: 1.0, y: 1.0 },
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 4.0,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: true,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 8.0,
+        constraint: MeasurementConstraint::Horizontal,
+        labels: Vec::new(),
+        label_offset_pt: (0.0, 0.0),
+    });
+    chart.annotations[0].connectors.push(AnnotationConnector {
+        target: DataPoint { x: 2.0, y: -1.0 },
+        stroke: LineStyle {
+            width: 4.0,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: false,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 8.0,
+        axes: AxisPair::X1Y1,
+    });
+
+    let placed = layout(&chart).unwrap();
+    let endpoint = |role| {
+        placed
+            .hit_map
+            .items
+            .iter()
+            .find(|item| item.node == NodeId(710) && item.role == role)
+            .unwrap()
+            .path_proximity[0]
+    };
+    let start = endpoint(SelectableRole::MeasurementArrowStart);
+    let end = endpoint(SelectableRole::MeasurementArrowEnd);
+    let arrow_paths = placed
+        .display_list
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Path {
+                source,
+                path,
+                fill,
+                stroke,
+            } if *source == NodeId(710) => Some((path, fill, stroke)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let (shaft, _, _) = arrow_paths
+        .iter()
+        .copied()
+        .find(|(_, _, stroke)| stroke.is_some())
+        .unwrap();
+    let [PathVerb::MoveTo(shaft_start_x, shaft_start_y), PathVerb::LineTo(shaft_end_x, shaft_end_y)] =
+        shaft.verbs.as_slice()
+    else {
+        panic!("filled arrow shaft should contain exactly one trimmed segment")
+    };
+    assert!((shaft_start_x.get() - start.0 - 8.0).abs() < 0.01);
+    assert!((shaft_start_y.get() - start.1).abs() < 0.01);
+    assert!((shaft_end_x.get() - end.0 + 8.0).abs() < 0.01);
+    assert!((shaft_end_y.get() - end.1).abs() < 0.01);
+    let tips = arrow_paths
+        .iter()
+        .filter(|(_, fill, _)| fill.is_some())
+        .filter_map(|(path, _, _)| match path.verbs.first() {
+            Some(PathVerb::MoveTo(x, y)) => Some((x.get(), y.get())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(tips.iter().any(|tip| {
+        (tip.0 - start.0).abs() < 0.01 && (tip.1 - start.1).abs() < 0.01
+    }));
+    assert!(tips
+        .iter()
+        .any(|tip| (tip.0 - end.0).abs() < 0.01 && (tip.1 - end.1).abs() < 0.01));
+    let arrow_bounds = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == NodeId(710) && item.role == SelectableRole::MeasurementArrow
+        })
+        .unwrap()
+        .bounds;
+    for (path, fill, _) in &arrow_paths {
+        if fill.is_none() {
+            continue;
+        }
+        for verb in &path.verbs {
+            if let PathVerb::MoveTo(x, y) | PathVerb::LineTo(x, y) = verb {
+                assert!((arrow_bounds.x..=arrow_bounds.x + arrow_bounds.width).contains(&x.get()));
+                assert!((arrow_bounds.y..=arrow_bounds.y + arrow_bounds.height).contains(&y.get()));
+            }
+        }
+    }
+
+    let connector_paths = placed
+        .display_list
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Path {
+                source,
+                path,
+                fill,
+                stroke,
+            } if *source == chart.annotations[0].id => Some((path, fill, stroke)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let connector_shaft = connector_paths
+        .iter()
+        .find(|(_, _, stroke)| stroke.is_some())
+        .map(|(path, _, _)| *path)
+        .unwrap();
+    let connector_tip = connector_paths
+        .iter()
+        .find(|(_, fill, _)| fill.is_some())
+        .and_then(|(path, _, _)| path.verbs.first())
+        .and_then(|verb| match verb {
+            PathVerb::MoveTo(x, y) => Some((x.get(), y.get())),
+            _ => None,
+        })
+        .unwrap();
+    let PathVerb::LineTo(connector_shaft_x, connector_shaft_y) = connector_shaft.verbs[1] else {
+        unreachable!()
+    };
+    assert!(
+        (connector_shaft_x.get() - connector_tip.0).hypot(connector_shaft_y.get() - connector_tip.1)
+            > 7.9
+    );
+    let connector_bounds = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == chart.annotations[0].id
+                && item.role == SelectableRole::AnnotationConnector
+                && item.data_index == Some(0)
+        })
+        .unwrap()
+        .bounds;
+    for (path, fill, _) in &connector_paths {
+        if fill.is_none() {
+            continue;
+        }
+        for verb in &path.verbs {
+            if let PathVerb::MoveTo(x, y) | PathVerb::LineTo(x, y) = verb {
+                assert!(
+                    (connector_bounds.x..=connector_bounds.x + connector_bounds.width)
+                        .contains(&x.get())
+                );
+                assert!(
+                    (connector_bounds.y..=connector_bounds.y + connector_bounds.height)
+                        .contains(&y.get())
+                );
+            }
+        }
+    }
 }
 
 #[test]

@@ -1,28 +1,35 @@
 use instplot_export::checked_raster_dimensions;
 use instplot_studio::{
-    FigureDocument, figure_pdf, figure_png_with_background, resolve_document, resolved_figure_pdf,
-    resolved_figure_png_with_background, resolved_figure_svg,
+    FigureDocument, figure_pdf, figure_png_with_background, figure_svg, resolve_document,
+    resolve_document_for_export, resolved_figure_pdf, resolved_figure_png_with_background,
+    resolved_figure_svg,
 };
 
 #[test]
-fn preview_pdf_png_and_svg_share_one_resolved_scene_geometry() {
+fn preview_keeps_its_canvas_while_exports_share_tight_geometry() {
     let document = FigureDocument::fixed();
-    let resolved = resolve_document(&document).unwrap();
+    let preview = resolve_document(&document).unwrap();
+    let export = resolve_document_for_export(&document).unwrap();
 
-    let pdf = resolved_figure_pdf(&resolved).unwrap();
-    let png = resolved_figure_png_with_background(&resolved, 300, true).unwrap();
-    let svg = String::from_utf8(resolved_figure_svg(&resolved)).unwrap();
+    assert_eq!(preview.display.geometry.export_translation, (0.0, 0.0));
+    assert!(export.display.width <= preview.display.width);
+    assert!(export.display.height <= preview.display.height);
+
+    let pdf = resolved_figure_pdf(&export).unwrap();
+    let png = resolved_figure_png_with_background(&export, 300, true).unwrap();
+    let svg_bytes = resolved_figure_svg(&export);
+    let svg = String::from_utf8(svg_bytes.clone()).unwrap();
 
     assert!(pdf.starts_with(b"%PDF-"));
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     assert!(svg.contains(&format!(
         "viewBox=\"0 0 {:.5} {:.5}\"",
-        resolved.display.width, resolved.display.height
+        export.display.width, export.display.height
     )));
 
     let expected = checked_raster_dimensions(
-        resolved.display.width.into(),
-        resolved.display.height.into(),
+        export.display.width.into(),
+        export.display.height.into(),
         300,
     )
     .unwrap();
@@ -40,4 +47,5 @@ fn preview_pdf_png_and_svg_share_one_resolved_scene_geometry() {
         png,
         figure_png_with_background(&document, 300, true).unwrap()
     );
+    assert_eq!(svg_bytes, figure_svg(&document).unwrap());
 }

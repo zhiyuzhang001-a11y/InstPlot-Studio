@@ -1,5 +1,39 @@
 use super::*;
 
+pub(super) fn affected_axes_for_sources(
+    document: &FigureDocument,
+    source_ids: &BTreeSet<String>,
+) -> Vec<AxisIdentity> {
+    let mut identities = Vec::new();
+    for series in document.logical_series().into_iter().filter(|series| {
+        series.effective_visible
+            && series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| source_ids.contains(&binding.data_source_id))
+    }) {
+        let Some(binding) = series.axes else {
+            continue;
+        };
+        let pair = [
+            match binding.x {
+                XAxisSlot::X1 => AxisIdentity::X1,
+                XAxisSlot::X2 => AxisIdentity::X2,
+            },
+            match binding.y {
+                YAxisSlot::Y1 => AxisIdentity::Y1,
+                YAxisSlot::Y2 => AxisIdentity::Y2,
+            },
+        ];
+        for identity in pair {
+            if !identities.contains(&identity) {
+                identities.push(identity);
+            }
+        }
+    }
+    identities
+}
+
 pub(super) fn preferred_dataset_columns(
     dataset: &DataSet,
     preferred: Option<(&str, &str)>,
@@ -47,11 +81,8 @@ pub(super) fn document_with_imported_datasets(
         if USER_PALETTE_IDS.contains(&current.palette_id()) {
             document.set_palette(current.palette_id())?;
         }
-        for dimension in [AxisDimension::X, AxisDimension::Y] {
-            let mut axis = document.axis_record(dimension);
-            axis.autoscale = true;
-            document.set_axis_record(dimension, axis)?;
-        }
+        let affected = affected_axes_for_sources(&document, imported_ids);
+        document.restore_autoscale_after_data_change(&affected)?;
         return Ok(document);
     }
     // Clearing every imported source leaves the figure/axes in place so its visual
@@ -67,9 +98,10 @@ pub(super) fn document_with_imported_datasets(
             )
             && series.binding.is_some()
     });
+    let mut affected_axes = affected_axes_for_sources(current, imported_ids);
     let mut document = current.clone();
     document
-        .sync_datasets(datasets)
+        .sync_datasets_without_autoscale(datasets)
         .map_err(|error| error.to_string())?;
     let mut replacement_axis_labels = None;
     for dataset in datasets
@@ -101,16 +133,11 @@ pub(super) fn document_with_imported_datasets(
         document.set_axis_label(AxisDimension::X, vec![LabelNode::Text(x)])?;
         document.set_axis_label(AxisDimension::Y, vec![LabelNode::Text(y)])?;
     }
-    if reset_axis_labels {
-        // Deleting the final source leaves a valid empty 0..1 canvas with
-        // autoscale disabled. The next imported dataset is a new data context,
-        // so both axes must resume autoscaling after its series exist.
-        for dimension in [AxisDimension::X, AxisDimension::Y] {
-            let mut axis = document.axis_record(dimension);
-            axis.autoscale = true;
-            document.set_axis_record(dimension, axis)?;
+    for identity in affected_axes_for_sources(&document, imported_ids) {
+        if !affected_axes.contains(&identity) {
+            affected_axes.push(identity);
         }
     }
-    document.refresh_autoscale()?;
+    document.restore_autoscale_after_data_change(&affected_axes)?;
     Ok(document)
 }

@@ -2,17 +2,17 @@
 
 use std::io::Cursor;
 
-use instplot_export::{Background, encode_png, rasterize_direct, rasterize_via_svg, resolve};
+use instplot_export::{
+    Background, checked_raster_dimensions, encode_png, rasterize_direct, rasterize_via_svg, resolve,
+};
 use instplot_render::{compile, fixed_figure};
 
 #[test]
 fn raster_dimensions_background_alpha_and_png_metadata_are_correct() {
     let resolved = resolve(&compile(&fixed_figure()).unwrap());
-    for (dpi, expected) in [
-        (300, (1051, 768)),
-        (600, (2102, 1535)),
-        (1200, (4205, 3071)),
-    ] {
+    for dpi in [300, 600, 1200] {
+        let expected =
+            checked_raster_dimensions(resolved.width.into(), resolved.height.into(), dpi).unwrap();
         let transparent = rasterize_via_svg(&resolved, dpi, Background::Transparent).unwrap();
         assert_eq!((transparent.width, transparent.height), expected);
         assert!(

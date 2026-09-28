@@ -95,7 +95,7 @@ pub(super) fn active_data_coordinates_from_local(
 
 pub(super) fn axis_value_at_fraction(axis: &AxisRecord, fraction: f64) -> Option<f64> {
     match axis.scale {
-        AxisScale::Linear => Some(axis.minimum + fraction * (axis.maximum - axis.minimum)),
+        AxisScale::Linear => instplot_layout::linear_value(fraction, axis.minimum, axis.maximum),
         AxisScale::Log10 if axis.minimum > 0.0 && axis.maximum > 0.0 => {
             Some(10.0_f64.powf(
                 axis.minimum.log10() + fraction * (axis.maximum.log10() - axis.minimum.log10()),
@@ -129,7 +129,7 @@ fn axis_fraction_at_value(axis: &AxisRecord, value: f64) -> Option<f64> {
         return None;
     }
     match axis.scale {
-        AxisScale::Linear => Some((value - axis.minimum) / (axis.maximum - axis.minimum)),
+        AxisScale::Linear => instplot_layout::linear_fraction(value, axis.minimum, axis.maximum),
         AxisScale::Log10 if value > 0.0 && axis.minimum > 0.0 && axis.maximum > 0.0 => Some(
             (value.log10() - axis.minimum.log10()) / (axis.maximum.log10() - axis.minimum.log10()),
         ),

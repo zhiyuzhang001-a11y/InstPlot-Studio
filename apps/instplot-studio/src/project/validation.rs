@@ -40,9 +40,7 @@ pub(super) fn validate_axis(
             if axis.scale != AxisScale::Linear
                 || !step.is_finite()
                 || *step <= 0.0
-                || (axis.maximum - axis.minimum) / step > 100.0
-                || (axis.minimum / step).abs() > i64::MAX as f64 / 4.0
-                || (axis.maximum / step).abs() > i64::MAX as f64 / 4.0 =>
+                || instplot_layout::tick_count_exceeds(axis.minimum, axis.maximum, *step, 100) =>
         {
             return Err(ProjectError::Validation(format!(
                 "axis {} interval locator requires a positive finite linear step with at most 100 ticks",
@@ -68,9 +66,7 @@ pub(super) fn validate_axis(
         && (axis.scale != AxisScale::Linear
             || !step.is_finite()
             || step <= 0.0
-            || (axis.maximum - axis.minimum) / step > 500.0
-            || (axis.minimum / step).abs() > i64::MAX as f64 / 4.0
-            || (axis.maximum / step).abs() > i64::MAX as f64 / 4.0)
+            || instplot_layout::tick_count_exceeds(axis.minimum, axis.maximum, step, 500))
     {
         return Err(ProjectError::Validation(format!(
             "axis {} minor interval requires a positive finite linear step with at most 500 ticks",
@@ -87,6 +83,23 @@ pub(super) fn validate_axis(
             )));
         }
         _ => {}
+    }
+    if let Some(exponent) = axis.display_scale.exponent() {
+        let factor = instplot_layout::checked_pow10(exponent).ok_or_else(|| {
+            ProjectError::Validation(format!(
+                "axis {} has an unrepresentable display-scale exponent",
+                axis.id
+            ))
+        })?;
+        if ![axis.minimum / factor, axis.maximum / factor]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return Err(ProjectError::Validation(format!(
+                "axis {} display scale produces non-finite tick values",
+                axis.id
+            )));
+        }
     }
     if [
         axis.appearance.tick_label_pad_pt,

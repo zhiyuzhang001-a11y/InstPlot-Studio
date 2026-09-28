@@ -20,15 +20,16 @@ use instplot_text::Label;
 
 use crate::project::fingerprint;
 use crate::{
-    ArrowHead, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding, AxisIdentity,
-    AxisMode, AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT,
-    DataBinding, DataSourceKind, DataSourceOrigin, DataSourcePayload, DataSourceRecord,
-    EmbeddedColumn, FitIdentity, FormatterSpec, LabelNode, LegendEntry, LegendGrid,
-    LegendPlacement, LocatorSpec, ManagedDataFile, ManagedDataFormat, ManualDataRecipe,
-    MarkerShape, MarkerStyle, MeasurementConstraint, OpenProjectReport, PaletteColor,
-    PaletteRegistry, ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation,
-    SemanticLabel, SeriesGroupRecord, StrokeStyle, XAxisSlot, YAxisSlot, builtin_palette_registry,
-    open_project, palette_series_color_ids, save_project,
+    ArrowHead, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxisBinding,
+    AxisDisplayScaleRecord, AxisIdentity, AxisMode, AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT,
+    DEFAULT_ERROR_BAR_WIDTH_PT, DEFAULT_REFERENCE_DASH_PT, DataBinding, DataSourceKind,
+    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, FitIdentity,
+    FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
+    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, MarkerShape, MarkerStyle,
+    MeasurementConstraint, OpenProjectReport, PaletteColor, PaletteRegistry, ProjectDocument,
+    ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel, SeriesGroupRecord,
+    StrokeStyle, XAxisSlot, YAxisSlot, builtin_palette_registry, open_project,
+    palette_series_color_ids, save_project,
 };
 
 /// The editable runtime view of the formal, versioned B2 Figure Document.
@@ -541,7 +542,10 @@ pub use autoscale::{
     AutoscalePolicy, DataBounds, VisualBounds, apply_visual_padding, compute_axis_data_bounds,
     compute_data_bounds,
 };
-use autoscale::{apply_autoscale_for_axis, refresh_active_autoscales};
+use autoscale::{
+    apply_autoscale_for_axis, axis_identities_for_binding, refresh_active_autoscales,
+    restore_autoscale_for_axes,
+};
 
 fn reset_empty_axes(project: &mut ProjectDocument) {
     let axes = &mut project.figure.axes[0];
@@ -1839,6 +1843,16 @@ fn axis_spec(
             precision: usize::from(precision),
         },
     };
+    let display_scale = match axis.display_scale {
+        AxisDisplayScaleRecord::AutoFactor => instplot_layout::AxisDisplayScale::AutoFactor,
+        AxisDisplayScaleRecord::None => instplot_layout::AxisDisplayScale::None,
+        AxisDisplayScaleRecord::ManualFactor { exponent } => {
+            instplot_layout::AxisDisplayScale::ManualFactor(exponent.get())
+        }
+        AxisDisplayScaleRecord::ManualIncorporated { exponent } => {
+            instplot_layout::AxisDisplayScale::ManualIncorporated(exponent.get())
+        }
+    };
     // Preserve legacy project data but render the product's inward-only rule.
     let tick_direction = LayoutTickDirection::In;
     Ok(AxisSpec {
@@ -1850,6 +1864,7 @@ fn axis_spec(
         locator,
         minor_interval: axis.minor_interval,
         formatter,
+        display_scale,
         // Legacy projects may still carry grid flags. Keep them readable, but
         // the canvas-first product does not draw a grid.
         grid: GridSpec {
@@ -1857,15 +1872,17 @@ fn axis_spec(
             minor: false,
         },
         appearance: LayoutAxisAppearance {
+            label_visible: axis.appearance.visibility.label,
+            tick_labels_visible: axis.appearance.visibility.tick_labels,
             spine_color: palette_color(&axis.appearance.spine_color_id, palette)?,
-            near_spine: axis.appearance.near_spine,
-            far_spine: axis.appearance.far_spine,
-            near_ticks: axis.appearance.near_ticks,
-            far_ticks: axis.appearance.far_ticks,
+            near_spine: axis.appearance.visibility.spine && axis.appearance.near_spine,
+            far_spine: axis.appearance.visibility.spine && axis.appearance.far_spine,
+            near_ticks: axis.appearance.visibility.ticks && axis.appearance.near_ticks,
+            far_ticks: axis.appearance.visibility.ticks && axis.appearance.far_ticks,
             near_tick_labels: axis.appearance.near_tick_labels,
             far_tick_labels: axis.appearance.far_tick_labels,
-            major_ticks: axis.appearance.major_ticks,
-            minor_ticks: axis.appearance.minor_ticks,
+            major_ticks: axis.appearance.visibility.ticks && axis.appearance.major_ticks,
+            minor_ticks: axis.appearance.visibility.ticks && axis.appearance.minor_ticks,
             tick_direction,
             tick_label_pad_pt: axis.appearance.tick_label_pad_pt,
             label_edge_pad_pt: axis.appearance.label_edge_pad_pt,
@@ -1909,6 +1926,7 @@ fn label_node(node: &LabelNode) -> Label {
         LabelNode::Operator(value) => Label::Operator(value.clone()),
         LabelNode::Emphasis(value) => Label::Emphasis(value.clone()),
         LabelNode::BoldVariable(value) => Label::BoldVariable(value.clone()),
+        LabelNode::ScaleFactorSlot => Label::Text("\u{e000}instplot-scale\u{e001}".to_owned()),
     }
 }
 

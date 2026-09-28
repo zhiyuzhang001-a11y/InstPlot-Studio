@@ -80,6 +80,26 @@ impl FigureDocument {
             .filter(|artist| source_ids.iter().any(|id| artist_uses_source(artist, id)))
             .map(|artist| artist.id.clone())
             .collect::<Vec<_>>();
+        let mut affected_axes = Vec::new();
+        for group in &self.project.figure.axes[0].series_groups {
+            let removes_visible_member = group.artist_ids.iter().any(|id| {
+                artist_ids.contains(id)
+                    && self
+                        .project
+                        .figure
+                        .artists
+                        .iter()
+                        .find(|artist| artist.id == *id)
+                        .is_some_and(|artist| self.project.artist_effectively_visible(artist))
+            });
+            if removes_visible_member {
+                for identity in axis_identities_for_binding(group.axes) {
+                    if !affected_axes.contains(&identity) {
+                        affected_axes.push(identity);
+                    }
+                }
+            }
+        }
         self.project
             .data_sources
             .retain(|source| !source_ids.contains(&source.id));
@@ -100,7 +120,7 @@ impl FigureDocument {
         if self.project.data_sources.is_empty() {
             reset_empty_axes(&mut self.project);
         } else {
-            refresh_active_autoscales(&mut self.project)?;
+            restore_autoscale_for_axes(&mut self.project, affected_axes)?;
         }
         self.project.validate().map_err(|error| error.to_string())?;
         Ok(())
@@ -173,7 +193,17 @@ impl FigureDocument {
         &self.project
     }
 
-    pub fn from_project(project: ProjectDocument) -> Result<Self, ProjectError> {
+    pub fn from_project(mut project: ProjectDocument) -> Result<Self, ProjectError> {
+        let normalized = super::series::normalize_series_colors(&mut project)
+            .map_err(ProjectError::Validation)?;
+        if !normalized.is_empty() {
+            project.provenance.push(ProvenanceRecord {
+                id: next_stable_id(&project, "series-color-normalization"),
+                operation: "normalize-logical-series-color".to_owned(),
+                input_ids: normalized,
+                parameters: BTreeMap::new(),
+            });
+        }
         project.validate()?;
         Ok(Self { project })
     }

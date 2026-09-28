@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use instplot_export::ResolvedItem;
-use instplot_layout::SelectableRole;
+use instplot_layout::{LayoutWarning, SelectableRole};
 use instplot_render::DisplayItem;
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,35 @@ pub fn check_publication(
         transparency(project),
         provenance(project),
     ];
+    for warning in &resolved.layout.result.warnings {
+        let (rule_id, message) = match warning {
+            LayoutWarning::DuplicateTickLabels { .. } => (
+                "duplicate_tick_labels",
+                "manual decimal precision produces duplicate tick labels",
+            ),
+            LayoutWarning::LongTickLabel { .. } => (
+                "long_tick_label",
+                "an axis tick label exceeds 24 visible characters",
+            ),
+            LayoutWarning::ScaledTicksWithoutVisibleFactor { .. } => (
+                "scaled_ticks_without_visible_factor",
+                "scaled tick labels are visible while their axis label is hidden",
+            ),
+            _ => continue,
+        };
+        let node = match warning {
+            LayoutWarning::DuplicateTickLabels { node }
+            | LayoutWarning::LongTickLabel { node }
+            | LayoutWarning::ScaledTicksWithoutVisibleFactor { node } => *node,
+            _ => unreachable!(),
+        };
+        findings.push(finding(
+            rule_id,
+            CheckSeverity::Warning,
+            project_id(resolved, node),
+            message,
+        ));
+    }
     for finding in &mut findings {
         apply_override(project, finding);
     }
@@ -160,6 +189,18 @@ fn finding_guidance(rule_id: &str) -> (&'static str, &'static str) {
             "Incomplete provenance makes styling and data relationships harder to audit.",
             "Keep palette, font, data, and explicit style records in the Figure Document.",
         ),
+        "duplicate_tick_labels" => (
+            "Repeated tick text can make distinct values appear identical.",
+            "Increase decimal precision or use automatic formatting.",
+        ),
+        "long_tick_label" => (
+            "Long tick text can crowd or enlarge the publication figure.",
+            "Use an axis display factor or shorten the manual format.",
+        ),
+        "scaled_ticks_without_visible_factor" => (
+            "Readers cannot recover the magnitude of scaled tick labels.",
+            "Show the axis label or disable the axis display factor.",
+        ),
         _ => (
             "This check affects publication reliability.",
             "Inspect the reported object and adjust its applicable Inspector settings.",
@@ -168,8 +209,7 @@ fn finding_guidance(rule_id: &str) -> (&'static str, &'static str) {
 }
 
 fn physical_size(project: &ProjectDocument) -> PublicationFinding {
-    let width = project.figure.width_mm;
-    let height = project.figure.height_mm;
+    let (width, height) = (project.figure.width_mm, project.figure.height_mm);
     let severity = if width < 30.0 || height < 30.0 || width > 250.0 || height > 250.0 {
         CheckSeverity::Warning
     } else {
@@ -1232,6 +1272,39 @@ mod tests {
         }));
         assert!(incomplete_report.findings.iter().any(|finding| {
             finding.rule_id == "provenance_completeness" && finding.severity == CheckSeverity::Error
+        }));
+    }
+
+    #[test]
+    fn axis_tick_format_warnings_are_reported_without_blocking_export() {
+        let mut document = FigureDocument::fixed();
+        let mut axis = document.axis_record(crate::AxisDimension::X);
+        axis.autoscale = false;
+        axis.minimum = 0.0;
+        axis.maximum = 1.0;
+        axis.locator = crate::LocatorSpec::Interval { step: 0.2 };
+        axis.formatter = crate::FormatterSpec::Decimal { precision: 0 };
+        document
+            .set_axis_record(crate::AxisDimension::X, axis)
+            .unwrap();
+        let duplicate = report(&document, 300);
+        assert!(duplicate.findings.iter().any(|finding| {
+            finding.rule_id == "duplicate_tick_labels" && finding.severity == CheckSeverity::Warning
+        }));
+
+        let mut axis = document.axis_record(crate::AxisDimension::X);
+        axis.minimum = 10_000.0;
+        axis.maximum = 50_000.0;
+        axis.locator = crate::LocatorSpec::Auto { target_count: 6 };
+        axis.formatter = crate::FormatterSpec::Auto;
+        axis.appearance.visibility.label = false;
+        document
+            .set_axis_record(crate::AxisDimension::X, axis)
+            .unwrap();
+        let hidden = report(&document, 300);
+        assert!(hidden.findings.iter().any(|finding| {
+            finding.rule_id == "scaled_ticks_without_visible_factor"
+                && finding.severity == CheckSeverity::Warning
         }));
     }
 }

@@ -54,6 +54,7 @@ impl EguiPreviewAdapter {
                     .cloned()
                     .collect(),
                 resources: BTreeMap::new(),
+                geometry: display.geometry,
             };
             let raster = [360, 240, 180, 120, 90]
                 .into_iter()
@@ -85,6 +86,18 @@ fn text_cache_key(display: &ResolvedDisplayList) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     display.width.to_bits().hash(&mut hasher);
     display.height.to_bits().hash(&mut hasher);
+    display
+        .geometry
+        .export_translation
+        .0
+        .to_bits()
+        .hash(&mut hasher);
+    display
+        .geometry
+        .export_translation
+        .1
+        .to_bits()
+        .hash(&mut hasher);
     for item in &display.items {
         let ResolvedItem::Text(text) = item else {
             continue;

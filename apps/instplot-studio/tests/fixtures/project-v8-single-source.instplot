@@ -168,7 +168,7 @@
         "sha256": "acf6e774265a2ca72233ec7fd9fe325bc4b7d79f61241e449a3db54c9608c6b2"
       },
       "fit": null,
-      "origin_path": "/Users/zhiyu/Downloads/SciPlot/apps/instplot-studio/tests/fixtures/smoke.csv",
+      "origin_path": "apps/instplot-studio/tests/fixtures/smoke.csv",
       "origin": "imported"
     }
   ],

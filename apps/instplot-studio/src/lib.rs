@@ -46,8 +46,9 @@ pub use palette::{
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
     AnnotationConnectorRecord, ArrowHead, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole,
-    AxesRecord, AxisAppearanceRecord, AxisBinding, AxisEdge, AxisIdentity, AxisMode, AxisRecord,
-    AxisScale, DEFAULT_CURVE_WIDTH_PT, DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind,
+    AxesRecord, AxisAppearanceRecord, AxisBinding, AxisDisplayScaleRecord, AxisEdge, AxisIdentity,
+    AxisMode, AxisRecord, AxisScale, AxisVisibilityRecord, DEFAULT_CURVE_WIDTH_PT,
+    DEFAULT_ERROR_BAR_WIDTH_PT, DEFAULT_REFERENCE_DASH_PT, DataBinding, DataSourceKind,
     DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, ExportPreferences,
     FigureRecord, FitIdentity, FontFaceRecord, FontStyle, FormatterSpec, LabelNode, LegendEntry,
     LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFile, ManagedDataFormat, ManualDataRecipe,
@@ -62,7 +63,7 @@ pub use publication::{
     CVD_SIMULATION_VERSION, CheckSeverity, PUBLICATION_RULES_VERSION, PublicationFinding,
     PublicationReport, check_publication,
 };
-pub use render::{ResolvedFigure, resolve_document};
+pub use render::{ResolvedFigure, resolve_document, resolve_document_for_export};
 pub use semantic::{
     ColorPolicy, RequiredNonColorChannel, SEMANTIC_REGISTRY_VERSION, SemanticPolicy,
     non_color_signature, policy_for,

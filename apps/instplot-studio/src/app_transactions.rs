@@ -21,6 +21,7 @@ pub(super) enum AppAction {
         datasets: Vec<DataSet>,
         source_path: PathBuf,
         selected_dataset: String,
+        affected_axes: Vec<AxisIdentity>,
     },
     RemoveDataSources(Vec<String>),
     OpenProject(PathBuf),
@@ -62,11 +63,15 @@ pub(super) enum AppEffect {
         replaced: usize,
         diagnostics: Vec<String>,
         replaced_showcase: bool,
+        affected_axes: Vec<AxisIdentity>,
     },
     PreparedDataCommitted {
         selected_dataset: String,
+        affected_axes: Vec<AxisIdentity>,
     },
-    RemovedData,
+    RemovedData {
+        affected_axes: Vec<AxisIdentity>,
+    },
     OpenedProject {
         path: PathBuf,
         source: OpenProjectSource,
@@ -130,12 +135,14 @@ impl ApplicationController {
                 datasets,
                 source_path,
                 selected_dataset,
+                affected_axes,
             } => Self::commit_prepared_data(
                 state,
                 *document,
                 datasets,
                 source_path,
                 selected_dataset,
+                affected_axes,
             ),
             AppAction::RemoveDataSources(ids) => Self::remove_data_sources(state, ids),
             AppAction::OpenProject(path) => Self::open_project(state, path),
@@ -330,6 +337,12 @@ impl ApplicationController {
         workspace.note_data_import(&imported_paths[0]);
         let mut edit_history = state.edit_history.clone();
         edit_history.rebase_after_external_change();
+        let mut affected_axes = affected_axes_for_sources(state.document, &imported_ids);
+        for identity in affected_axes_for_sources(&candidate_document, &imported_ids) {
+            if !affected_axes.contains(&identity) {
+                affected_axes.push(identity);
+            }
+        }
 
         Ok(AppOutcome {
             document: candidate_document,
@@ -346,6 +359,7 @@ impl ApplicationController {
                 replaced,
                 diagnostics,
                 replaced_showcase: replace_showcase,
+                affected_axes,
             },
         })
     }
@@ -356,6 +370,7 @@ impl ApplicationController {
         datasets: Vec<DataSet>,
         source_path: PathBuf,
         selected_dataset: String,
+        affected_axes: Vec<AxisIdentity>,
     ) -> Result<AppOutcome, AppError> {
         document.project().validate().map_err(|error| AppError {
             code: "prepared-data",
@@ -383,7 +398,10 @@ impl ApplicationController {
             edit_history,
             resolved,
             publication_report,
-            effect: AppEffect::PreparedDataCommitted { selected_dataset },
+            effect: AppEffect::PreparedDataCommitted {
+                selected_dataset,
+                affected_axes,
+            },
         })
     }
 
@@ -391,6 +409,13 @@ impl ApplicationController {
         state: AppTransactionState<'_>,
         ids: Vec<String>,
     ) -> Result<AppOutcome, AppError> {
+        let old_source_ids = state
+            .document
+            .project()
+            .data_sources
+            .iter()
+            .map(|source| source.id.clone())
+            .collect::<BTreeSet<_>>();
         let mut document = state.document.clone();
         let mut edit_history = state.edit_history.clone();
         let edit = edit_history
@@ -429,6 +454,17 @@ impl ApplicationController {
                 diagnostics: warnings,
             });
         }
+        let remaining_source_ids = document
+            .project()
+            .data_sources
+            .iter()
+            .map(|source| source.id.clone())
+            .collect::<BTreeSet<_>>();
+        let removed_source_ids = old_source_ids
+            .difference(&remaining_source_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let affected_axes = affected_axes_for_sources(state.document, &removed_source_ids);
         Ok(AppOutcome {
             document,
             session,
@@ -436,7 +472,7 @@ impl ApplicationController {
             edit_history,
             resolved,
             publication_report,
-            effect: AppEffect::RemovedData,
+            effect: AppEffect::RemovedData { affected_axes },
         })
     }
 
@@ -614,18 +650,19 @@ impl ApplicationController {
         path: PathBuf,
         format: FigureExport,
     ) -> Result<AppOutcome, AppError> {
-        let resolved = resolved_preview(state.document).map_err(|error| AppError {
-            code: "export-layout",
-            diagnostics: vec![error.to_string()],
-        })?;
+        let export_resolved = instplot_studio::resolve_document_for_export(state.document)
+            .map_err(|error| AppError {
+                code: "export-layout",
+                diagnostics: vec![error.to_string()],
+            })?;
         let bytes = match format {
-            FigureExport::Pdf => save_resolved_figure_pdf(&resolved, &path),
-            FigureExport::Svg => save_resolved_figure_svg(&resolved, &path),
+            FigureExport::Pdf => save_resolved_figure_pdf(&export_resolved, &path),
+            FigureExport::Svg => save_resolved_figure_svg(&export_resolved, &path),
             FigureExport::Png {
                 dpi,
                 transparent_background,
             } => save_resolved_figure_png_with_background(
-                &resolved,
+                &export_resolved,
                 &path,
                 dpi,
                 transparent_background,
@@ -637,9 +674,13 @@ impl ApplicationController {
         })?;
         let publication_report = check_publication(
             state.document,
-            &resolved,
+            &export_resolved,
             state.document.export_preferences().selected_raster_dpi,
         );
+        let resolved = resolved_preview(state.document).map_err(|error| AppError {
+            code: "preview-layout",
+            diagnostics: vec![error.to_string()],
+        })?;
         Ok(AppOutcome {
             document: state.document.clone(),
             session: state.session.clone(),

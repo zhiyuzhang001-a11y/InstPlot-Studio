@@ -59,6 +59,27 @@ impl FigureDocument {
         value: f64,
         axes: AxisBinding,
     ) -> Result<String, String> {
+        self.add_reference_line_with_style(
+            orientation,
+            value,
+            axes,
+            StrokeStyle {
+                color_id: "object-black".to_owned(),
+                width_pt: 0.9,
+                dash_pt: DEFAULT_REFERENCE_DASH_PT.to_vec(),
+            },
+            false,
+        )
+    }
+
+    pub fn add_reference_line_with_style(
+        &mut self,
+        orientation: ReferenceOrientation,
+        value: f64,
+        axes: AxisBinding,
+        stroke: StrokeStyle,
+        include_in_autoscale: bool,
+    ) -> Result<String, String> {
         let mut candidate = self.project.clone();
         let artist_id = next_stable_id(&candidate, "reference-line");
         let axes = match orientation {
@@ -80,12 +101,8 @@ impl FigureDocument {
                 orientation,
                 value,
                 axes,
-                stroke: StrokeStyle {
-                    color_id: "object-black".to_owned(),
-                    width_pt: 0.9,
-                    dash_pt: vec![4.0, 3.0],
-                },
-                include_in_autoscale: false,
+                stroke,
+                include_in_autoscale,
             },
         });
         candidate.figure.axes[0].artist_ids.push(artist_id.clone());
@@ -170,6 +187,7 @@ impl FigureDocument {
             _ => {}
         }
         let mut candidate = self.project.clone();
+        let series_color = super::series::artist_color(&record).map(str::to_owned);
         let artist = candidate
             .figure
             .artists
@@ -180,6 +198,9 @@ impl FigureDocument {
             return Err("artist kind cannot be replaced".to_owned());
         }
         *artist = record.clone();
+        if let Some(color_id) = series_color {
+            super::series::apply_series_color(&mut candidate, &record.id, &color_id)?;
+        }
         let value = serde_json::to_value(&record.properties)
             .map_err(|error| format!("artist style cannot be recorded: {error}"))?;
         if let Some(existing) = candidate

@@ -4,10 +4,15 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use instplot_render::TextAnchor;
-use instplot_render::{Color, DisplayItem, DisplayList, NodeId};
+use instplot_render::{Color, DisplayItem, DisplayList, NodeId, PathVerb};
 use instplot_text::{FontMetadata, SpanFlow, Style, font_metadata};
 use parley::fontique::{Blob, FontInfoOverride};
 use parley::{FontContext, FontFamily, FontStyle, FontWeight, LayoutContext, StyleProperty};
+use tiny_skia::{
+    LineCap as SkLineCap, LineJoin as SkLineJoin, PathBuilder as SkPathBuilder, Stroke as SkStroke,
+    StrokeDash,
+};
+use ttf_parser::{Face, GlyphId, OutlineBuilder};
 
 const PRIMARY_FAMILY: &str = "InstPlot Studio TeX Gyre Heros";
 const RELATION_FAMILY: &str = "InstPlot Studio STIX Two Math";
@@ -59,6 +64,62 @@ pub struct ResolvedDisplayList {
     pub height: f32,
     pub items: Vec<ResolvedItem>,
     pub resources: BTreeMap<String, RasterAsset>,
+    pub geometry: ResolvedCanvasGeometry,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ResolvedBounds {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+}
+
+impl ResolvedBounds {
+    pub const fn width(self) -> f32 {
+        self.max_x - self.min_x
+    }
+
+    pub const fn height(self) -> f32 {
+        self.max_y - self.min_y
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        let result = Self {
+            min_x: self.min_x.max(other.min_x),
+            min_y: self.min_y.max(other.min_y),
+            max_x: self.max_x.min(other.max_x),
+            max_y: self.max_y.min(other.max_y),
+        };
+        (result.max_x >= result.min_x && result.max_y >= result.min_y).then_some(result)
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            min_x: self.min_x.min(other.min_x),
+            min_y: self.min_y.min(other.min_y),
+            max_x: self.max_x.max(other.max_x),
+            max_y: self.max_y.max(other.max_y),
+        }
+    }
+
+    fn inflate(self, amount: f32) -> Self {
+        Self {
+            min_x: self.min_x - amount,
+            min_y: self.min_y - amount,
+            max_x: self.max_x + amount,
+            max_y: self.max_y + amount,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedCanvasGeometry {
+    pub plot_bounds: ResolvedBounds,
+    pub ink_bounds: ResolvedBounds,
+    pub export_bounds: ResolvedBounds,
+    /// Scene-to-page translation applied exactly once by the resolver.
+    pub export_translation: (f32, f32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +145,8 @@ pub struct ResolvedText {
     pub color: Color,
     pub rotation_degrees: f32,
     pub runs: Vec<ResolvedRun>,
+    /// Actual rotated glyph-outline ink in scene coordinates.
+    pub ink_bounds: Option<ResolvedBounds>,
 }
 
 #[derive(Clone, Debug)]
@@ -205,190 +268,74 @@ pub fn resolve_with_resources(
             other => ResolvedItem::Graphics(other.clone()),
         })
         .collect();
+    let full = ResolvedBounds {
+        min_x: 0.0,
+        min_y: 0.0,
+        max_x: list.width.get() as f32,
+        max_y: list.height.get() as f32,
+    };
     ResolvedDisplayList {
         width: list.width.get() as f32,
         height: list.height.get() as f32,
         items,
         resources,
+        geometry: ResolvedCanvasGeometry {
+            plot_bounds: full,
+            ink_bounds: full,
+            export_bounds: full,
+            export_translation: (0.0, 0.0),
+        },
     }
 }
 
-#[derive(Default)]
-struct FlowCursor {
-    cursor: f32,
-    script_group: Option<u32>,
-    subscript_advance: f32,
-    superscript_advance: f32,
+/// Resolves a fixed-plot figure and derives one clip-aware export page from
+/// visible ink. The returned items are translated into page coordinates once;
+/// layout and persisted document coordinates remain in scene space.
+pub fn resolve_tight(
+    list: &DisplayList,
+    plot_bounds: ResolvedBounds,
+    safety_pt: f32,
+) -> ResolvedDisplayList {
+    resolve_tight_with_resources(list, BTreeMap::new(), plot_bounds, safety_pt)
 }
 
-impl FlowCursor {
-    fn place(&mut self, flow: SpanFlow, advance: f32) -> f32 {
-        match flow {
-            SpanFlow::Inline => {
-                self.finish_script_group();
-                let start = self.cursor;
-                self.cursor += advance;
-                start
-            }
-            SpanFlow::Subscript(group) => {
-                self.start_script_group(group);
-                let start = self.cursor + self.subscript_advance;
-                self.subscript_advance += advance;
-                start
-            }
-            SpanFlow::Superscript(group) => {
-                self.start_script_group(group);
-                let start = self.cursor + self.superscript_advance;
-                self.superscript_advance += advance;
-                start
-            }
-        }
-    }
-
-    fn start_script_group(&mut self, group: u32) {
-        if self.script_group != Some(group) {
-            self.finish_script_group();
-            self.script_group = Some(group);
-        }
-    }
-
-    fn finish_script_group(&mut self) {
-        if self.script_group.take().is_some() {
-            self.cursor += self.subscript_advance.max(self.superscript_advance);
-            self.subscript_advance = 0.0;
-            self.superscript_advance = 0.0;
-        }
-    }
-
-    fn finish(mut self) -> f32 {
-        self.finish_script_group();
-        self.cursor
-    }
-}
-
-fn shape_text(
-    source: &instplot_render::GlyphRun,
-    font_context: &mut FontContext,
-    layout_context: &mut LayoutContext<[u8; 4]>,
-) -> ResolvedText {
-    let size = source.size.get() as f32;
-    let text = source.label.normalized_text();
-    let mut runs = Vec::new();
-    let mut flow_cursor = FlowCursor::default();
-    let mut byte_offset = 0_usize;
-    for span in source.label.spans() {
-        let font_size = size * span.scale;
-        let is_unit_separator = span.is_unit_separator;
-        if is_unit_separator {
-            let face = ttf_parser::Face::parse(REGULAR, 0).expect("valid bundled regular face");
-            let glyph_id = face.glyph_index(' ').expect("bundled space glyph").0.into();
-            let advance = size * 0.2;
-            let start_x = flow_cursor.place(span.flow, advance);
-            let data = Arc::new(REGULAR.to_vec());
-            runs.push(ResolvedRun {
-                font_data: data.clone(),
-                font_index: 0,
-                font: font_metadata(data.as_slice(), 0),
-                start_x,
-                baseline_shift: span.baseline_shift_em * size,
-                font_size,
-                glyphs: vec![ResolvedGlyph {
-                    id: glyph_id,
-                    text_range: byte_offset..byte_offset + span.text.len(),
-                    advance,
-                    x_offset: 0.0,
-                    y_offset: 0.0,
-                }],
-            });
-            byte_offset += span.text.len();
-            continue;
-        }
-        let shaping_text = span.text.as_str();
-        let mut builder = layout_context.ranged_builder(font_context, shaping_text, 1.0, false);
-        let family = if matches!(span.text.as_str(), "≤" | "≥") {
-            "'InstPlot Studio STIX Two Math'"
-        } else {
-            "'InstPlot Studio TeX Gyre Heros'"
-        };
-        builder.push_default(StyleProperty::FontFamily(FontFamily::Source(
-            Cow::Borrowed(family),
-        )));
-        builder.push_default(StyleProperty::FontSize(font_size));
-        match span.style {
-            Style::Upright => {}
-            Style::Italic => builder.push_default(StyleProperty::FontStyle(FontStyle::Italic)),
-            Style::Bold => builder.push_default(StyleProperty::FontWeight(FontWeight::BOLD)),
-            Style::BoldItalic => {
-                builder.push_default(StyleProperty::FontStyle(FontStyle::Italic));
-                builder.push_default(StyleProperty::FontWeight(FontWeight::BOLD));
-            }
-        }
-        let mut layout = builder.build(shaping_text);
-        layout.break_all_lines(None);
-
-        for line in layout.lines() {
-            for run in line.runs() {
-                let font = run.font().clone();
-                let data = Arc::new(font.data.as_ref().to_vec());
-                let mut glyphs: Vec<ResolvedGlyph> = Vec::new();
-                for cluster in run.visual_clusters() {
-                    if cluster.is_ligature_continuation() {
-                        if let Some(glyph) = glyphs.last_mut() {
-                            glyph.text_range.end = byte_offset + cluster.text_range().end;
-                        }
-                        continue;
-                    }
-                    for glyph in cluster.glyphs() {
-                        glyphs.push(ResolvedGlyph {
-                            id: glyph.id,
-                            text_range: byte_offset + cluster.text_range().start
-                                ..byte_offset + cluster.text_range().end,
-                            advance: glyph.advance,
-                            x_offset: glyph.x,
-                            y_offset: glyph.y,
-                        });
-                    }
-                }
-                let advance = glyphs.iter().map(|glyph| glyph.advance).sum::<f32>();
-                let start_x = flow_cursor.place(span.flow, advance);
-                runs.push(ResolvedRun {
-                    font_data: data.clone(),
-                    font_index: font.index,
-                    font: font_metadata(data.as_slice(), font.index),
-                    start_x,
-                    baseline_shift: span.baseline_shift_em * size,
-                    font_size,
-                    glyphs,
-                });
-            }
-        }
-        byte_offset += span.text.len();
-    }
-    let cursor_x = flow_cursor.finish();
-    let anchor_offset = match source.anchor {
-        TextAnchor::Start => 0.0,
-        TextAnchor::Middle => -cursor_x / 2.0,
-        TextAnchor::End => -cursor_x,
+/// Resource-aware variant of [`resolve_tight`]. Raster assets are retained for
+/// the export backends, and only assets with valid, non-transparent pixels
+/// contribute to the tight page bounds.
+pub fn resolve_tight_with_resources(
+    list: &DisplayList,
+    resources: BTreeMap<String, RasterAsset>,
+    plot_bounds: ResolvedBounds,
+    safety_pt: f32,
+) -> ResolvedDisplayList {
+    let mut resolved = resolve_with_resources(list, resources);
+    let ink_bounds =
+        visible_ink_bounds(&resolved.items, &resolved.resources).unwrap_or(plot_bounds);
+    let content = plot_bounds.union(ink_bounds).inflate(safety_pt.max(0.0));
+    let translation = (-content.min_x, -content.min_y);
+    resolved.width = content.width().max(1.0);
+    resolved.height = content.height().max(1.0);
+    resolved.geometry = ResolvedCanvasGeometry {
+        plot_bounds,
+        ink_bounds,
+        export_bounds: content,
+        export_translation: translation,
     };
-    for run in &mut runs {
-        run.start_x += anchor_offset;
-    }
-
-    ResolvedText {
-        source: source.source,
-        text,
-        x: source.x.get() as f32,
-        y: source.y.get() as f32,
-        size,
-        color: source.color,
-        rotation_degrees: source.rotation_degrees as f32,
-        runs,
-    }
+    resolved
 }
+
+mod bounds;
+mod text;
+
+use bounds::visible_ink_bounds;
+#[cfg(test)]
+use text::FlowCursor;
+use text::shape_text;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use instplot_render::{LineCap, LineJoin, Path, Pt, Stroke};
 
     #[test]
     fn combined_scripts_share_a_start_and_advance_by_the_wider_branch() {
@@ -398,5 +345,53 @@ mod tests {
         assert_eq!(cursor.place(SpanFlow::Superscript(0), 6.0), 10.0);
         assert_eq!(cursor.place(SpanFlow::Inline, 3.0), 16.0);
         assert_eq!(cursor.finish(), 19.0);
+    }
+
+    #[test]
+    fn tight_geometry_ignores_ink_outside_the_active_clip() {
+        let pt = |value| Pt::new(value).unwrap();
+        let display = DisplayList {
+            width: pt(100.0),
+            height: pt(100.0),
+            items: vec![
+                DisplayItem::ClipPush {
+                    source: NodeId(1),
+                    x: pt(10.0),
+                    y: pt(10.0),
+                    width: pt(80.0),
+                    height: pt(80.0),
+                },
+                DisplayItem::Path {
+                    source: NodeId(2),
+                    path: Path {
+                        verbs: vec![
+                            PathVerb::MoveTo(pt(20.0), pt(20.0)),
+                            PathVerb::LineTo(pt(10_000.0), pt(20.0)),
+                        ],
+                    },
+                    fill: None,
+                    stroke: Some(Stroke {
+                        color: Color(0, 0, 0, 255),
+                        width: pt(1.0),
+                        cap: LineCap::Butt,
+                        join: LineJoin::Miter,
+                        dash: Vec::new(),
+                    }),
+                },
+                DisplayItem::ClipPop { source: NodeId(1) },
+            ],
+        };
+        let resolved = resolve_tight(
+            &display,
+            ResolvedBounds {
+                min_x: 10.0,
+                min_y: 10.0,
+                max_x: 90.0,
+                max_y: 90.0,
+            },
+            3.0,
+        );
+        assert!(resolved.width < 100.0);
+        assert_eq!(resolved.geometry.ink_bounds.max_x, 90.0);
     }
 }

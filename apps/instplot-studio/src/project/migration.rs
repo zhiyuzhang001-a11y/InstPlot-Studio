@@ -1,5 +1,32 @@
 use super::*;
 
+/// Frozen schema-9 decoder. Keeping the old figure shape explicit prevents a
+/// future current-schema field from silently changing migration semantics.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyProjectV9 {
+    schema_version: u32,
+    producer_version: String,
+    figure: LegacyFigureV9,
+    data_sources: Vec<DataSourceRecord>,
+    semantic_registry: Vec<SemanticLabel>,
+    palette: PaletteRegistry,
+    typography: TypographyProfile,
+    overrides: Vec<OverrideRecord>,
+    export_preferences: ExportPreferences,
+    provenance: Vec<ProvenanceRecord>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyFigureV9 {
+    id: String,
+    width_mm: f64,
+    height_mm: f64,
+    axes: Vec<AxesRecord>,
+    artists: Vec<ArtistRecord>,
+}
+
 pub(super) fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> {
     let legacy: LegacyProjectV0 = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("legacy schema 0: {error}")))?;
@@ -22,7 +49,7 @@ pub(super) fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> 
     axes.y.maximum = legacy.y_max;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v0".to_owned(),
-        operation: "migrate_schema_0_to_9".to_owned(),
+        operation: "migrate_schema_0_to_10".to_owned(),
         input_ids: vec![legacy.producer_version],
         parameters: BTreeMap::new(),
     });
@@ -30,12 +57,12 @@ pub(super) fn migrate_v0(value: Value) -> Result<ProjectDocument, ProjectError> 
 }
 
 pub(super) fn migrate_v7(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 7)?;
+    upgrade_value_to_current(&mut value, 7)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 7 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v7".to_owned(),
-        operation: "migrate_schema_7_to_9".to_owned(),
+        operation: "migrate_schema_7_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -52,12 +79,12 @@ pub(super) fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectErr
             .ok_or_else(|| ProjectError::Decode("schema 1 artist is invalid".to_owned()))?
             .insert("visible".to_owned(), Value::Bool(true));
     }
-    upgrade_value_to_v9(&mut value, 1)?;
+    upgrade_value_to_current(&mut value, 1)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 1 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v1".to_owned(),
-        operation: "migrate_schema_1_to_9".to_owned(),
+        operation: "migrate_schema_1_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -65,12 +92,12 @@ pub(super) fn migrate_v1(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 2)?;
+    upgrade_value_to_current(&mut value, 2)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 2 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v2".to_owned(),
-        operation: "migrate_schema_2_to_9".to_owned(),
+        operation: "migrate_schema_2_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -78,12 +105,12 @@ pub(super) fn migrate_v2(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v3(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 3)?;
+    upgrade_value_to_current(&mut value, 3)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 3 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v3".to_owned(),
-        operation: "migrate_schema_3_to_9".to_owned(),
+        operation: "migrate_schema_3_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -91,12 +118,12 @@ pub(super) fn migrate_v3(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v4(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 4)?;
+    upgrade_value_to_current(&mut value, 4)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 4 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v4".to_owned(),
-        operation: "migrate_schema_4_to_9".to_owned(),
+        operation: "migrate_schema_4_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -104,12 +131,12 @@ pub(super) fn migrate_v4(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v5(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 5)?;
+    upgrade_value_to_current(&mut value, 5)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 5 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v5".to_owned(),
-        operation: "migrate_schema_5_to_9".to_owned(),
+        operation: "migrate_schema_5_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -137,12 +164,12 @@ pub(super) fn migrate_v6(mut value: Value) -> Result<ProjectDocument, ProjectErr
             }),
         );
     }
-    upgrade_value_to_v9(&mut value, 6)?;
+    upgrade_value_to_current(&mut value, 6)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 6 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v6".to_owned(),
-        operation: "migrate_schema_6_to_9".to_owned(),
+        operation: "migrate_schema_6_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
@@ -150,19 +177,68 @@ pub(super) fn migrate_v6(mut value: Value) -> Result<ProjectDocument, ProjectErr
 }
 
 pub(super) fn migrate_v8(mut value: Value) -> Result<ProjectDocument, ProjectError> {
-    upgrade_value_to_v9(&mut value, 8)?;
+    upgrade_value_to_current(&mut value, 8)?;
     let mut document: ProjectDocument = serde_json::from_value(value)
         .map_err(|error| ProjectError::Decode(format!("schema 8 migration: {error}")))?;
     document.provenance.push(ProvenanceRecord {
         id: "provenance-migrate-v8".to_owned(),
-        operation: "migrate_schema_8_to_9".to_owned(),
+        operation: "migrate_schema_8_to_10".to_owned(),
         input_ids: Vec::new(),
         parameters: BTreeMap::new(),
     });
     Ok(document)
 }
 
-fn upgrade_value_to_v9(value: &mut Value, source_schema: u32) -> Result<(), ProjectError> {
+pub(super) fn migrate_v9(value: Value) -> Result<ProjectDocument, ProjectError> {
+    let legacy: LegacyProjectV9 = serde_json::from_value(value)
+        .map_err(|error| ProjectError::Decode(format!("schema 9 migration: {error}")))?;
+    if legacy.schema_version != 9 {
+        return Err(ProjectError::Decode(
+            "schema 9 migration received a different schema".to_owned(),
+        ));
+    }
+    let mut document = ProjectDocument {
+        schema_version: PROJECT_SCHEMA_VERSION,
+        producer_version: legacy.producer_version,
+        figure: FigureRecord {
+            id: legacy.figure.id,
+            width_mm: legacy.figure.width_mm,
+            height_mm: legacy.figure.height_mm,
+            axes: legacy.figure.axes,
+            artists: legacy.figure.artists,
+        },
+        data_sources: legacy.data_sources,
+        semantic_registry: legacy.semantic_registry,
+        palette: legacy.palette,
+        typography: legacy.typography,
+        overrides: legacy.overrides,
+        export_preferences: legacy.export_preferences,
+        provenance: legacy.provenance,
+    };
+    migrate_legacy_axis_display_scales(&mut document);
+    document.provenance.push(ProvenanceRecord {
+        id: "provenance-migrate-v9".to_owned(),
+        operation: "migrate_schema_9_to_10".to_owned(),
+        input_ids: Vec::new(),
+        parameters: BTreeMap::new(),
+    });
+    Ok(document)
+}
+
+pub(super) fn migrate_v10(mut value: Value) -> Result<ProjectDocument, ProjectError> {
+    upgrade_value_to_current(&mut value, 10)?;
+    let mut document: ProjectDocument = serde_json::from_value(value)
+        .map_err(|error| ProjectError::Decode(format!("schema 10 migration: {error}")))?;
+    document.provenance.push(ProvenanceRecord {
+        id: "provenance-migrate-v10".to_owned(),
+        operation: "migrate_schema_10_to_11".to_owned(),
+        input_ids: Vec::new(),
+        parameters: BTreeMap::new(),
+    });
+    Ok(document)
+}
+
+fn upgrade_value_to_current(value: &mut Value, source_schema: u32) -> Result<(), ProjectError> {
     value["schema_version"] = Value::from(PROJECT_SCHEMA_VERSION);
     let axes = value["figure"]["axes"]
         .as_array_mut()
@@ -190,6 +266,32 @@ fn upgrade_value_to_v9(value: &mut Value, source_schema: u32) -> Result<(), Proj
             appearance
                 .entry("spine_color_id")
                 .or_insert_with(|| Value::String("object-black".to_owned()));
+            let formatter_kind = axis
+                .get("formatter")
+                .and_then(Value::as_object)
+                .and_then(|formatter| formatter.get("kind"))
+                .and_then(Value::as_str)
+                .unwrap_or("auto");
+            let display_scale = match formatter_kind {
+                "decimal" => serde_json::json!({"kind":"none"}),
+                "scientific" => {
+                    let minimum = axis.get("minimum").and_then(Value::as_f64).unwrap_or(0.0);
+                    let maximum = axis.get("maximum").and_then(Value::as_f64).unwrap_or(0.0);
+                    let exponent = legacy_axis_exponent(minimum, maximum);
+                    if let Some(formatter) =
+                        axis.get_mut("formatter").and_then(Value::as_object_mut)
+                    {
+                        formatter.insert("kind".to_owned(), Value::String("decimal".to_owned()));
+                    }
+                    if exponent == 0 {
+                        serde_json::json!({"kind":"none"})
+                    } else {
+                        serde_json::json!({"kind":"manual_factor","exponent":exponent})
+                    }
+                }
+                _ => serde_json::json!({"kind":"auto_factor"}),
+            };
+            axis.entry("display_scale").or_insert(display_scale);
         }
     }
     let artists = value["figure"]["artists"].as_array_mut().ok_or_else(|| {
@@ -242,6 +344,38 @@ fn upgrade_value_to_v9(value: &mut Value, source_schema: u32) -> Result<(), Proj
         }
     }
     Ok(())
+}
+
+fn legacy_axis_exponent(minimum: f64, maximum: f64) -> i32 {
+    let representative = minimum.abs().max(maximum.abs());
+    if representative.is_finite() && representative > 0.0 {
+        representative.log10().floor() as i32
+    } else {
+        0
+    }
+}
+
+fn migrate_legacy_axis_display_scales(document: &mut ProjectDocument) {
+    for axes in &mut document.figure.axes {
+        for axis in [&mut axes.x, &mut axes.y]
+            .into_iter()
+            .chain(axes.x2.iter_mut())
+            .chain(axes.y2.iter_mut())
+        {
+            axis.display_scale = match axis.formatter {
+                FormatterSpec::Auto => AxisDisplayScaleRecord::AutoFactor,
+                FormatterSpec::Decimal { .. } => AxisDisplayScaleRecord::None,
+                FormatterSpec::Scientific { precision } => {
+                    axis.formatter = FormatterSpec::Decimal { precision };
+                    AxisDisplayScaleRecord::manual_factor(legacy_axis_exponent(
+                        axis.minimum,
+                        axis.maximum,
+                    ))
+                    .unwrap_or(AxisDisplayScaleRecord::None)
+                }
+            };
+        }
+    }
 }
 
 fn finish_legacy_migration(

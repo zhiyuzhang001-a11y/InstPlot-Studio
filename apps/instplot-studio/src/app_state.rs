@@ -34,6 +34,8 @@ pub(super) struct StudioApp {
     pub(super) pending_managed_save_conflict: Option<ManagedSaveConflict>,
     pub(super) label_inputs: BTreeMap<String, LabelInputState>,
     pub(super) numeric_inputs: BTreeMap<String, DeferredNumericInput>,
+    pub(super) axis_numeric_scale_sessions: Vec<AxisNumericScaleSession>,
+    pub(super) axis_scale_transitions: Vec<AxisScaleTransitionDraft>,
     pub(super) x_fixed_ticks: String,
     pub(super) y_fixed_ticks: String,
     pub(super) workspace: WorkspaceState,
@@ -43,6 +45,7 @@ pub(super) struct StudioApp {
     pub(super) allow_close: bool,
     pub(super) canvas_zoom: f32,
     pub(super) canvas_scroll: egui::Vec2,
+    pub(super) last_canvas_figure_center: Option<egui::Vec2>,
     pub(super) hover_data_coordinates: Option<HoverDataCoordinates>,
     pub(super) trackpad_scroll_active: bool,
     pub(super) show_layers: bool,
@@ -52,11 +55,16 @@ pub(super) struct StudioApp {
     pub(super) focus_inspector: bool,
     pub(super) focus_palette: bool,
     pub(super) focus_manual_data: bool,
+    pub(super) show_axis_visibility: bool,
+    pub(super) focus_axis_visibility: bool,
+    pub(super) axis_visibility_identity: AxisIdentity,
     pub(super) context_editor_focus_target: Option<CanvasHit>,
     pub(super) context_editor_targets: Vec<CanvasHit>,
     pub(super) active_artist_drag: Option<ArtistDrag>,
     pub(super) drawing_tool: DrawingTool,
     pub(super) tool_draft: Option<ToolDraft>,
+    pub(super) reference_draft: Option<ReferenceDraft>,
+    pub(super) focus_reference_draft: bool,
     pub(super) messages: Vec<AppMessage>,
     pub(super) status: Option<(String, Instant)>,
     pub(super) manual_data: ManualDataState,
@@ -94,6 +102,15 @@ pub(super) struct ToolDraft {
     pub(super) constraint: MeasurementConstraint,
     pub(super) start_arrow: bool,
     pub(super) end_arrow: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ReferenceDraft {
+    pub(super) orientation: ReferenceOrientation,
+    pub(super) value: f64,
+    pub(super) axes: AxisBinding,
+    pub(super) stroke: StrokeStyle,
+    pub(super) include_in_autoscale: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -306,6 +323,20 @@ pub(super) struct LabelInputState {
 pub(super) struct DeferredNumericInput {
     pub(super) source_value: f64,
     pub(super) text: String,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AxisNumericScaleSession {
+    pub(super) identity: AxisIdentity,
+    pub(super) exponent: i32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct AxisScaleTransitionDraft {
+    pub(super) identity: AxisIdentity,
+    pub(super) exponent: i32,
+    pub(super) label_text: String,
     pub(super) error: Option<String>,
 }
 

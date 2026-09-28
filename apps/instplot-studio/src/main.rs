@@ -30,15 +30,15 @@ use instplot_render::{DisplayItem, PathVerb};
 use instplot_studio::label_input;
 use instplot_studio::{
     AnnotationConnectorRecord, ArrowHead, ArtistProperties, ArtistRole, AxisBinding, AxisDimension,
-    AxisIdentity, AxisMode, AxisRanges, AxisRecord, AxisScale, CheckSeverity,
-    DATA_FORMAT_CAPABILITIES, DataImporter, EditCommand, EditGroup, EditHistory,
-    EguiPreviewAdapter, ErrorStatistic, FigureDocument, FormatterSpec, HandoffImport, LabelNode,
-    LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFormat, ManualDataGroupInput,
-    ManualDataInput, ManualPlotStyle, MarkerShape, MeasurementConstraint, OpenProjectSource,
-    PRODUCT_NAME, PaletteKind, PreviewAdapter, PublicationReport, ReferenceOrientation,
-    ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind, StrokeStyle, StudioSession,
-    USER_PALETTE_IDS, XAxisSlot, YAxisSlot, builtin_palette, builtin_palette_registry,
-    check_publication, palette_series_color_ids, resolve_document,
+    AxisDisplayScaleRecord, AxisIdentity, AxisMode, AxisRanges, AxisRecord, AxisScale,
+    CheckSeverity, DATA_FORMAT_CAPABILITIES, DEFAULT_REFERENCE_DASH_PT, DataImporter, EditCommand,
+    EditGroup, EditHistory, EguiPreviewAdapter, ErrorStatistic, FigureDocument, FormatterSpec,
+    HandoffImport, LabelNode, LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFormat,
+    ManualDataGroupInput, ManualDataInput, ManualPlotStyle, MarkerShape, MeasurementConstraint,
+    OpenProjectSource, PRODUCT_NAME, PaletteKind, PreviewAdapter, PublicationReport,
+    ReferenceOrientation, ResolvedFigure, SeriesCreationStyle, SeriesDescriptor, SeriesKind,
+    StrokeStyle, StudioSession, USER_PALETTE_IDS, XAxisSlot, YAxisSlot, builtin_palette,
+    builtin_palette_registry, check_publication, palette_series_color_ids, resolve_document,
 };
 #[cfg(test)]
 use instplot_studio::{ManualAxisInput, MeasurementArrowSpec};

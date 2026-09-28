@@ -3,9 +3,9 @@ use instplot_text::Label;
 use std::collections::BTreeMap;
 
 use crate::{
-    Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
-    Formatter, GridSpec, LegendErrorStyle, LegendPosition, LegendSpec, LineStyle, Locator,
-    MarkerShape, MarkerStyle, Scale, Series,
+    Annotation, AnnotationPosition, AxisDisplayScale, AxisSpec, Chart, DashStyle, DataPoint,
+    ErrorBar, ErrorStyle, Formatter, GridSpec, LegendErrorStyle, LegendPosition, LegendSpec,
+    LineStyle, Locator, MarkerShape, MarkerStyle, Scale, Series,
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
@@ -81,6 +81,7 @@ pub fn publication_fixture() -> Chart {
             },
             minor_interval: None,
             formatter: Formatter::Auto,
+            display_scale: AxisDisplayScale::AutoFactor,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
             has_data: true,
@@ -96,6 +97,7 @@ pub fn publication_fixture() -> Chart {
             },
             minor_interval: None,
             formatter: Formatter::Auto,
+            display_scale: AxisDisplayScale::AutoFactor,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
             has_data: true,

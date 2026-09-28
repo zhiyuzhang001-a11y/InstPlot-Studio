@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
+use std::num::NonZeroI32;
 use std::path::{Path, PathBuf};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
@@ -9,11 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 9;
+pub const PROJECT_SCHEMA_VERSION: u32 = 11;
 /// Default physical stroke used by newly created data curves.
 pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
 /// Default physical stroke used by newly created error bars.
 pub const DEFAULT_ERROR_BAR_WIDTH_PT: f64 = 1.0;
+/// Canonical dash pattern used by newly created scientific reference lines.
+pub const DEFAULT_REFERENCE_DASH_PT: [f64; 2] = [4.0, 2.4];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,7 +37,9 @@ pub struct ProjectDocument {
 #[serde(deny_unknown_fields)]
 pub struct FigureRecord {
     pub id: String,
+    /// Total canvas width used by preview and ordinary document layout.
     pub width_mm: f64,
+    /// Total canvas height used by preview and ordinary document layout.
     pub height_mm: f64,
     pub axes: Vec<AxesRecord>,
     pub artists: Vec<ArtistRecord>,
@@ -167,14 +172,51 @@ pub struct AxisRecord {
     pub minor_interval: Option<f64>,
     pub formatter: FormatterSpec,
     #[serde(default)]
+    pub display_scale: AxisDisplayScaleRecord,
+    #[serde(default)]
     pub autoscale: bool,
     #[serde(default)]
     pub appearance: AxisAppearanceRecord,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AxisDisplayScaleRecord {
+    #[default]
+    AutoFactor,
+    None,
+    ManualFactor {
+        exponent: NonZeroI32,
+    },
+    ManualIncorporated {
+        exponent: NonZeroI32,
+    },
+}
+
+impl AxisDisplayScaleRecord {
+    pub fn manual_factor(exponent: i32) -> Option<Self> {
+        NonZeroI32::new(exponent).map(|exponent| Self::ManualFactor { exponent })
+    }
+
+    pub fn manual_incorporated(exponent: i32) -> Option<Self> {
+        NonZeroI32::new(exponent).map(|exponent| Self::ManualIncorporated { exponent })
+    }
+
+    pub const fn exponent(self) -> Option<i32> {
+        match self {
+            Self::ManualFactor { exponent } | Self::ManualIncorporated { exponent } => {
+                Some(exponent.get())
+            }
+            Self::AutoFactor | Self::None => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AxisAppearanceRecord {
+    #[serde(default)]
+    pub visibility: AxisVisibilityRecord,
     #[serde(default = "default_axis_color_id")]
     pub spine_color_id: String,
     pub near_spine: bool,
@@ -193,9 +235,30 @@ pub struct AxisAppearanceRecord {
     pub label_tick_pad_pt: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxisVisibilityRecord {
+    pub spine: bool,
+    pub ticks: bool,
+    pub tick_labels: bool,
+    pub label: bool,
+}
+
+impl Default for AxisVisibilityRecord {
+    fn default() -> Self {
+        Self {
+            spine: true,
+            ticks: true,
+            tick_labels: true,
+            label: true,
+        }
+    }
+}
+
 impl Default for AxisAppearanceRecord {
     fn default() -> Self {
         Self {
+            visibility: AxisVisibilityRecord::default(),
             spine_color_id: default_axis_color_id(),
             near_spine: true,
             far_spine: true,
@@ -647,6 +710,7 @@ pub enum LabelNode {
     Operator(String),
     Emphasis(String),
     BoldVariable(String),
+    ScaleFactorSlot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -926,13 +990,17 @@ impl ProjectDocument {
             insert_id(&mut ids, &axes.y.id)?;
             validate_axis(&axes.x, &labels, &palette_colors)?;
             validate_axis(&axes.y, &labels, &palette_colors)?;
+            validate_axis_scale_slot(&axes.x, &self.semantic_registry)?;
+            validate_axis_scale_slot(&axes.y, &self.semantic_registry)?;
             if let Some(axis) = &axes.x2 {
                 insert_id(&mut ids, &axis.id)?;
                 validate_axis(axis, &labels, &palette_colors)?;
+                validate_axis_scale_slot(axis, &self.semantic_registry)?;
             }
             if let Some(axis) = &axes.y2 {
                 insert_id(&mut ids, &axis.id)?;
                 validate_axis(axis, &labels, &palette_colors)?;
+                validate_axis_scale_slot(axis, &self.semantic_registry)?;
             }
             match axes.mode {
                 AxisMode::Single => {}
@@ -1329,6 +1397,46 @@ impl ProjectDocument {
     }
 }
 
+fn validate_axis_scale_slot(
+    axis: &AxisRecord,
+    labels: &[SemanticLabel],
+) -> Result<(), ProjectError> {
+    let Some(label) = labels.iter().find(|label| label.id == axis.label_id) else {
+        return Ok(());
+    };
+    fn count(nodes: &[LabelNode]) -> usize {
+        nodes
+            .iter()
+            .map(|node| match node {
+                LabelNode::ScaleFactorSlot => 1,
+                LabelNode::DescriptiveSubscript(nodes)
+                | LabelNode::VariableSubscript(nodes)
+                | LabelNode::Superscript(nodes) => count(nodes),
+                _ => 0,
+            })
+            .sum()
+    }
+    let slots = count(&label.nodes);
+    if slots > 1 {
+        return Err(ProjectError::Validation(format!(
+            "axis {} label contains more than one scale-factor slot",
+            axis.id
+        )));
+    }
+    if slots != 0
+        && matches!(
+            axis.display_scale,
+            AxisDisplayScaleRecord::None | AxisDisplayScaleRecord::ManualIncorporated { .. }
+        )
+    {
+        return Err(ProjectError::Validation(format!(
+            "axis {} label contains a scale slot while factor display is disabled",
+            axis.id
+        )));
+    }
+    Ok(())
+}
+
 mod storage;
 
 use storage::source_state;
@@ -1402,7 +1510,7 @@ mod migration;
 
 use migration::{
     migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
-    migrate_v8,
+    migrate_v8, migrate_v9, migrate_v10,
 };
 
 #[cfg(test)]
