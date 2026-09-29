@@ -107,7 +107,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = & target/release/instplot-studio.exe --product-info
-          $expected = "InstPlot Studio`tinstplot-studio`t0.1.0"
+          $expected = "InstPlot Studio`tinstplot-studio`t0.1.1"
           if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }
           & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
           if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
