@@ -18,8 +18,6 @@
 
 Secrets：
 
-- `ALIYUN_OSS_ACCESS_KEY_ID`
-- `ALIYUN_OSS_ACCESS_KEY_SECRET`
 - `UPDATE_SIGNING_PRIVATE_KEY`（当前 Ed25519 PEM 私钥；不要添加下一把私钥）
 
 Variables：
@@ -28,12 +26,19 @@ Variables：
 - `OSS_REGION`
 - `OSS_ENDPOINT`，例如 `https://oss-cn-beijing.aliyuncs.com`
 - `OSS_PUBLIC_ROOT`，必须是固定 HTTPS 产品根，例如 `https://download.example/instplot-studio`
+- `ALIYUN_OIDC_PROVIDER_ARN`
+- `ALIYUN_ROLE_ARN`
 - `UPDATE_KEY_ID`
 - `UPDATE_PUBLIC_KEY_HEX`（32 字节，即 64 个十六进制字符）
 - `UPDATE_NEXT_KEY_ID`
 - `UPDATE_NEXT_PUBLIC_KEY_HEX`
 
 当前和下一把公钥必须在构建 RC 前同时固化到应用；对应私钥离线生成并备份，只有当前私钥进入 Environment。
+
+OSS 身份使用 GitHub OIDC 换取阿里云短期 STS 凭据，不保存长期 AccessKey。OIDC
+角色的 `oidc:sub` 必须精确限制为
+`repo:zhiyuzhang001-a11y/InstPlot-Studio:environment:release-production`，角色权限只允许
+`instplot-release/instplot-studio/*` 的 `GetObject` 和 `PutObject`。
 
 ## 3. 首次 RC 的准备顺序
 
@@ -67,7 +72,7 @@ Variables：
 
 ## 6. 仍需用户/账户侧完成
 
-- OSS Public Root、Bucket、地域、RAM 最小权限和费用/保留策略。
+- OSS Public Root、Bucket、地域、OIDC RAM 最小权限和费用/保留策略已配置；首次发布前仍需执行真实短期凭据探针。
 - 正式当前/下一把 Ed25519 信任根。
 - Apple Developer ID、notarization 凭据。
 - Windows Authenticode 证书或受控云签名服务。

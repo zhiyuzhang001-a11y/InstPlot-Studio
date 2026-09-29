@@ -370,11 +370,11 @@ apps/instplot-studio/src/update/
 这是用户账户侧配置最集中的阶段；Stage 0/1 已需要用户提前冻结平台范围、Public Root 和正式公钥，Stage 8 还需要用户批准真实发布：
 
 1. 创建或确认与 Stage 1 信任根完全一致的专用 Bucket、地域、HTTPS 公网 Endpoint/自定义域名，并设置版本化对象与 stable 指针的 Cache-Control。
-2. 优先评估 GitHub OIDC 换取阿里云短期凭据；若当前条件不支持，再创建只允许写入 `instplot-studio/` 前缀的长期 RAM 身份，不使用阿里云主账号密钥。
+2. 使用 GitHub OIDC 换取阿里云短期凭据；身份提供商、受保护角色和只允许写入 `instplot-studio/` 前缀的最小权限策略已经配置，不使用阿里云主账号或长期 AccessKey。
 3. 建立受保护的 GitHub `production` Environment，配置审批、分支/tag 限制和 Secret 访问边界。
-4. 如果使用长期 RAM Key，配置并制定轮换周期：
-   - `ALIYUN_OSS_ACCESS_KEY_ID`
-   - `ALIYUN_OSS_ACCESS_KEY_SECRET`
+4. 在 `release-production` Environment 配置 `ALIYUN_OIDC_PROVIDER_ARN` 和
+   `ALIYUN_ROLE_ARN`；工作流只请求短期 STS 凭据，角色的 `oidc:sub` 精确限制为
+   `repo:zhiyuzhang001-a11y/InstPlot-Studio:environment:release-production`。
 5. 将 Stage 1 已离线生成的当前正式 `UPDATE_SIGNING_PRIVATE_KEY` 放入 Environment Secret；下一把轮换私钥继续离线保存，未轮换前不上传。
 6. 配置产品 Variables：Bucket、Endpoint、Public Root、Product Slug、当前 key ID、公钥和资产文件规则，并与应用常量做自动一致性检查。
 7. 将 Apple Developer ID/notarization 凭据和 Windows Authenticode 凭据放入同一受保护 Environment 的独立 Secrets，只让各自平台签名 job 读取。macOS 使用临时 keychain/API key 并在 `always()` 清理；Windows 使用临时证书存储或受控云签名并在 `always()` 清理，随后用平台工具验证最终签名。
@@ -500,7 +500,7 @@ python3 scripts/check_repository_hygiene.py
 - 是否正式支持 Intel macOS。
 - Linux 首发默认推荐 DEB 还是便携包。
 - OSS Bucket、地域、Public Root、自定义域名、缓存费用与历史对象保留策略。
-- GitHub OIDC 到阿里云的信任，或退而使用长期 RAM 凭据及轮换周期。
+- GitHub OIDC 到阿里云的信任已配置；仍需在合并后以无写入探针验证真实 STS 扮演和前缀权限边界。
 - 正式当前/下一把 Ed25519 密钥的离线生成与备份，以及当前私钥进入受保护 GitHub Environment Secret。
 - Apple Developer ID/notarization 凭据；
 - Windows Authenticode 证书；

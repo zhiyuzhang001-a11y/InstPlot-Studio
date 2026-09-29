@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: oss-release-${{ github.repository }}
@@ -49,12 +50,12 @@ jobs:
       OSS_REGION: ${{ vars.OSS_REGION }}
       OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT }}
       OSS_PUBLIC_ROOT: ${{ vars.OSS_PUBLIC_ROOT }}
+      ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
+      ALIYUN_ROLE_ARN: ${{ vars.ALIYUN_ROLE_ARN }}
       UPDATE_KEY_ID: ${{ vars.UPDATE_KEY_ID }}
       UPDATE_PUBLIC_KEY_HEX: ${{ vars.UPDATE_PUBLIC_KEY_HEX }}
       UPDATE_NEXT_KEY_ID: ${{ vars.UPDATE_NEXT_KEY_ID }}
       UPDATE_NEXT_PUBLIC_KEY_HEX: ${{ vars.UPDATE_NEXT_PUBLIC_KEY_HEX }}
-      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
-      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
 
     steps:
       - name: Check out the frozen Release source
@@ -71,7 +72,7 @@ jobs:
           set -euo pipefail
           for name in RELEASE_TAG SOURCE_SHA RELEASE_SEQUENCE EXPIRES_AT OSS_BUCKET OSS_REGION \
             OSS_ENDPOINT OSS_PUBLIC_ROOT UPDATE_KEY_ID UPDATE_PUBLIC_KEY_HEX \
-            OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
+            ALIYUN_OIDC_PROVIDER_ARN ALIYUN_ROLE_ARN; do
             [[ -n "${!name}" ]] || { echo "Missing protected configuration: ${name}" >&2; exit 1; }
           done
           test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
@@ -186,6 +187,15 @@ jobs:
               "${OSS_PUBLIC_ROOT}/${relative}?existence-check=${GITHUB_RUN_ID}")
             [[ "${status}" == 404 ]] || { echo "Immutable object is not safely absent (${status}): ${relative}" >&2; exit 1; }
           done < <(find "${release_root}" -type f -print0 | sort -z)
+
+      - name: Obtain short-lived Alibaba Cloud credentials
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1
+        with:
+          oidc-provider-arn: ${{ env.ALIYUN_OIDC_PROVIDER_ARN }}
+          role-to-assume: ${{ env.ALIYUN_ROLE_ARN }}
+          role-session-name: instplot-studio-${{ github.run_id }}
+          role-session-expiration: 900
+          audience: sts.aliyuncs.com
 
       - name: Upload immutable packages and metadata
         shell: bash
