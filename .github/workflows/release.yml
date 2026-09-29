@@ -106,6 +106,7 @@ jobs:
           instplot-studio --export-fixed-png target/linux-installed.png
           test -s target/linux-installed.png
           sudo apt-get remove -y instplot-studio
+          hash -r
           if command -v instplot-studio; then
             echo "instplot-studio remains on PATH after uninstall" >&2
             exit 1
