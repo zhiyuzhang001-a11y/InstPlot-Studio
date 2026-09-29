@@ -201,6 +201,16 @@ jobs:
           role-session-expiration: 900
           audience: sts.aliyuncs.com
 
+      - name: Expose STS credentials to ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "OSS_ACCESS_KEY_ID=${ALIBABA_CLOUD_ACCESS_KEY_ID}"
+            echo "OSS_ACCESS_KEY_SECRET=${ALIBABA_CLOUD_ACCESS_KEY_SECRET}"
+            echo "OSS_SESSION_TOKEN=${ALIBABA_CLOUD_SECURITY_TOKEN}"
+          } >> "${GITHUB_ENV}"
+
       - name: Upload immutable packages and metadata
         shell: bash
         run: |
