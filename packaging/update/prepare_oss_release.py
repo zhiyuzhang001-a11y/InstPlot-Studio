@@ -69,21 +69,26 @@ def channel_for(version: str) -> str:
     return "prerelease" if match.group(4) else "stable"
 
 
+def signature_tool(*arguments: str) -> list[str]:
+    return [
+        "cargo",
+        "run",
+        "--locked",
+        "--quiet",
+        "--package",
+        "instplot-update-signature",
+        "--",
+        *arguments,
+    ]
+
+
 def verify_private_key(private_key: Path, public_key_hex: str) -> None:
     if not re.fullmatch(r"[0-9a-fA-F]{64}", public_key_hex):
         raise ValueError("Ed25519 public key must contain 64 hexadecimal characters")
-    public_der = subprocess.check_output(
-        [
-            "openssl",
-            "pkey",
-            "-in",
-            str(private_key),
-            "-pubout",
-            "-outform",
-            "DER",
-        ]
-    )
-    if len(public_der) != 44 or public_der[-32:].hex() != public_key_hex.lower():
+    actual = subprocess.check_output(
+        signature_tool("public-key-hex", str(private_key)), text=True
+    ).strip()
+    if actual != public_key_hex.lower():
         raise ValueError("private key does not match the configured public key")
 
 
@@ -228,18 +233,9 @@ def prepare(
     manifest_path.write_bytes(manifest_bytes)
     latest_path.write_bytes(manifest_bytes)
     subprocess.run(
-        [
-            "openssl",
-            "pkeyutl",
-            "-sign",
-            "-rawin",
-            "-inkey",
-            str(private_key),
-            "-in",
-            str(manifest_path),
-            "-out",
-            str(signature_path),
-        ],
+        signature_tool(
+            "sign", str(private_key), str(manifest_path), str(signature_path)
+        ),
         check=True,
     )
     if signature_path.stat().st_size != 64:

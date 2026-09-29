@@ -7,6 +7,7 @@ members = [
     "crates/instplot-render",
     "crates/instplot-text",
     "crates/instplot-ui",
+    "tools/instplot-update-signature",
 ]
 exclude = [
     "prototypes/layout-engine-spike",

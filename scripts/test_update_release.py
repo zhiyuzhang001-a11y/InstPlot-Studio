@@ -29,28 +29,14 @@ class UpdateReleaseTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.private_key = self.root / "private.pem"
-        self.public_der = self.root / "public.der"
         subprocess.run(
             ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(self.private_key)],
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        subprocess.run(
-            [
-                "openssl",
-                "pkey",
-                "-in",
-                str(self.private_key),
-                "-pubout",
-                "-outform",
-                "DER",
-                "-out",
-                str(self.public_der),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        self.public_key_hex = self.public_der.read_bytes()[-32:].hex()
+        self.public_key_hex = subprocess.check_output(
+            MODULE.signature_tool("public-key-hex", str(self.private_key)), text=True
+        ).strip()
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -103,21 +89,9 @@ class UpdateReleaseTests(unittest.TestCase):
         self.assertEqual(payload["release_sequence"], 1)
         self.assertEqual(payload["platforms"]["linux-x86_64"]["preferred"], "deb")
         result = subprocess.run(
-            [
-                "openssl",
-                "pkeyutl",
-                "-verify",
-                "-pubin",
-                "-rawin",
-                "-inkey",
-                str(self.public_der),
-                "-keyform",
-                "DER",
-                "-in",
-                str(manifest),
-                "-sigfile",
-                str(signature),
-            ],
+            MODULE.signature_tool(
+                "verify", self.public_key_hex, str(manifest), str(signature)
+            ),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

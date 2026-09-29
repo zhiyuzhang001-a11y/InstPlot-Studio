@@ -150,22 +150,18 @@ def verify_signature(manifest: Path, signature: Path, keys: dict[str, str], root
     for key_id, public_key_hex in sorted(keys.items()):
         if len(public_key_hex) != 64:
             raise ValueError(f"invalid public key length for {key_id}")
-        public_der = root / f"{key_id}.der"
-        public_der.write_bytes(bytes.fromhex("302a300506032b6570032100") + bytes.fromhex(public_key_hex))
         result = subprocess.run(
             [
-                "openssl",
-                "pkeyutl",
-                "-verify",
-                "-pubin",
-                "-rawin",
-                "-keyform",
-                "DER",
-                "-inkey",
-                str(public_der),
-                "-in",
+                "cargo",
+                "run",
+                "--locked",
+                "--quiet",
+                "--package",
+                "instplot-update-signature",
+                "--",
+                "verify",
+                public_key_hex,
                 str(manifest),
-                "-sigfile",
                 str(signature),
             ],
             check=False,
