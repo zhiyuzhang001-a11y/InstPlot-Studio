@@ -288,9 +288,11 @@ pub fn paint_resolved_graphics_only(
 fn paint_resolved_display_list_impl(
     painter: &egui::Painter,
     list: &ResolvedDisplayList,
-    transform: ScreenTransform,
+    mut transform: ScreenTransform,
     paint_text: bool,
 ) {
+    let (translate_x, translate_y) = list.geometry.export_translation;
+    transform.origin += Vec2::new(translate_x, translate_y) * transform.zoom;
     let mut current = painter.clone();
     let mut clips = Vec::new();
     for item in &list.items {

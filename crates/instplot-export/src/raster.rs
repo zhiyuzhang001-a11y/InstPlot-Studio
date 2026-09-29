@@ -98,12 +98,26 @@ pub fn rasterize_direct(
 ) -> Result<RasterImage, RasterError> {
     let (width, height, mut pixmap) = empty_pixmap(list, dpi, background)?;
     let scale = dpi as f32 / 72.0;
-    let transform = Transform::from_scale(scale, scale);
+    let (translate_x, translate_y) = list.geometry.export_translation;
+    let transform = Transform::from_row(
+        scale,
+        0.0,
+        0.0,
+        scale,
+        translate_x * scale,
+        translate_y * scale,
+    );
     let mut clips: Vec<Mask> = Vec::new();
 
     for item in &list.items {
         match item {
-            ResolvedItem::Text(text) => draw_text(&mut pixmap, text, scale, clips.last()),
+            ResolvedItem::Text(text) => draw_text(
+                &mut pixmap,
+                text,
+                scale,
+                (translate_x, translate_y),
+                clips.last(),
+            ),
             ResolvedItem::Graphics(DisplayItem::Path {
                 path, fill, stroke, ..
             }) => {
@@ -197,8 +211,8 @@ pub fn rasterize_direct(
                         0.0,
                         0.0,
                         image.height.get() as f32 * scale / asset.height as f32,
-                        image.x.get() as f32 * scale,
-                        image.y.get() as f32 * scale,
+                        (image.x.get() as f32 + translate_x) * scale,
+                        (image.y.get() as f32 + translate_y) * scale,
                     );
                     pixmap.draw_pixmap(
                         0,
@@ -285,22 +299,30 @@ pub fn checked_raster_dimensions(
     let height_px = height_pt * f64::from(dpi) / 72.0;
     if !width_px.is_finite()
         || !height_px.is_finite()
-        || width_px < 0.5
-        || height_px < 0.5
-        || width_px > f64::from(u32::MAX) - 0.5
-        || height_px > f64::from(u32::MAX) - 0.5
+        || width_px <= 0.0
+        || height_px <= 0.0
+        || width_px > f64::from(u32::MAX)
+        || height_px > f64::from(u32::MAX)
     {
         return Err(RasterError::InvalidDimensions);
     }
-    let width = round_half_away(width_px);
-    let height = round_half_away(height_px);
+    // Export bounds describe an outer envelope. Always round outward so a
+    // fractional final pixel can never crop the last antialiased edge.
+    let width = width_px.ceil() as u32;
+    let height = height_px.ceil() as u32;
     if u64::from(width) * u64::from(height) > MAX_RASTER_PIXELS {
         return Err(RasterError::TooLarge { width, height });
     }
     Ok((width, height))
 }
 
-fn draw_text(pixmap: &mut Pixmap, text: &ResolvedText, scale: f32, clip: Option<&Mask>) {
+fn draw_text(
+    pixmap: &mut Pixmap,
+    text: &ResolvedText,
+    scale: f32,
+    translation: (f32, f32),
+    clip: Option<&Mask>,
+) {
     let mut paint = Paint::default();
     paint.set_color_rgba8(text.color.0, text.color.1, text.color.2, text.color.3);
     paint.anti_alias = true;
@@ -319,6 +341,7 @@ fn draw_text(pixmap: &mut Pixmap, text: &ResolvedText, scale: f32, clip: Option<
                 text.x,
                 text.y,
                 scale,
+                translation,
             );
             if face
                 .outline_glyph(GlyphId(glyph.id as u16), &mut builder)
@@ -368,6 +391,7 @@ struct GlyphPathBuilder {
     pivot_x: f32,
     pivot_y: f32,
     raster_scale: f32,
+    translation: (f32, f32),
 }
 
 impl GlyphPathBuilder {
@@ -380,6 +404,7 @@ impl GlyphPathBuilder {
         pivot_x: f32,
         pivot_y: f32,
         raster_scale: f32,
+        translation: (f32, f32),
     ) -> Self {
         let angle = rotation_degrees.to_radians();
         Self {
@@ -392,6 +417,7 @@ impl GlyphPathBuilder {
             pivot_x,
             pivot_y,
             raster_scale,
+            translation,
         }
     }
 
@@ -401,8 +427,8 @@ impl GlyphPathBuilder {
         let dx = x - self.pivot_x;
         let dy = y - self.pivot_y;
         (
-            (self.pivot_x + dx * self.cos - dy * self.sin) * self.raster_scale,
-            (self.pivot_y + dx * self.sin + dy * self.cos) * self.raster_scale,
+            (self.pivot_x + dx * self.cos - dy * self.sin + self.translation.0) * self.raster_scale,
+            (self.pivot_y + dx * self.sin + dy * self.cos + self.translation.1) * self.raster_scale,
         )
     }
 
@@ -464,10 +490,6 @@ fn asset_pixmap(asset: &RasterAsset) -> Option<Pixmap> {
         premultiplied.extend_from_slice(&[value.red(), value.green(), value.blue(), value.alpha()]);
     }
     Pixmap::from_vec(premultiplied, IntSize::from_wh(asset.width, asset.height)?)
-}
-
-fn round_half_away(value: f64) -> u32 {
-    (value + 0.5).floor() as u32
 }
 
 #[cfg(test)]

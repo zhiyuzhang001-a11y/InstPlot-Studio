@@ -93,6 +93,9 @@ mod tests {
             "Plot Demo — sample.csv *"
         );
         assert_eq!(branding.footer_label(), "Plot Demo · v1.2.3 · qa");
+
+        let public_branding = Branding::new("Plot Demo", "1.2.3");
+        assert_eq!(public_branding.footer_label(), "Plot Demo · v1.2.3");
     }
 
     #[test]

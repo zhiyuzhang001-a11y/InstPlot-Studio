@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io::Write;
+use std::num::NonZeroI32;
 use std::path::{Path, PathBuf};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
@@ -9,11 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 7;
+pub const PROJECT_SCHEMA_VERSION: u32 = 11;
 /// Default physical stroke used by newly created data curves.
 pub const DEFAULT_CURVE_WIDTH_PT: f64 = 1.0;
 /// Default physical stroke used by newly created error bars.
 pub const DEFAULT_ERROR_BAR_WIDTH_PT: f64 = 1.0;
+/// Canonical dash pattern used by newly created scientific reference lines.
+pub const DEFAULT_REFERENCE_DASH_PT: [f64; 2] = [4.0, 2.4];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,7 +37,9 @@ pub struct ProjectDocument {
 #[serde(deny_unknown_fields)]
 pub struct FigureRecord {
     pub id: String,
+    /// Total canvas width used by preview and ordinary document layout.
     pub width_mm: f64,
+    /// Total canvas height used by preview and ordinary document layout.
     pub height_mm: f64,
     pub axes: Vec<AxesRecord>,
     pub artists: Vec<ArtistRecord>,
@@ -46,7 +51,112 @@ pub struct AxesRecord {
     pub id: String,
     pub x: AxisRecord,
     pub y: AxisRecord,
+    #[serde(default)]
+    pub mode: AxisMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x2: Option<AxisRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y2: Option<AxisRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series_groups: Vec<SeriesGroupRecord>,
     pub artist_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisMode {
+    #[default]
+    Single,
+    DualX,
+    DualY,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisEdge {
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisIdentity {
+    X1,
+    X2,
+    Y1,
+    Y2,
+}
+
+impl AxisMode {
+    /// Returns the single axis that owns an edge in this mode. Far-edge ticks
+    /// remain owned by the primary axis until an independent secondary axis is enabled.
+    pub const fn edge_owner(self, edge: AxisEdge) -> AxisIdentity {
+        match (self, edge) {
+            (_, AxisEdge::Bottom) => AxisIdentity::X1,
+            (AxisMode::DualX, AxisEdge::Top) => AxisIdentity::X2,
+            (_, AxisEdge::Top) => AxisIdentity::X1,
+            (_, AxisEdge::Left) => AxisIdentity::Y1,
+            (AxisMode::DualY, AxisEdge::Right) => AxisIdentity::Y2,
+            (_, AxisEdge::Right) => AxisIdentity::Y1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum XAxisSlot {
+    #[default]
+    X1,
+    X2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YAxisSlot {
+    #[default]
+    Y1,
+    Y2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxisBinding {
+    #[serde(default)]
+    pub x: XAxisSlot,
+    #[serde(default)]
+    pub y: YAxisSlot,
+}
+
+impl AxisBinding {
+    pub const PRIMARY: Self = Self {
+        x: XAxisSlot::X1,
+        y: YAxisSlot::Y1,
+    };
+
+    pub const fn is_supported(self) -> bool {
+        !matches!((self.x, self.y), (XAxisSlot::X2, YAxisSlot::Y2))
+    }
+
+    pub const fn is_enabled_in(self, mode: AxisMode) -> bool {
+        self.is_supported()
+            && match (self.x, self.y) {
+                (XAxisSlot::X1, YAxisSlot::Y1) => true,
+                (XAxisSlot::X2, YAxisSlot::Y1) => matches!(mode, AxisMode::DualX),
+                (XAxisSlot::X1, YAxisSlot::Y2) => matches!(mode, AxisMode::DualY),
+                (XAxisSlot::X2, YAxisSlot::Y2) => false,
+            }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesGroupRecord {
+    pub id: String,
+    pub artist_ids: Vec<String>,
+    #[serde(default)]
+    pub axes: AxisBinding,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,14 +172,53 @@ pub struct AxisRecord {
     pub minor_interval: Option<f64>,
     pub formatter: FormatterSpec,
     #[serde(default)]
+    pub display_scale: AxisDisplayScaleRecord,
+    #[serde(default)]
     pub autoscale: bool,
     #[serde(default)]
     pub appearance: AxisAppearanceRecord,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AxisDisplayScaleRecord {
+    #[default]
+    AutoFactor,
+    None,
+    ManualFactor {
+        exponent: NonZeroI32,
+    },
+    ManualIncorporated {
+        exponent: NonZeroI32,
+    },
+}
+
+impl AxisDisplayScaleRecord {
+    pub fn manual_factor(exponent: i32) -> Option<Self> {
+        NonZeroI32::new(exponent).map(|exponent| Self::ManualFactor { exponent })
+    }
+
+    pub fn manual_incorporated(exponent: i32) -> Option<Self> {
+        NonZeroI32::new(exponent).map(|exponent| Self::ManualIncorporated { exponent })
+    }
+
+    pub const fn exponent(self) -> Option<i32> {
+        match self {
+            Self::ManualFactor { exponent } | Self::ManualIncorporated { exponent } => {
+                Some(exponent.get())
+            }
+            Self::AutoFactor | Self::None => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AxisAppearanceRecord {
+    #[serde(default)]
+    pub visibility: AxisVisibilityRecord,
+    #[serde(default = "default_axis_color_id")]
+    pub spine_color_id: String,
     pub near_spine: bool,
     pub far_spine: bool,
     pub near_ticks: bool,
@@ -86,9 +235,31 @@ pub struct AxisAppearanceRecord {
     pub label_tick_pad_pt: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AxisVisibilityRecord {
+    pub spine: bool,
+    pub ticks: bool,
+    pub tick_labels: bool,
+    pub label: bool,
+}
+
+impl Default for AxisVisibilityRecord {
+    fn default() -> Self {
+        Self {
+            spine: true,
+            ticks: true,
+            tick_labels: true,
+            label: true,
+        }
+    }
+}
+
 impl Default for AxisAppearanceRecord {
     fn default() -> Self {
         Self {
+            visibility: AxisVisibilityRecord::default(),
+            spine_color_id: default_axis_color_id(),
             near_spine: true,
             far_spine: true,
             near_ticks: true,
@@ -105,6 +276,10 @@ impl Default for AxisAppearanceRecord {
             label_tick_pad_pt: 4.0,
         }
     }
+}
+
+fn default_axis_color_id() -> String {
+    "object-black".to_owned()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +331,7 @@ pub enum ArtistKind {
     Scatter,
     ErrorBar,
     ReferenceLine,
+    MeasurementArrow,
     Annotation,
     Legend,
 }
@@ -177,12 +353,33 @@ pub enum ArtistRole {
 pub struct AnnotationConnectorRecord {
     pub target_x: f64,
     pub target_y: f64,
+    #[serde(default)]
+    pub axes: AxisBinding,
     pub stroke: StrokeStyle,
     #[serde(default)]
     pub start_arrow: bool,
     #[serde(default)]
     pub end_arrow: bool,
+    #[serde(default)]
+    pub arrow_head: ArrowHead,
     pub arrow_size_pt: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowHead {
+    #[default]
+    Open,
+    Filled,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementConstraint {
+    #[default]
+    Free,
+    Horizontal,
+    Vertical,
 }
 
 fn default_true() -> bool {
@@ -211,7 +408,35 @@ pub enum ArtistProperties {
     ReferenceLine {
         orientation: ReferenceOrientation,
         value: f64,
+        #[serde(default)]
+        axes: AxisBinding,
         stroke: StrokeStyle,
+        #[serde(default = "default_true")]
+        include_in_autoscale: bool,
+    },
+    MeasurementArrow {
+        start_x: f64,
+        start_y: f64,
+        end_x: f64,
+        end_y: f64,
+        #[serde(default)]
+        axes: AxisBinding,
+        stroke: StrokeStyle,
+        #[serde(default)]
+        start_arrow: bool,
+        #[serde(default = "default_true")]
+        end_arrow: bool,
+        #[serde(default)]
+        arrow_head: ArrowHead,
+        arrow_size_pt: f64,
+        #[serde(default)]
+        constraint: MeasurementConstraint,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label_id: Option<String>,
+        #[serde(default)]
+        label_offset_x_pt: f64,
+        #[serde(default)]
+        label_offset_y_pt: f64,
     },
     Annotation {
         label_id: String,
@@ -485,6 +710,7 @@ pub enum LabelNode {
     Operator(String),
     Emphasis(String),
     BoldVariable(String),
+    ScaleFactorSlot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -658,6 +884,59 @@ fn showcase_curve_value(index: usize, x: f64) -> f64 {
 mod fixture;
 
 impl ProjectDocument {
+    pub fn series_group_for_artist(&self, artist_id: &str) -> Option<&SeriesGroupRecord> {
+        self.figure
+            .axes
+            .first()?
+            .series_groups
+            .iter()
+            .find(|group| {
+                group
+                    .artist_ids
+                    .iter()
+                    .any(|candidate| candidate == artist_id)
+            })
+    }
+
+    pub fn artist_axis_binding(&self, artist: &ArtistRecord) -> Option<AxisBinding> {
+        match &artist.properties {
+            ArtistProperties::Line { .. }
+            | ArtistProperties::Scatter { .. }
+            | ArtistProperties::ErrorBar { .. } => self
+                .series_group_for_artist(&artist.id)
+                .map(|group| group.axes),
+            ArtistProperties::ReferenceLine {
+                orientation, axes, ..
+            } => Some(match orientation {
+                ReferenceOrientation::Vertical => AxisBinding {
+                    x: axes.x,
+                    y: YAxisSlot::Y1,
+                },
+                ReferenceOrientation::Horizontal => AxisBinding {
+                    x: XAxisSlot::X1,
+                    y: axes.y,
+                },
+            }),
+            ArtistProperties::MeasurementArrow { axes, .. } => Some(*axes),
+            ArtistProperties::Annotation { .. } | ArtistProperties::Legend { .. } => None,
+        }
+    }
+
+    pub fn artist_effectively_visible(&self, artist: &ArtistRecord) -> bool {
+        artist.visible
+            && self
+                .artist_axis_binding(artist)
+                .is_none_or(|binding| binding.is_enabled_in(self.figure.axes[0].mode))
+    }
+
+    pub fn artist_id_effectively_visible(&self, artist_id: &str) -> bool {
+        self.figure
+            .artists
+            .iter()
+            .find(|artist| artist.id == artist_id)
+            .is_some_and(|artist| self.artist_effectively_visible(artist))
+    }
+
     pub fn validate(&self) -> Result<(), ProjectError> {
         if self.schema_version != PROJECT_SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedSchema(self.schema_version));
@@ -709,8 +988,36 @@ impl ProjectDocument {
             insert_id(&mut ids, &axes.id)?;
             insert_id(&mut ids, &axes.x.id)?;
             insert_id(&mut ids, &axes.y.id)?;
-            validate_axis(&axes.x, &labels)?;
-            validate_axis(&axes.y, &labels)?;
+            validate_axis(&axes.x, &labels, &palette_colors)?;
+            validate_axis(&axes.y, &labels, &palette_colors)?;
+            validate_axis_scale_slot(&axes.x, &self.semantic_registry)?;
+            validate_axis_scale_slot(&axes.y, &self.semantic_registry)?;
+            if let Some(axis) = &axes.x2 {
+                insert_id(&mut ids, &axis.id)?;
+                validate_axis(axis, &labels, &palette_colors)?;
+                validate_axis_scale_slot(axis, &self.semantic_registry)?;
+            }
+            if let Some(axis) = &axes.y2 {
+                insert_id(&mut ids, &axis.id)?;
+                validate_axis(axis, &labels, &palette_colors)?;
+                validate_axis_scale_slot(axis, &self.semantic_registry)?;
+            }
+            match axes.mode {
+                AxisMode::Single => {}
+                AxisMode::DualX if axes.x2.is_none() => {
+                    return Err(ProjectError::Validation(format!(
+                        "axes {} enables X2 without an X2 record",
+                        axes.id
+                    )));
+                }
+                AxisMode::DualY if axes.y2.is_none() => {
+                    return Err(ProjectError::Validation(format!(
+                        "axes {} enables Y2 without a Y2 record",
+                        axes.id
+                    )));
+                }
+                AxisMode::DualX | AxisMode::DualY => {}
+            }
             let mut axes_artists = BTreeSet::new();
             for artist_id in &axes.artist_ids {
                 if !artists.contains(artist_id) {
@@ -732,9 +1039,133 @@ impl ProjectDocument {
                     axes.id
                 )));
             }
+            let data_artists = self
+                .figure
+                .artists
+                .iter()
+                .filter(|artist| {
+                    matches!(
+                        artist.kind,
+                        ArtistKind::Line | ArtistKind::Scatter | ArtistKind::ErrorBar
+                    )
+                })
+                .map(|artist| artist.id.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut grouped_artists = BTreeSet::new();
+            for group in &axes.series_groups {
+                insert_id(&mut ids, &group.id)?;
+                if group.artist_ids.is_empty() || !group.axes.is_supported() {
+                    return Err(ProjectError::Validation(format!(
+                        "series group {} is empty or uses an unsupported axis combination",
+                        group.id
+                    )));
+                }
+                for artist_id in &group.artist_ids {
+                    if !data_artists.contains(artist_id.as_str()) {
+                        return Err(ProjectError::Validation(format!(
+                            "series group {} references non-data artist {artist_id}",
+                            group.id
+                        )));
+                    }
+                    if !grouped_artists.insert(artist_id.as_str()) {
+                        return Err(ProjectError::Validation(format!(
+                            "data artist {artist_id} belongs to more than one series group"
+                        )));
+                    }
+                }
+            }
+            if grouped_artists != data_artists {
+                return Err(ProjectError::Validation(format!(
+                    "axes {} must assign every data artist to exactly one series group",
+                    axes.id
+                )));
+            }
         }
         for artist in &self.figure.artists {
             validate_artist(artist, &sources, &labels, &artists, &palette_colors)?;
+        }
+        let axes = &self.figure.axes[0];
+        for artist in &self.figure.artists {
+            let positive_required = |binding: AxisBinding, x: f64, y: f64| {
+                let x_axis = match binding.x {
+                    XAxisSlot::X1 => Some(&axes.x),
+                    XAxisSlot::X2 => axes.x2.as_ref(),
+                };
+                let y_axis = match binding.y {
+                    YAxisSlot::Y1 => Some(&axes.y),
+                    YAxisSlot::Y2 => axes.y2.as_ref(),
+                };
+                x_axis.is_some_and(|axis| axis.scale == AxisScale::Log10 && x <= 0.0)
+                    || y_axis.is_some_and(|axis| axis.scale == AxisScale::Log10 && y <= 0.0)
+            };
+            let invalid_log_coordinate = match &artist.properties {
+                ArtistProperties::ReferenceLine {
+                    orientation,
+                    value,
+                    axes: binding,
+                    ..
+                } => match orientation {
+                    ReferenceOrientation::Vertical => positive_required(*binding, *value, 1.0),
+                    ReferenceOrientation::Horizontal => positive_required(*binding, 1.0, *value),
+                },
+                ArtistProperties::MeasurementArrow {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                    axes: binding,
+                    ..
+                } => {
+                    positive_required(*binding, *start_x, *start_y)
+                        || positive_required(*binding, *end_x, *end_y)
+                }
+                _ => false,
+            };
+            if invalid_log_coordinate {
+                return Err(ProjectError::Validation(format!(
+                    "artist {} has a non-positive coordinate on a logarithmic axis",
+                    artist.id
+                )));
+            }
+        }
+        let mut owned_labels = BTreeSet::new();
+        for artist in &self.figure.artists {
+            let owned_label = match &artist.properties {
+                ArtistProperties::MeasurementArrow {
+                    label_id: Some(label_id),
+                    ..
+                }
+                | ArtistProperties::Annotation { label_id, .. } => Some(label_id),
+                _ => None,
+            };
+            if let Some(label_id) = owned_label
+                && !owned_labels.insert(label_id)
+            {
+                return Err(ProjectError::Validation(format!(
+                    "semantic label {label_id} is owned by more than one artist"
+                )));
+            }
+        }
+        for artist in &self.figure.artists {
+            if let ArtistProperties::Legend { entries, .. } = &artist.properties {
+                for entry in entries {
+                    let target = self
+                        .figure
+                        .artists
+                        .iter()
+                        .find(|candidate| candidate.id == entry.artist_id)
+                        .expect("legend target existence was validated");
+                    if matches!(
+                        target.kind,
+                        ArtistKind::ReferenceLine | ArtistKind::MeasurementArrow
+                    ) {
+                        return Err(ProjectError::Validation(format!(
+                            "legend {} cannot include scientific guide {}",
+                            artist.id, target.id
+                        )));
+                    }
+                }
+            }
         }
         for source in &self.data_sources {
             if source.label.trim().is_empty() {
@@ -966,6 +1397,46 @@ impl ProjectDocument {
     }
 }
 
+fn validate_axis_scale_slot(
+    axis: &AxisRecord,
+    labels: &[SemanticLabel],
+) -> Result<(), ProjectError> {
+    let Some(label) = labels.iter().find(|label| label.id == axis.label_id) else {
+        return Ok(());
+    };
+    fn count(nodes: &[LabelNode]) -> usize {
+        nodes
+            .iter()
+            .map(|node| match node {
+                LabelNode::ScaleFactorSlot => 1,
+                LabelNode::DescriptiveSubscript(nodes)
+                | LabelNode::VariableSubscript(nodes)
+                | LabelNode::Superscript(nodes) => count(nodes),
+                _ => 0,
+            })
+            .sum()
+    }
+    let slots = count(&label.nodes);
+    if slots > 1 {
+        return Err(ProjectError::Validation(format!(
+            "axis {} label contains more than one scale-factor slot",
+            axis.id
+        )));
+    }
+    if slots != 0
+        && matches!(
+            axis.display_scale,
+            AxisDisplayScaleRecord::None | AxisDisplayScaleRecord::ManualIncorporated { .. }
+        )
+    {
+        return Err(ProjectError::Validation(format!(
+            "axis {} label contains a scale slot while factor display is disabled",
+            axis.id
+        )));
+    }
+    Ok(())
+}
+
 mod storage;
 
 use storage::source_state;
@@ -1038,7 +1509,8 @@ struct LegacyProjectV0 {
 mod migration;
 
 use migration::{
-    migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6,
+    migrate_v0, migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6, migrate_v7,
+    migrate_v8, migrate_v9, migrate_v10,
 };
 
 #[cfg(test)]

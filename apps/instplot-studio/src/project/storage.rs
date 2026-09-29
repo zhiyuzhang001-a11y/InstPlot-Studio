@@ -57,6 +57,10 @@ pub fn decode_project(bytes: &[u8]) -> Result<ProjectDocument, ProjectError> {
     let document = match version {
         PROJECT_SCHEMA_VERSION => serde_json::from_value(value)
             .map_err(|error| ProjectError::Decode(error.to_string()))?,
+        10 => migrate_v10(value)?,
+        9 => migrate_v9(value)?,
+        8 => migrate_v8(value)?,
+        7 => migrate_v7(value)?,
         6 => migrate_v6(value)?,
         5 => migrate_v5(value)?,
         4 => migrate_v4(value)?,
@@ -103,7 +107,7 @@ pub(super) fn source_state(source: &DataSourceRecord) -> SourceState {
 }
 
 fn report_for(document: ProjectDocument, source: OpenProjectSource) -> OpenProjectReport {
-    let warnings = document
+    let mut warnings = document
         .source_states()
         .into_iter()
         .filter_map(|(id, state)| match state {
@@ -116,7 +120,17 @@ fn report_for(document: ProjectDocument, source: OpenProjectSource) -> OpenProje
             )),
             SourceState::Unchanged | SourceState::Embedded => None,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if document
+        .provenance
+        .iter()
+        .any(|record| record.operation == "migrate_legacy_series_groups_with_ambiguity")
+    {
+        warnings.push(
+            "Some legacy plot elements could not be grouped into logical series unambiguously; they were kept as separate series"
+                .to_owned(),
+        );
+    }
     OpenProjectReport {
         document,
         source,

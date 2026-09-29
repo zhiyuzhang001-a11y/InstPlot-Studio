@@ -87,7 +87,8 @@ impl DataImporter {
         existing: &[DataSet],
         path: &Path,
     ) -> Result<(Vec<DataSet>, ImportOutcome), DataDiagnostic> {
-        let imported = Self::read_file(path)?;
+        let mut imported = Self::read_file(path)?;
+        reconcile_reimport_identities(existing, path, &mut imported);
         let skipped_unlinked_fits = imported
             .iter()
             .filter(|dataset| {
@@ -174,6 +175,65 @@ impl DataImporter {
             line_number: None,
             reason,
         })
+    }
+}
+
+/// The shared importer intentionally includes numeric values in generated IDs.
+/// Studio, however, treats reloading the same structurally unchanged section as
+/// replacing its data. Preserve the established identity when the datasets from
+/// one path form an unambiguous one-to-one structural match. Removed, added, or
+/// ambiguous sections continue through the existing stale-section rejection.
+fn reconcile_reimport_identities(existing: &[DataSet], path: &Path, imported: &mut [DataSet]) {
+    let previous = existing
+        .iter()
+        .filter(|dataset| dataset.source == path)
+        .collect::<Vec<_>>();
+    if previous.is_empty() || previous.len() != imported.len() {
+        return;
+    }
+
+    let structural_key = |dataset: &DataSet| {
+        (
+            dataset.kind,
+            dataset.label.clone(),
+            dataset
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let mut matched_previous = BTreeSet::new();
+    let mut id_map = std::collections::BTreeMap::new();
+    for dataset in imported.iter() {
+        let key = structural_key(dataset);
+        let matches = previous
+            .iter()
+            .enumerate()
+            .filter(|(index, candidate)| {
+                !matched_previous.contains(index) && structural_key(candidate) == key
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return;
+        }
+        let (index, candidate) = matches[0];
+        matched_previous.insert(index);
+        id_map.insert(dataset.plot_id.clone(), candidate.plot_id.clone());
+    }
+
+    for dataset in imported {
+        if let Some(stable_id) = id_map.get(&dataset.plot_id) {
+            dataset.plot_id.clone_from(stable_id);
+        }
+        if let Some(parent_id) = dataset
+            .fit_link
+            .as_mut()
+            .and_then(|link| link.parent_dataset_id.as_mut())
+            && let Some(stable_parent_id) = id_map.get(parent_id)
+        {
+            parent_id.clone_from(stable_parent_id);
+        }
     }
 }
 

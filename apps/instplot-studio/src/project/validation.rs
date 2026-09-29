@@ -3,7 +3,14 @@ use super::*;
 pub(super) fn validate_axis(
     axis: &AxisRecord,
     labels: &BTreeSet<String>,
+    palette_colors: &BTreeSet<String>,
 ) -> Result<(), ProjectError> {
+    if !palette_colors.contains(&axis.appearance.spine_color_id) {
+        return Err(ProjectError::Validation(format!(
+            "axis {} references an unknown spine color",
+            axis.id
+        )));
+    }
     if !axis.minimum.is_finite() || !axis.maximum.is_finite() || axis.minimum >= axis.maximum {
         return Err(ProjectError::Validation(format!(
             "axis {} requires finite minimum < maximum",
@@ -33,9 +40,7 @@ pub(super) fn validate_axis(
             if axis.scale != AxisScale::Linear
                 || !step.is_finite()
                 || *step <= 0.0
-                || (axis.maximum - axis.minimum) / step > 100.0
-                || (axis.minimum / step).abs() > i64::MAX as f64 / 4.0
-                || (axis.maximum / step).abs() > i64::MAX as f64 / 4.0 =>
+                || instplot_layout::tick_count_exceeds(axis.minimum, axis.maximum, *step, 100) =>
         {
             return Err(ProjectError::Validation(format!(
                 "axis {} interval locator requires a positive finite linear step with at most 100 ticks",
@@ -61,9 +66,7 @@ pub(super) fn validate_axis(
         && (axis.scale != AxisScale::Linear
             || !step.is_finite()
             || step <= 0.0
-            || (axis.maximum - axis.minimum) / step > 500.0
-            || (axis.minimum / step).abs() > i64::MAX as f64 / 4.0
-            || (axis.maximum / step).abs() > i64::MAX as f64 / 4.0)
+            || instplot_layout::tick_count_exceeds(axis.minimum, axis.maximum, step, 500))
     {
         return Err(ProjectError::Validation(format!(
             "axis {} minor interval requires a positive finite linear step with at most 500 ticks",
@@ -80,6 +83,23 @@ pub(super) fn validate_axis(
             )));
         }
         _ => {}
+    }
+    if let Some(exponent) = axis.display_scale.exponent() {
+        let factor = instplot_layout::checked_pow10(exponent).ok_or_else(|| {
+            ProjectError::Validation(format!(
+                "axis {} has an unrepresentable display-scale exponent",
+                axis.id
+            ))
+        })?;
+        if ![axis.minimum / factor, axis.maximum / factor]
+            .into_iter()
+            .all(f64::is_finite)
+        {
+            return Err(ProjectError::Validation(format!(
+                "axis {} display scale produces non-finite tick values",
+                axis.id
+            )));
+        }
     }
     if [
         axis.appearance.tick_label_pad_pt,
@@ -147,15 +167,72 @@ pub(super) fn validate_artist(
             }
             ArtistKind::ErrorBar
         }
-        ArtistProperties::ReferenceLine { value, stroke, .. } => {
+        ArtistProperties::ReferenceLine {
+            orientation,
+            value,
+            axes,
+            stroke,
+            ..
+        } => {
             validate_stroke(artist, stroke, palette_colors)?;
-            if !value.is_finite() {
+            let normalized = match orientation {
+                ReferenceOrientation::Vertical => axes.y == YAxisSlot::Y1,
+                ReferenceOrientation::Horizontal => axes.x == XAxisSlot::X1,
+            };
+            if !value.is_finite() || !axes.is_supported() || !normalized {
                 return Err(ProjectError::Validation(format!(
-                    "artist {} has a non-finite reference value",
+                    "artist {} has an invalid reference line",
                     artist.id
                 )));
             }
             ArtistKind::ReferenceLine
+        }
+        ArtistProperties::MeasurementArrow {
+            start_x,
+            start_y,
+            end_x,
+            end_y,
+            axes,
+            stroke,
+            arrow_size_pt,
+            constraint,
+            label_id,
+            label_offset_x_pt,
+            label_offset_y_pt,
+            ..
+        } => {
+            validate_stroke(artist, stroke, palette_colors)?;
+            let finite = [
+                *start_x,
+                *start_y,
+                *end_x,
+                *end_y,
+                *arrow_size_pt,
+                *label_offset_x_pt,
+                *label_offset_y_pt,
+            ]
+            .into_iter()
+            .all(f64::is_finite);
+            let constrained = match constraint {
+                MeasurementConstraint::Free => true,
+                MeasurementConstraint::Horizontal => (*start_y - *end_y).abs() <= 1.0e-12,
+                MeasurementConstraint::Vertical => (*start_x - *end_x).abs() <= 1.0e-12,
+            };
+            if !finite
+                || !axes.is_supported()
+                || stroke.color_id != "object-black"
+                || !(2.0..=18.0).contains(arrow_size_pt)
+                || ((*start_x - *end_x).abs() <= f64::EPSILON
+                    && (*start_y - *end_y).abs() <= f64::EPSILON)
+                || !constrained
+                || label_id.as_ref().is_some_and(|id| !labels.contains(id))
+            {
+                return Err(ProjectError::Validation(format!(
+                    "artist {} has an invalid measurement arrow",
+                    artist.id
+                )));
+            }
+            ArtistKind::MeasurementArrow
         }
         ArtistProperties::Annotation {
             label_id,
@@ -169,6 +246,7 @@ pub(super) fn validate_artist(
                 || connectors.iter().any(|connector| {
                     !connector.target_x.is_finite()
                         || !connector.target_y.is_finite()
+                        || !connector.axes.is_supported()
                         || !connector.arrow_size_pt.is_finite()
                         || !(2.0..=18.0).contains(&connector.arrow_size_pt)
                         || validate_stroke(artist, &connector.stroke, palette_colors).is_err()

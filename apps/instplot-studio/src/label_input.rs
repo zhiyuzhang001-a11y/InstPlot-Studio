@@ -273,6 +273,7 @@ pub fn display_text(nodes: &[LabelNode]) -> String {
                 | LabelNode::VariableSubscript(inner)
                 | LabelNode::Superscript(inner) => append(inner, out),
                 LabelNode::UnitSeparator => out.push(' '),
+                LabelNode::ScaleFactorSlot => out.push_str("{scale}"),
             }
         }
     }
@@ -403,6 +404,7 @@ fn format_with_mode(nodes: &[LabelNode], minimal: bool) -> Option<String> {
             LabelNode::Operator(s) => out.push_str(&escape(s)),
             LabelNode::Emphasis(s) => out.push_str(&format!("\\emph{{{}}}", escape(s))),
             LabelNode::BoldVariable(s) => out.push_str(&format!("\\mathbf{{{}}}", escape(s))),
+            LabelNode::ScaleFactorSlot => out.push_str("{scale}"),
         }
         previous_is_unit = matches!(node, LabelNode::Unit(_));
     }
@@ -473,6 +475,11 @@ impl Parser {
             if Some(c) == stop {
                 self.take();
                 return Ok(merge_text(nodes));
+            }
+            if self.chars[self.at..].starts_with(&['{', 's', 'c', 'a', 'l', 'e', '}']) {
+                self.at += 7;
+                nodes.push(LabelNode::ScaleFactorSlot);
+                continue;
             }
             match c {
                 '$' => {
@@ -1251,6 +1258,13 @@ mod tests {
         let pdf = crate::figure_pdf(&document).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf.windows(9).any(|bytes| bytes == b"/FontFile"));
+    }
+
+    #[test]
+    fn scale_slot_is_a_round_trippable_semantic_axis_label_node() {
+        let nodes = parse(r"R_{xy} ({scale} \Omega)").unwrap();
+        assert!(nodes.contains(&LabelNode::ScaleFactorSlot));
+        assert_eq!(parse(&format(&nodes).unwrap()).unwrap(), nodes);
     }
 
     #[test]

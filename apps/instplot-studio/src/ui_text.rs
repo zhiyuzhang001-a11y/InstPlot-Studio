@@ -170,9 +170,11 @@ pub enum Text {
     PdfFontNote,
     FixErrorsBeforeExport,
     ExportNow,
+    ExportAnyway,
     Why,
     Impact,
     HowToFix,
+    CheckUpdates,
 }
 
 impl UiLanguage {
@@ -338,11 +340,13 @@ impl UiLanguage {
             (Self::Chinese, PixelDimensions) => "像素尺寸",
             (Self::Chinese, TransparentBackground) => "透明背景",
             (Self::Chinese, PdfFontNote) => "PDF 保留真实文字并嵌入固定字体。",
-            (Self::Chinese, FixErrorsBeforeExport) => "请先修复 Publication Check 错误。",
+            (Self::Chinese, FixErrorsBeforeExport) => "存在出版规范问题；检查后仍可继续导出。",
             (Self::Chinese, ExportNow) => "立即导出",
+            (Self::Chinese, ExportAnyway) => "仍然导出",
             (Self::Chinese, Why) => "原因",
             (Self::Chinese, Impact) => "影响",
             (Self::Chinese, HowToFix) => "修复方法",
+            (Self::Chinese, CheckUpdates) => "检查更新",
             (Self::English, File) => "File",
             (Self::English, Export) => "Export Image",
             (Self::English, NewProject) => "New Project",
@@ -506,11 +510,15 @@ impl UiLanguage {
             (Self::English, PixelDimensions) => "Pixel dimensions",
             (Self::English, TransparentBackground) => "Transparent background",
             (Self::English, PdfFontNote) => "PDF keeps real text and embeds the fixed fonts.",
-            (Self::English, FixErrorsBeforeExport) => "Fix Publication Check errors before export.",
+            (Self::English, FixErrorsBeforeExport) => {
+                "Publication issues remain; review them or continue exporting."
+            }
             (Self::English, ExportNow) => "Export Now",
+            (Self::English, ExportAnyway) => "Export Anyway",
             (Self::English, Why) => "Why",
             (Self::English, Impact) => "Impact",
             (Self::English, HowToFix) => "How to fix",
+            (Self::English, CheckUpdates) => "Check for updates",
         }
     }
 
@@ -620,6 +628,14 @@ mod tests {
         assert_eq!(UiLanguage::default(), UiLanguage::Chinese);
         assert_eq!(UiLanguage::Chinese.text(Text::OpenData), "导入数据");
         assert_eq!(UiLanguage::English.text(Text::OpenData), "Import Data");
+        assert_eq!(
+            UiLanguage::Chinese.text(Text::OpenLite),
+            "从 InstPlot Lite 打开"
+        );
+        assert_eq!(
+            UiLanguage::English.text(Text::OpenLite),
+            "Open from InstPlot Lite"
+        );
     }
 
     #[test]
@@ -635,6 +651,7 @@ mod tests {
             Text::RemoveFile,
             Text::ClearAllData,
             Text::ExportNow,
+            Text::ExportAnyway,
         ];
         for language in [UiLanguage::Chinese, UiLanguage::English] {
             for action in actions {

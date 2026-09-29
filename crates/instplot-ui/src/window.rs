@@ -10,10 +10,7 @@ pub struct ToolWindowPolicy;
 
 impl ToolWindowPolicy {
     pub fn mode(context: &egui::Context) -> ToolWindowMode {
-        let embedded = context.input(|input| {
-            input.viewport().fullscreen.unwrap_or(false)
-                || input.viewport().maximized.unwrap_or(false)
-        });
+        let embedded = context.input(|input| viewport_uses_embedded_tools(input.viewport()));
         if embedded {
             ToolWindowMode::Embedded
         } else {
@@ -36,6 +33,22 @@ impl ToolWindowPolicy {
             }
         }
     }
+}
+
+fn viewport_uses_embedded_tools(viewport: &egui::ViewportInfo) -> bool {
+    if viewport.fullscreen.unwrap_or(false) || viewport.maximized.unwrap_or(false) {
+        return true;
+    }
+    let Some(monitor) = viewport.monitor_size else {
+        return false;
+    };
+    let Some(window) = viewport.outer_rect.or(viewport.inner_rect) else {
+        return false;
+    };
+    // macOS "Zoom" can fill the usable screen without reporting the native
+    // maximized flag. Size detection keeps tool windows inside that enlarged
+    // workspace while leaving ordinary, merely large windows detached.
+    window.width() >= monitor.x * 0.94 && window.height() >= monitor.y * 0.88
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,6 +118,24 @@ mod tests {
         mode
     }
 
+    fn mode_for_size(monitor: [f32; 2], window: [f32; 2]) -> ToolWindowMode {
+        let context = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let viewport = input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+        viewport.monitor_size = Some(egui::vec2(monitor[0], monitor[1]));
+        viewport.outer_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(window[0], window[1]),
+        ));
+        viewport.fullscreen = Some(false);
+        viewport.maximized = Some(false);
+        context.begin_pass(input);
+        let mode = ToolWindowPolicy::mode(&context);
+        let mut output = context.end_pass();
+        output.textures_delta.clear();
+        mode
+    }
+
     #[test]
     fn tool_windows_have_one_cross_platform_size_policy() {
         let spec = ToolWindowSpec::new([460.0, 360.0], [360.0, 140.0]);
@@ -119,5 +150,17 @@ mod tests {
         assert_eq!(mode_for(false, false), ToolWindowMode::Detached);
         assert_eq!(mode_for(true, false), ToolWindowMode::Embedded);
         assert_eq!(mode_for(false, true), ToolWindowMode::Embedded);
+    }
+
+    #[test]
+    fn macos_zoom_sized_window_embeds_tools_without_affecting_normal_windows() {
+        assert_eq!(
+            mode_for_size([1512.0, 982.0], [1512.0, 900.0]),
+            ToolWindowMode::Embedded
+        );
+        assert_eq!(
+            mode_for_size([1512.0, 982.0], [1160.0, 812.0]),
+            ToolWindowMode::Detached
+        );
     }
 }

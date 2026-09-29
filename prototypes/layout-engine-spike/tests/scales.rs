@@ -105,8 +105,8 @@ fn scalar_and_shared_exponent_formatting_suppress_negative_zero() {
     assert_eq!(plain.shared_exponent, None);
 
     let scientific = format_ticks(&[10_000.0, 20_000.0], Some(10_000.0));
-    assert_eq!(scientific.shared_exponent, Some(3));
-    assert_eq!(scientific.labels, ["10", "20"]);
+    assert_eq!(scientific.shared_exponent, Some(4));
+    assert_eq!(scientific.labels, ["1", "2"]);
 }
 
 #[test]

@@ -24,7 +24,7 @@ EXPECTED_CASES = {
     "disabled-row": (1, 1, 2, 5, 4),
     "missing-value": (1, 1, 2, 4, 4),
 }
-EXPECTED_PROJECT_SCHEMA = 6
+EXPECTED_PROJECT_SCHEMA = 8
 FIXTURE_NAMES = [
     "smoke.csv",
     "lite-source-fit.txt",

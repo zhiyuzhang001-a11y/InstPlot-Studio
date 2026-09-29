@@ -191,7 +191,7 @@ fn legacy_schema_zero_migrates_with_ranges_and_audit_record() {
     assert_eq!(migrated.figure.axes[0].x.minimum, -4.0);
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_0_to_7"
+        "migrate_schema_0_to_10"
     );
 }
 
@@ -207,7 +207,7 @@ fn schema_one_migrates_artist_visibility_to_visible() {
     assert!(migrated.figure.artists.iter().all(|artist| artist.visible));
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_1_to_7"
+        "migrate_schema_1_to_10"
     );
 }
 
@@ -231,7 +231,7 @@ fn schema_two_migrates_axis_appearance_defaults() {
     );
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_2_to_7"
+        "migrate_schema_2_to_10"
     );
 }
 
@@ -253,7 +253,7 @@ fn old_legend_without_placement_keeps_its_manual_position() {
     assert_eq!(decoded.schema_version, PROJECT_SCHEMA_VERSION);
     assert_eq!(
         decoded.provenance.last().unwrap().operation,
-        "migrate_schema_3_to_7"
+        "migrate_schema_3_to_10"
     );
     let record = decoded
         .figure
@@ -290,7 +290,7 @@ fn schema_four_without_source_origin_migrates_without_losing_data() {
     );
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_4_to_7"
+        "migrate_schema_4_to_10"
     );
 }
 
@@ -314,7 +314,7 @@ fn schema_five_annotations_migrate_with_no_connectors() {
     )));
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_5_to_7"
+        "migrate_schema_5_to_10"
     );
 }
 
@@ -340,7 +340,7 @@ fn schema_six_distinguishes_legacy_manual_sources_without_inventing_a_recipe() {
     assert!(migrated.data_sources[0].manual_recipe.is_none());
     assert_eq!(
         migrated.provenance.last().unwrap().operation,
-        "migrate_schema_6_to_7"
+        "migrate_schema_6_to_10"
     );
 }
 
@@ -497,4 +497,400 @@ fn high_precision_embedded_values_keep_their_digest_after_json_round_trip() {
     save_project(&path, &project).unwrap();
     let opened = open_project(&path).unwrap();
     assert_eq!(opened.document, project);
+}
+
+#[test]
+fn schema_seven_migrates_deterministic_logical_series_without_visual_loss() {
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    value["schema_version"] = Value::from(7);
+    let axes = value["figure"]["axes"][0].as_object_mut().unwrap();
+    for field in ["mode", "x2", "y2", "series_groups"] {
+        axes.remove(field);
+    }
+    for artist in value["figure"]["artists"].as_array_mut().unwrap() {
+        let properties = artist["properties"].as_object_mut().unwrap();
+        properties.remove("axes");
+        if let Some(connectors) = properties
+            .get_mut("connectors")
+            .and_then(Value::as_array_mut)
+        {
+            for connector in connectors {
+                connector.as_object_mut().unwrap().remove("axes");
+            }
+        }
+    }
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let first = decode_project(&bytes).unwrap();
+    let second = decode_project(&bytes).unwrap();
+    assert_eq!(first.figure.artists, second.figure.artists);
+    assert_eq!(
+        first.figure.axes[0].series_groups,
+        second.figure.axes[0].series_groups
+    );
+    assert_eq!(first.figure.axes[0].series_groups.len(), 2);
+    assert!(first.figure.axes[0].series_groups.iter().any(|group| {
+        group.artist_ids.len() == 2
+            && group.artist_ids.iter().any(|id| id == "node-12")
+            && group.artist_ids.iter().any(|id| id == "node-13")
+    }));
+    assert_eq!(
+        first.provenance.last().unwrap().operation,
+        "migrate_schema_7_to_10"
+    );
+}
+
+#[test]
+fn schema_eight_migrates_to_nine_with_scientific_guide_defaults() {
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    value["schema_version"] = Value::from(8);
+    for axes in value["figure"]["axes"].as_array_mut().unwrap() {
+        for name in ["x", "y", "x2", "y2"] {
+            if let Some(appearance) = axes[name]
+                .get_mut("appearance")
+                .and_then(Value::as_object_mut)
+            {
+                appearance.remove("spine_color_id");
+            }
+        }
+    }
+    for artist in value["figure"]["artists"].as_array_mut().unwrap() {
+        let properties = artist["properties"].as_object_mut().unwrap();
+        if properties.get("kind").and_then(Value::as_str) == Some("reference_line") {
+            properties.remove("include_in_autoscale");
+        }
+        if let Some(connectors) = properties
+            .get_mut("connectors")
+            .and_then(Value::as_array_mut)
+        {
+            for connector in connectors {
+                connector.as_object_mut().unwrap().remove("arrow_head");
+            }
+        }
+    }
+
+    let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+    assert_eq!(
+        migrated.figure.axes[0].x.appearance.spine_color_id,
+        "object-black"
+    );
+    assert!(migrated.figure.artists.iter().any(|artist| matches!(
+        artist.properties,
+        ArtistProperties::ReferenceLine {
+            include_in_autoscale: true,
+            ..
+        }
+    )));
+    assert_eq!(
+        migrated.provenance.last().unwrap().operation,
+        "migrate_schema_8_to_10"
+    );
+}
+
+#[test]
+fn schema_nine_preserves_canvas_size_and_adds_visible_axis_masters() {
+    let project = ProjectDocument::fixed_fixture();
+    let mut value = serde_json::to_value(project).unwrap();
+    value["schema_version"] = Value::from(9);
+    for axes in value["figure"]["axes"].as_array_mut().unwrap() {
+        for key in ["x", "y", "x2", "y2"] {
+            if let Some(appearance) = axes
+                .get_mut(key)
+                .and_then(|axis| axis.get_mut("appearance"))
+                .and_then(Value::as_object_mut)
+            {
+                appearance.remove("visibility");
+            }
+        }
+    }
+
+    let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(migrated.figure.width_mm, 85.0);
+    assert_eq!(migrated.figure.height_mm, 65.0);
+    assert_eq!(
+        migrated.figure.axes[0].x.appearance.visibility,
+        AxisVisibilityRecord::default()
+    );
+    assert_eq!(
+        migrated.provenance.last().unwrap().operation,
+        "migrate_schema_9_to_10"
+    );
+}
+
+#[test]
+fn real_schema_eight_fixture_migrates_without_losing_imported_data() {
+    let fixture = include_bytes!("../../tests/fixtures/project-v8-single-source.instplot");
+    let migrated = decode_project(fixture).unwrap();
+
+    assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+    assert_eq!(migrated.data_sources.len(), 1);
+    assert_eq!(migrated.figure.artists.len(), 2);
+    assert_eq!(migrated.figure.axes.len(), 1);
+    assert_eq!(
+        migrated.figure.axes[0].x.appearance.spine_color_id,
+        "object-black"
+    );
+    assert_eq!(
+        migrated.figure.axes[0].y.appearance.spine_color_id,
+        "object-black"
+    );
+    assert_eq!(
+        migrated.provenance.last().unwrap().operation,
+        "migrate_schema_8_to_10"
+    );
+    migrated.validate().unwrap();
+}
+
+#[test]
+fn reference_line_binding_is_normalized_for_orientation() {
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    value["schema_version"] = Value::from(8);
+    let reference = value["figure"]["artists"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|artist| artist["properties"]["kind"] == "reference_line")
+        .unwrap();
+    reference["properties"]["orientation"] = Value::String("vertical".to_owned());
+    reference["properties"]["axes"] = serde_json::json!({"x":"x2", "y":"y2"});
+    reference["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("include_in_autoscale");
+
+    let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let reference = migrated
+        .figure
+        .artists
+        .iter()
+        .find(|artist| artist.kind == ArtistKind::ReferenceLine)
+        .unwrap();
+    assert_eq!(
+        migrated.artist_axis_binding(reference),
+        Some(AxisBinding {
+            x: XAxisSlot::X2,
+            y: YAxisSlot::Y1,
+        })
+    );
+}
+
+#[test]
+fn measurement_arrow_label_ownership_round_trips() {
+    let mut project = ProjectDocument::fixed_fixture();
+    project.semantic_registry.push(SemanticLabel {
+        id: "label-measurement-1".to_owned(),
+        nodes: vec![LabelNode::Text("Δt = 255 s".to_owned())],
+    });
+    let arrow = ArtistRecord {
+        id: "measurement-arrow-1".to_owned(),
+        kind: ArtistKind::MeasurementArrow,
+        role: ArtistRole::Annotation,
+        visible: true,
+        properties: ArtistProperties::MeasurementArrow {
+            start_x: 0.0,
+            start_y: 1.0,
+            end_x: 2.0,
+            end_y: 1.0,
+            axes: AxisBinding::PRIMARY,
+            stroke: StrokeStyle {
+                color_id: "object-black".to_owned(),
+                width_pt: 0.9,
+                dash_pt: Vec::new(),
+            },
+            start_arrow: true,
+            end_arrow: true,
+            arrow_head: ArrowHead::Open,
+            arrow_size_pt: 5.0,
+            constraint: MeasurementConstraint::Horizontal,
+            label_id: Some("label-measurement-1".to_owned()),
+            label_offset_x_pt: 0.0,
+            label_offset_y_pt: -8.0,
+        },
+    };
+    project.figure.axes[0].artist_ids.push(arrow.id.clone());
+    project.figure.artists.push(arrow);
+    project.validate().unwrap();
+
+    let reopened = decode_project(&serde_json::to_vec(&project).unwrap()).unwrap();
+    assert_eq!(reopened, project);
+
+    let mut invalid = reopened;
+    let mut duplicate = invalid.figure.artists.last().unwrap().clone();
+    duplicate.id = "measurement-arrow-2".to_owned();
+    invalid.figure.axes[0].artist_ids.push(duplicate.id.clone());
+    invalid.figure.artists.push(duplicate);
+    assert!(invalid.validate().is_err());
+}
+
+#[test]
+fn project_rejects_dual_secondary_binding_and_missing_active_axis() {
+    let mut project = ProjectDocument::fixed_fixture();
+    project.figure.axes[0].series_groups[0].axes = AxisBinding {
+        x: XAxisSlot::X2,
+        y: YAxisSlot::Y2,
+    };
+    assert!(matches!(
+        project.validate(),
+        Err(ProjectError::Validation(_))
+    ));
+
+    let mut project = ProjectDocument::fixed_fixture();
+    project.figure.axes[0].mode = AxisMode::DualY;
+    assert!(matches!(
+        project.validate(),
+        Err(ProjectError::Validation(_))
+    ));
+}
+
+#[test]
+fn dual_axis_state_round_trips_and_each_edge_has_one_owner() {
+    let mut project = ProjectDocument::fixed_fixture();
+    let mut x2 = project.figure.axes[0].x.clone();
+    x2.id = "node-x2".to_owned();
+    let mut y2 = project.figure.axes[0].y.clone();
+    y2.id = "node-y2".to_owned();
+    project.figure.axes[0].mode = AxisMode::DualX;
+    project.figure.axes[0].x2 = Some(x2);
+    project.figure.axes[0].y2 = Some(y2);
+    project.figure.axes[0].series_groups[0].axes = AxisBinding {
+        x: XAxisSlot::X2,
+        y: YAxisSlot::Y1,
+    };
+    project.validate().unwrap();
+    let bytes = serde_json::to_vec(&project).unwrap();
+    assert_eq!(decode_project(&bytes).unwrap(), project);
+
+    assert_eq!(AxisMode::Single.edge_owner(AxisEdge::Top), AxisIdentity::X1);
+    assert_eq!(
+        AxisMode::Single.edge_owner(AxisEdge::Right),
+        AxisIdentity::Y1
+    );
+    assert_eq!(AxisMode::DualX.edge_owner(AxisEdge::Top), AxisIdentity::X2);
+    assert_eq!(
+        AxisMode::DualY.edge_owner(AxisEdge::Right),
+        AxisIdentity::Y2
+    );
+    for mode in [AxisMode::Single, AxisMode::DualX, AxisMode::DualY] {
+        assert_eq!(mode.edge_owner(AxisEdge::Bottom), AxisIdentity::X1);
+        assert_eq!(mode.edge_owner(AxisEdge::Left), AxisIdentity::Y1);
+    }
+}
+
+#[test]
+fn ambiguous_schema_seven_series_migration_is_non_destructive_and_warns() {
+    let directory = TempDirectory::new();
+    let path = directory.0.join("ambiguous-schema-seven.instplot");
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    let artists = value["figure"]["artists"].as_array_mut().unwrap();
+    let mut duplicate = artists
+        .iter()
+        .find(|artist| artist["id"] == "node-11")
+        .unwrap()
+        .clone();
+    duplicate["id"] = Value::String("node-16".to_owned());
+    artists.push(duplicate);
+    value["figure"]["axes"][0]["artist_ids"]
+        .as_array_mut()
+        .unwrap()
+        .push(Value::String("node-16".to_owned()));
+    value["schema_version"] = Value::from(7);
+    let axes = value["figure"]["axes"][0].as_object_mut().unwrap();
+    for field in ["mode", "x2", "y2", "series_groups"] {
+        axes.remove(field);
+    }
+    for artist in value["figure"]["artists"].as_array_mut().unwrap() {
+        let properties = artist["properties"].as_object_mut().unwrap();
+        properties.remove("axes");
+        if let Some(connectors) = properties
+            .get_mut("connectors")
+            .and_then(Value::as_array_mut)
+        {
+            for connector in connectors {
+                connector.as_object_mut().unwrap().remove("axes");
+            }
+        }
+    }
+    let old_artist_count = value["figure"]["artists"].as_array().unwrap().len();
+    let old_legend_entry_count = value["figure"]["artists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|artist| artist["properties"]["entries"].as_array())
+        .map(Vec::len)
+        .sum::<usize>();
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+    let report = open_project(&path).unwrap();
+    assert_eq!(report.document.figure.artists.len(), old_artist_count);
+    let new_legend_entry_count = report
+        .document
+        .figure
+        .artists
+        .iter()
+        .filter_map(|artist| match &artist.properties {
+            ArtistProperties::Legend { entries, .. } => Some(entries.len()),
+            _ => None,
+        })
+        .sum::<usize>();
+    assert_eq!(new_legend_entry_count, old_legend_entry_count);
+    assert!(
+        report
+            .document
+            .provenance
+            .iter()
+            .any(|record| { record.operation == "migrate_legacy_series_groups_with_ambiguity" })
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("could not be grouped"))
+    );
+    let groups = &report.document.figure.axes[0].series_groups;
+    assert!(groups.iter().any(|group| group.artist_ids == ["node-11"]));
+    assert!(groups.iter().any(|group| group.artist_ids == ["node-16"]));
+}
+
+#[test]
+fn schema_ten_axis_display_scale_migration_is_explicit_and_rejects_manual_zero() {
+    let mut value = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    value["schema_version"] = Value::from(10);
+    for axes in value["figure"]["axes"].as_array_mut().unwrap() {
+        for name in ["x", "y", "x2", "y2"] {
+            if let Some(axis) = axes.get_mut(name).and_then(Value::as_object_mut) {
+                axis.remove("display_scale");
+            }
+        }
+    }
+    value["figure"]["axes"][0]["x"]["formatter"] =
+        serde_json::json!({"kind":"decimal","precision":2});
+    value["figure"]["axes"][0]["y"]["minimum"] = Value::from(10_000.0);
+    value["figure"]["axes"][0]["y"]["maximum"] = Value::from(20_000.0);
+    value["figure"]["axes"][0]["y"]["formatter"] =
+        serde_json::json!({"kind":"scientific","precision":3});
+    let migrated = decode_project(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(migrated.schema_version, PROJECT_SCHEMA_VERSION);
+    assert_eq!(
+        migrated.figure.axes[0].x.display_scale,
+        AxisDisplayScaleRecord::None
+    );
+    assert_eq!(
+        migrated.figure.axes[0].y.display_scale,
+        AxisDisplayScaleRecord::manual_factor(4).unwrap()
+    );
+    assert_eq!(
+        migrated.figure.axes[0].y.formatter,
+        FormatterSpec::Decimal { precision: 3 }
+    );
+    assert!(
+        migrated
+            .provenance
+            .iter()
+            .any(|record| { record.operation == "migrate_schema_10_to_11" })
+    );
+
+    let mut invalid = serde_json::to_value(ProjectDocument::fixed_fixture()).unwrap();
+    invalid["figure"]["axes"][0]["x"]["display_scale"] =
+        serde_json::json!({"kind":"manual_factor","exponent":0});
+    assert!(decode_project(&serde_json::to_vec(&invalid).unwrap()).is_err());
 }

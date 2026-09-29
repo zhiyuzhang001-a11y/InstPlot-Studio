@@ -13,8 +13,9 @@ pub use raster::{
     rasterize_direct,
 };
 pub use resolve::{
-    BundledFontFace, FontDiagnostic, FontOrigin, RasterAsset, ResolvedDisplayList, ResolvedGlyph,
-    ResolvedItem, ResolvedRun, ResolvedText, bundled_font_faces, bundled_relation_face, resolve,
-    resolve_with_resources,
+    BundledFontFace, FontDiagnostic, FontOrigin, RasterAsset, ResolvedBounds,
+    ResolvedCanvasGeometry, ResolvedDisplayList, ResolvedGlyph, ResolvedItem, ResolvedRun,
+    ResolvedText, bundled_font_faces, bundled_relation_face, resolve, resolve_tight,
+    resolve_tight_with_resources, resolve_with_resources,
 };
 pub use svg::to_svg;

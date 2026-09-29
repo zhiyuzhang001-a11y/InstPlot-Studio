@@ -97,6 +97,24 @@ pub(super) fn localized_publication_finding(
             "部分读者可能无法区分系列",
             "更换颜色并配合 marker 或线型",
         ),
+        "duplicate_tick_labels" => (
+            "刻度标签重复",
+            "当前小数精度使不同刻度显示成相同文字",
+            "读者无法分辨这些刻度代表的真实数值",
+            "提高小数精度，或改用自动格式",
+        ),
+        "long_tick_label" => (
+            "刻度标签过长",
+            "存在超过 24 个可见字符的刻度标签",
+            "可能挤压绘图区或增大导出留白",
+            "使用轴显示倍率，或缩短手动格式",
+        ),
+        "scaled_ticks_without_visible_factor" => (
+            "倍率说明已隐藏",
+            "刻度已经缩放，但对应轴标签被隐藏",
+            "读者无法判断刻度的真实数量级",
+            "显示轴标签，或关闭该轴的显示倍率",
+        ),
         "raster_dpi_pixels" => (
             "位图分辨率",
             "导出像素或分辨率不足",
@@ -249,6 +267,7 @@ pub(super) fn label_preview_job(nodes: &[LabelNode]) -> egui::text::LayoutJob {
                     continue;
                 }
                 LabelNode::UnitSeparator => ("\u{202f}", "TeXGyreHeros-Regular"),
+                LabelNode::ScaleFactorSlot => ("{scale}", "TeXGyreHeros-Regular"),
             };
             job.append(
                 value,
@@ -500,8 +519,10 @@ pub(super) fn stroke_editor(
         ..UiEdit::default()
     };
     let selected = dash_name(language, &stroke.dash_pt);
+    let control_height = ui.spacing().interact_size.y;
     ui.horizontal_wrapped(|ui| {
-        let response = ui.add(
+        let response = ui.add_sized(
+            [132.0, control_height],
             egui::DragValue::new(&mut stroke.width_pt)
                 .range(0.1..=72.0)
                 .prefix(format!("{}: ", language.text(Text::LineWidth))),
@@ -755,15 +776,18 @@ pub(super) fn position_editor(
     const POINTS_PER_MM: f64 = 72.0 / 25.4;
     let mut x_mm = *x_pt / POINTS_PER_MM;
     let mut y_mm = *y_pt / POINTS_PER_MM;
+    let control_height = ui.spacing().interact_size.y;
     let (x, y) = ui
         .horizontal(|ui| {
-            let x = ui.add(
+            let x = ui.add_sized(
+                [144.0, control_height],
                 egui::DragValue::new(&mut x_mm)
                     .range(0.0..=canvas_width_mm)
                     .speed(0.1)
                     .prefix(format!("{}: ", language.text(Text::XPosition))),
             );
-            let y = ui.add(
+            let y = ui.add_sized(
+                [144.0, control_height],
                 egui::DragValue::new(&mut y_mm)
                     .range(0.0..=canvas_height_mm)
                     .speed(0.1)
@@ -837,8 +861,9 @@ pub(super) fn manual_group_input_card(
         ui.horizontal(|ui| {
             ui.strong(format!("数据组 {}", index + 1));
             if editable {
+                let control_height = ui.spacing().interact_size.y;
                 ui.add_sized(
-                    [220.0, 30.0],
+                    [220.0, control_height],
                     egui::TextEdit::singleline(&mut group.source_name),
                 );
             } else {
@@ -913,7 +938,7 @@ pub(super) fn manual_group_input_card(
 pub(super) fn minor_interval_editor(
     ui: &mut egui::Ui,
     language: UiLanguage,
-    dimension: AxisDimension,
+    identity: AxisIdentity,
     record: &mut AxisRecord,
     numeric_inputs: &mut BTreeMap<String, DeferredNumericInput>,
 ) -> UiEdit {
@@ -923,7 +948,7 @@ pub(super) fn minor_interval_editor(
     let mut edit = UiEdit::default();
     ui.horizontal_wrapped(|ui| {
         ui.label(language.text(Text::MinorTickInterval));
-        egui::ComboBox::from_id_salt(("minor-interval-mode", dimension))
+        egui::ComboBox::from_id_salt(("minor-interval-mode", identity))
             .selected_text(language.text(if record.minor_interval.is_some() {
                 Text::Interval
             } else {
@@ -954,7 +979,7 @@ pub(super) fn minor_interval_editor(
             edit.merge(deferred_f64_editor(
                 ui,
                 numeric_inputs,
-                format!("axis-{dimension:?}-minor-interval"),
+                format!("axis-{identity:?}-minor-interval"),
                 step,
                 f64::MIN_POSITIVE..=f64::INFINITY,
                 112.0,
@@ -965,7 +990,7 @@ pub(super) fn minor_interval_editor(
 }
 
 pub(super) fn suggested_minor_interval(record: &AxisRecord) -> f64 {
-    let range = record.maximum - record.minimum;
+    let range = instplot_layout::finite_span(record.minimum, record.maximum).unwrap_or(1.0);
     let candidate = match &record.locator {
         LocatorSpec::Interval { step } => step / 5.0,
         LocatorSpec::Fixed { values } if values.len() > 1 => (values[1] - values[0]) / 5.0,
@@ -979,6 +1004,34 @@ pub(super) fn suggested_minor_interval(record: &AxisRecord) -> f64 {
         minimum
     } else {
         1.0
+    }
+}
+
+pub(super) fn raw_to_axis_display(value: f64, exponent: i32) -> Result<f64, String> {
+    if !value.is_finite() {
+        return Err("坐标数值必须是有限值".to_owned());
+    }
+    let factor = instplot_layout::checked_pow10(exponent)
+        .ok_or_else(|| format!("坐标倍率 10^{exponent} 无法表示"))?;
+    let displayed = value / factor;
+    if displayed.is_finite() {
+        Ok(displayed)
+    } else {
+        Err("坐标数值换算后超出有限范围".to_owned())
+    }
+}
+
+pub(super) fn axis_display_to_raw(value: f64, exponent: i32) -> Result<f64, String> {
+    if !value.is_finite() {
+        return Err("请输入有限的坐标数值".to_owned());
+    }
+    let factor = instplot_layout::checked_pow10(exponent)
+        .ok_or_else(|| format!("坐标倍率 10^{exponent} 无法表示"))?;
+    let raw = value * factor;
+    if raw.is_finite() {
+        Ok(raw)
+    } else {
+        Err("坐标数值换算后超出有限范围".to_owned())
     }
 }
 
@@ -1026,8 +1079,9 @@ pub(super) fn deferred_f64_editor(
         state.text = value.to_string();
         state.error = None;
     }
+    let control_height = ui.spacing().interact_size.y;
     let response = ui.add_sized(
-        [width, 30.0],
+        [width, control_height],
         egui::TextEdit::singleline(&mut state.text).id(id),
     );
     let escape = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -1076,6 +1130,77 @@ pub(super) fn deferred_f64_editor(
     edit
 }
 
+pub(super) fn deferred_i32_editor(
+    ui: &mut egui::Ui,
+    inputs: &mut BTreeMap<String, DeferredNumericInput>,
+    key: impl Into<String>,
+    value: &mut i32,
+    range: std::ops::RangeInclusive<i32>,
+    width: f32,
+) -> UiEdit {
+    let key = key.into();
+    let id = egui::Id::new(("deferred-integer", &key));
+    let was_focused = ui.memory(|memory| memory.has_focus(id));
+    let source_value = f64::from(*value);
+    let state = inputs.entry(key).or_insert_with(|| DeferredNumericInput {
+        source_value,
+        text: value.to_string(),
+        error: None,
+    });
+    if !was_focused && state.source_value.to_bits() != source_value.to_bits() {
+        state.source_value = source_value;
+        state.text = value.to_string();
+        state.error = None;
+    }
+    let control_height = ui.spacing().interact_size.y;
+    let response = ui.add_sized(
+        [width, control_height],
+        egui::TextEdit::singleline(&mut state.text).id(id),
+    );
+    let escape = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape));
+    let enter = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    if escape {
+        state.text = value.to_string();
+        state.source_value = source_value;
+        state.error = None;
+        ui.memory_mut(|memory| memory.surrender_focus(id));
+        return UiEdit {
+            finish: true,
+            ..UiEdit::default()
+        };
+    }
+    let commit = enter || response.lost_focus();
+    let mut edit = UiEdit {
+        finish: commit,
+        ..UiEdit::default()
+    };
+    if commit {
+        match state.text.trim().parse::<i32>() {
+            Ok(parsed) if range.contains(&parsed) => {
+                edit.changed = parsed != *value;
+                *value = parsed;
+                state.source_value = f64::from(parsed);
+                state.text = parsed.to_string();
+                state.error = None;
+            }
+            _ => state.error = Some("请输入范围内的整数后按 Enter".to_owned()),
+        }
+        if enter {
+            ui.memory_mut(|memory| memory.surrender_focus(id));
+        }
+    }
+    if let Some(error) = &state.error {
+        ui.painter().rect_stroke(
+            response.rect,
+            4.0,
+            egui::Stroke::new(1.0, egui::Color32::LIGHT_RED),
+            egui::StrokeKind::Inside,
+        );
+        response.on_hover_text(error);
+    }
+    edit
+}
+
 pub(super) fn artist_role_name(language: UiLanguage, role: ArtistRole) -> &'static str {
     language.text(match role {
         ArtistRole::Data => Text::DataRole,
@@ -1088,11 +1213,14 @@ pub(super) fn artist_role_name(language: UiLanguage, role: ArtistRole) -> &'stat
     })
 }
 
-pub(super) fn series_style_name(style: SeriesCreationStyle) -> &'static str {
-    match style {
-        SeriesCreationStyle::Scatter => "散点",
-        SeriesCreationStyle::Line => "曲线",
-        SeriesCreationStyle::LineAndMarker => "曲线＋点",
+pub(super) fn series_style_name(language: UiLanguage, style: SeriesCreationStyle) -> &'static str {
+    match (language, style) {
+        (UiLanguage::Chinese, SeriesCreationStyle::Scatter) => "散点",
+        (UiLanguage::Chinese, SeriesCreationStyle::Line) => "曲线",
+        (UiLanguage::Chinese, SeriesCreationStyle::LineAndMarker) => "曲线＋点",
+        (UiLanguage::English, SeriesCreationStyle::Scatter) => "Scatter",
+        (UiLanguage::English, SeriesCreationStyle::Line) => "Line",
+        (UiLanguage::English, SeriesCreationStyle::LineAndMarker) => "Line + markers",
     }
 }
 
@@ -1123,7 +1251,7 @@ pub(super) fn reference_orientation_name(
 pub(super) fn dash_name(language: UiLanguage, pattern: &[f64]) -> &'static str {
     if pattern.is_empty() {
         language.text(Text::Solid)
-    } else if pattern == [4.0, 2.4] {
+    } else if pattern == DEFAULT_REFERENCE_DASH_PT || pattern == [4.0, 3.0] {
         language.text(Text::Dashed)
     } else if pattern == [0.8, 1.8] {
         language.text(Text::Dotted)

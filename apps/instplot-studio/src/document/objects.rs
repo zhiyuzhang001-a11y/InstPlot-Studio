@@ -53,8 +53,141 @@ impl FigureDocument {
         Ok(artist_id)
     }
 
-    pub fn set_artist_record(&mut self, record: ArtistRecord) -> Result<(), String> {
+    pub fn add_reference_line(
+        &mut self,
+        orientation: ReferenceOrientation,
+        value: f64,
+        axes: AxisBinding,
+    ) -> Result<String, String> {
+        self.add_reference_line_with_style(
+            orientation,
+            value,
+            axes,
+            StrokeStyle {
+                color_id: "object-black".to_owned(),
+                width_pt: 0.9,
+                dash_pt: DEFAULT_REFERENCE_DASH_PT.to_vec(),
+            },
+            false,
+        )
+    }
+
+    pub fn add_reference_line_with_style(
+        &mut self,
+        orientation: ReferenceOrientation,
+        value: f64,
+        axes: AxisBinding,
+        stroke: StrokeStyle,
+        include_in_autoscale: bool,
+    ) -> Result<String, String> {
         let mut candidate = self.project.clone();
+        let artist_id = next_stable_id(&candidate, "reference-line");
+        let axes = match orientation {
+            ReferenceOrientation::Vertical => AxisBinding {
+                x: axes.x,
+                y: YAxisSlot::Y1,
+            },
+            ReferenceOrientation::Horizontal => AxisBinding {
+                x: XAxisSlot::X1,
+                y: axes.y,
+            },
+        };
+        candidate.figure.artists.push(ArtistRecord {
+            id: artist_id.clone(),
+            kind: ArtistKind::ReferenceLine,
+            role: ArtistRole::Reference,
+            visible: true,
+            properties: ArtistProperties::ReferenceLine {
+                orientation,
+                value,
+                axes,
+                stroke,
+                include_in_autoscale,
+            },
+        });
+        candidate.figure.axes[0].artist_ids.push(artist_id.clone());
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(artist_id)
+    }
+
+    pub fn add_measurement_arrow(&mut self, spec: MeasurementArrowSpec) -> Result<String, String> {
+        let mut candidate = self.project.clone();
+        let artist_id = next_stable_id(&candidate, "measurement-arrow");
+        let label_id = spec.label_nodes.map(|nodes| {
+            let label_id = next_stable_id(&candidate, "label-measurement");
+            candidate.semantic_registry.push(SemanticLabel {
+                id: label_id.clone(),
+                nodes,
+            });
+            label_id
+        });
+        let (mut end_x, mut end_y) = spec.end;
+        match spec.constraint {
+            MeasurementConstraint::Free => {}
+            MeasurementConstraint::Horizontal => end_y = spec.start.1,
+            MeasurementConstraint::Vertical => end_x = spec.start.0,
+        }
+        candidate.figure.artists.push(ArtistRecord {
+            id: artist_id.clone(),
+            kind: ArtistKind::MeasurementArrow,
+            role: ArtistRole::Annotation,
+            visible: true,
+            properties: ArtistProperties::MeasurementArrow {
+                start_x: spec.start.0,
+                start_y: spec.start.1,
+                end_x,
+                end_y,
+                axes: spec.axes,
+                stroke: StrokeStyle {
+                    color_id: "object-black".to_owned(),
+                    width_pt: 0.9,
+                    dash_pt: Vec::new(),
+                },
+                start_arrow: spec.start_arrow,
+                end_arrow: spec.end_arrow,
+                arrow_head: ArrowHead::Open,
+                arrow_size_pt: 5.0,
+                constraint: spec.constraint,
+                label_id,
+                label_offset_x_pt: 0.0,
+                label_offset_y_pt: -8.0,
+            },
+        });
+        candidate.figure.axes[0].artist_ids.push(artist_id.clone());
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(artist_id)
+    }
+
+    pub fn set_artist_record(&mut self, mut record: ArtistRecord) -> Result<(), String> {
+        match &mut record.properties {
+            ArtistProperties::ReferenceLine {
+                orientation, axes, ..
+            } => match orientation {
+                ReferenceOrientation::Vertical => axes.y = YAxisSlot::Y1,
+                ReferenceOrientation::Horizontal => axes.x = XAxisSlot::X1,
+            },
+            ArtistProperties::MeasurementArrow {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                stroke,
+                constraint,
+                ..
+            } => {
+                stroke.color_id = "object-black".to_owned();
+                match constraint {
+                    MeasurementConstraint::Free => {}
+                    MeasurementConstraint::Horizontal => *end_y = *start_y,
+                    MeasurementConstraint::Vertical => *end_x = *start_x,
+                }
+            }
+            _ => {}
+        }
+        let mut candidate = self.project.clone();
+        let series_color = super::series::artist_color(&record).map(str::to_owned);
         let artist = candidate
             .figure
             .artists
@@ -65,6 +198,9 @@ impl FigureDocument {
             return Err("artist kind cannot be replaced".to_owned());
         }
         *artist = record.clone();
+        if let Some(color_id) = series_color {
+            super::series::apply_series_color(&mut candidate, &record.id, &color_id)?;
+        }
         let value = serde_json::to_value(&record.properties)
             .map_err(|error| format!("artist style cannot be recorded: {error}"))?;
         if let Some(existing) = candidate
@@ -79,6 +215,107 @@ impl FigureDocument {
                 property: "artist_style".to_owned(),
                 value,
             });
+        }
+        candidate.validate().map_err(|error| error.to_string())?;
+        self.project = candidate;
+        Ok(())
+    }
+
+    pub fn delete_drawing_object(&mut self, artist_id: &str) -> Result<(), String> {
+        let position = self
+            .project
+            .figure
+            .artists
+            .iter()
+            .position(|artist| artist.id == artist_id)
+            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
+        if matches!(
+            self.project.figure.artists[position].kind,
+            ArtistKind::Line | ArtistKind::Scatter | ArtistKind::ErrorBar | ArtistKind::Legend
+        ) {
+            return Err("the selected artist is not a removable drawing object".to_owned());
+        }
+        let refresh_autoscale = matches!(
+            self.project.figure.artists[position].properties,
+            ArtistProperties::ReferenceLine {
+                include_in_autoscale: true,
+                ..
+            }
+        );
+        let removed = self.project.figure.artists.remove(position);
+        self.project.figure.axes[0]
+            .artist_ids
+            .retain(|id| id != artist_id);
+        self.project
+            .overrides
+            .retain(|record| record.target_id != artist_id);
+        let owned_label = match removed.properties {
+            ArtistProperties::Annotation { label_id, .. } => Some(label_id),
+            ArtistProperties::MeasurementArrow { label_id, .. } => label_id,
+            _ => None,
+        };
+        if let Some(label_id) = owned_label {
+            self.project
+                .semantic_registry
+                .retain(|label| label.id != label_id);
+        }
+        if refresh_autoscale {
+            refresh_active_autoscales(&mut self.project)?;
+        }
+        self.project.validate().map_err(|error| error.to_string())
+    }
+
+    pub fn set_measurement_arrow_label(
+        &mut self,
+        artist_id: &str,
+        nodes: Option<Vec<LabelNode>>,
+    ) -> Result<(), String> {
+        let mut candidate = self.project.clone();
+        let position = candidate
+            .figure
+            .artists
+            .iter()
+            .position(|artist| artist.id == artist_id)
+            .ok_or_else(|| format!("artist {artist_id} is missing"))?;
+        let old_label_id = match &candidate.figure.artists[position].properties {
+            ArtistProperties::MeasurementArrow { label_id, .. } => label_id.clone(),
+            _ => return Err("the selected artist is not a measurement arrow".to_owned()),
+        };
+        let new_label_id = match nodes {
+            Some(nodes) if nodes.is_empty() => {
+                return Err("measurement label cannot be empty".to_owned());
+            }
+            Some(nodes) => {
+                let label_id = old_label_id
+                    .clone()
+                    .unwrap_or_else(|| next_stable_id(&candidate, "label-measurement"));
+                if let Some(label) = candidate
+                    .semantic_registry
+                    .iter_mut()
+                    .find(|label| label.id == label_id)
+                {
+                    label.nodes = nodes;
+                } else {
+                    candidate.semantic_registry.push(SemanticLabel {
+                        id: label_id.clone(),
+                        nodes,
+                    });
+                }
+                Some(label_id)
+            }
+            None => None,
+        };
+        if let ArtistProperties::MeasurementArrow { label_id, .. } =
+            &mut candidate.figure.artists[position].properties
+        {
+            *label_id = new_label_id.clone();
+        }
+        if new_label_id.is_none()
+            && let Some(old_label_id) = old_label_id
+        {
+            candidate
+                .semantic_registry
+                .retain(|label| label.id != old_label_id);
         }
         candidate.validate().map_err(|error| error.to_string())?;
         self.project = candidate;
@@ -144,6 +381,35 @@ impl FigureDocument {
         }
 
         let mut candidate = self.project.clone();
+        let old_series_colors = palette_series_color_ids(&candidate.palette.id);
+        let available_colors = registry
+            .colors
+            .iter()
+            .map(|color| color.id.clone())
+            .collect::<BTreeSet<_>>();
+        let migrate_guide_color = |old: &str| -> String {
+            if let Some(index) = old_series_colors.iter().position(|color| *color == old) {
+                return series_colors[index % series_colors.len()].to_owned();
+            }
+            if available_colors.contains(old) {
+                return old.to_owned();
+            }
+            "object-black".to_owned()
+        };
+        for axes in &mut candidate.figure.axes {
+            axes.x.appearance.spine_color_id =
+                migrate_guide_color(&axes.x.appearance.spine_color_id);
+            axes.y.appearance.spine_color_id =
+                migrate_guide_color(&axes.y.appearance.spine_color_id);
+            if let Some(axis) = &mut axes.x2 {
+                axis.appearance.spine_color_id =
+                    migrate_guide_color(&axis.appearance.spine_color_id);
+            }
+            if let Some(axis) = &mut axes.y2 {
+                axis.appearance.spine_color_id =
+                    migrate_guide_color(&axis.appearance.spine_color_id);
+            }
+        }
         candidate.palette = registry;
         let mut visual_series_colors = BTreeMap::<String, String>::new();
         let binding_keys = candidate
@@ -196,12 +462,15 @@ impl FigureDocument {
                     }
                 }
                 ArtistProperties::ReferenceLine { stroke, .. } => {
-                    stroke.color_id = role_color.unwrap_or("neutral-primary").to_owned();
+                    stroke.color_id = migrate_guide_color(&stroke.color_id);
                 }
                 ArtistProperties::Annotation { connectors, .. } => {
                     for connector in connectors {
-                        connector.stroke.color_id = "object-black".to_owned();
+                        connector.stroke.color_id = migrate_guide_color(&connector.stroke.color_id);
                     }
+                }
+                ArtistProperties::MeasurementArrow { stroke, .. } => {
+                    stroke.color_id = "object-black".to_owned();
                 }
                 ArtistProperties::Legend { .. } => {}
             }

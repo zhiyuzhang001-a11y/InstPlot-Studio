@@ -1,10 +1,11 @@
 use instplot_render::{Color, NodeId};
 use instplot_text::Label;
+use std::collections::BTreeMap;
 
 use crate::{
-    Annotation, AnnotationPosition, AxisSpec, Chart, DashStyle, DataPoint, ErrorBar, ErrorStyle,
-    Formatter, GridSpec, LegendErrorStyle, LegendPosition, LegendSpec, LineStyle, Locator,
-    MarkerShape, MarkerStyle, Scale, Series,
+    Annotation, AnnotationPosition, AxisDisplayScale, AxisSpec, Chart, DashStyle, DataPoint,
+    ErrorBar, ErrorStyle, Formatter, GridSpec, LegendErrorStyle, LegendPosition, LegendSpec,
+    LineStyle, Locator, MarkerShape, MarkerStyle, Scale, Series,
 };
 
 const CSV: &str = include_str!("../../../fixtures/publication-v1/data.csv");
@@ -80,8 +81,10 @@ pub fn publication_fixture() -> Chart {
             },
             minor_interval: None,
             formatter: Formatter::Auto,
+            display_scale: AxisDisplayScale::AutoFactor,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
+            has_data: true,
         },
         y: AxisSpec {
             id: NodeId(3),
@@ -94,9 +97,15 @@ pub fn publication_fixture() -> Chart {
             },
             minor_interval: None,
             formatter: Formatter::Auto,
+            display_scale: AxisDisplayScale::AutoFactor,
             grid: GridSpec::default(),
             appearance: crate::AxisAppearance::default(),
+            has_data: true,
         },
+        x2: None,
+        y2: None,
+        series_axes: BTreeMap::new(),
+        reference_lines: Vec::new(),
         series: vec![
             Series {
                 id: NodeId(10),
@@ -205,6 +214,7 @@ pub fn publication_fixture() -> Chart {
                 color: orange,
             },
         ],
+        measurement_arrows: Vec::new(),
         annotations: vec![Annotation {
             id: NodeId(20),
             labels: vec![Label::Text("T ≤ 300 K".into())],

@@ -55,6 +55,9 @@ def main() -> int:
     )
     package = OUTPUT / "lite-transfer.instplot-handoff"
     project = OUTPUT / "imported.instplot"
+    project_backup = Path(f"{project}.bak")
+    for generated in (package, project, project_backup):
+        generated.unlink(missing_ok=True)
     fixture_before = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
 
     checks = [
@@ -93,6 +96,28 @@ def main() -> int:
                 "--locked",
                 "--package",
                 "instplot-studio",
+            ],
+        ),
+        run(
+            "startup-open-handoff-contract",
+            [
+                "cargo",
+                "test",
+                "--locked",
+                "--package",
+                "instplot-studio",
+                "startup_commands_keep_headless_work_before_gui_creation",
+            ],
+        ),
+        run(
+            "open-lite-label-contract",
+            [
+                "cargo",
+                "test",
+                "--locked",
+                "--package",
+                "instplot-studio",
+                "chinese_is_the_default_and_english_remains_selectable",
             ],
         ),
     ]
@@ -186,7 +211,6 @@ def main() -> int:
     )
 
     handoff_source = (ROOT / "apps/instplot-studio/src/handoff.rs").read_text(encoding="utf-8")
-    main_source = (ROOT / "apps/instplot-studio/src/main.rs").read_text(encoding="utf-8")
     checks.extend(
         [
             fact(
@@ -196,11 +220,6 @@ def main() -> int:
                 and "fs::remove_file(path)?" in handoff_source
                 and "document.layout_figure()" in handoff_source,
                 "only the validated regular package is removed after layout",
-            ),
-            fact(
-                "studio-launch-contract",
-                "--open-handoff" in main_source and "Open from Lite…" in main_source,
-                "CLI launch argument and UI consumer are implemented",
             ),
             fact(
                 "compatibility-fixtures",

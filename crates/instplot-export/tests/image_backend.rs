@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
 use instplot_export::{
-    Background, RasterAsset, rasterize_direct, resolve, resolve_with_resources, to_pdf, to_svg,
+    Background, RasterAsset, ResolvedBounds, rasterize_direct, resolve,
+    resolve_tight_with_resources, resolve_with_resources, to_pdf, to_svg,
 };
-use instplot_render::{DisplayItem, Image, NodeId, Pt, compile, fixed_figure};
+use instplot_render::{DisplayItem, DisplayList, Image, NodeId, Pt, compile, fixed_figure};
 
 #[test]
 fn rgba_image_is_embedded_in_pdf_svg_and_direct_raster() {
@@ -43,4 +44,55 @@ fn rgba_image_is_embedded_in_pdf_svg_and_direct_raster() {
     let offset = ((sample_y * raster.width + sample_x) * 4) as usize;
     assert!(raster.rgba[offset] > 200);
     assert!(raster.rgba[offset + 3] > 0 && raster.rgba[offset + 3] < 255);
+}
+
+#[test]
+fn tight_export_retains_visible_images_and_ignores_fully_transparent_ones() {
+    let pt = |value| Pt::new(value).unwrap();
+    let display_list = DisplayList {
+        width: pt(100.0),
+        height: pt(100.0),
+        items: vec![DisplayItem::Image(Image {
+            source: NodeId(21),
+            resource_id: "outside-image".into(),
+            x: pt(100.0),
+            y: pt(20.0),
+            width: pt(20.0),
+            height: pt(10.0),
+        })],
+    };
+    let plot_bounds = ResolvedBounds {
+        min_x: 10.0,
+        min_y: 10.0,
+        max_x: 90.0,
+        max_y: 90.0,
+    };
+
+    let mut visible_resources = BTreeMap::new();
+    visible_resources.insert(
+        "outside-image".into(),
+        RasterAsset {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 255],
+        },
+    );
+    let visible = resolve_tight_with_resources(&display_list, visible_resources, plot_bounds, 3.0);
+    assert_eq!(visible.geometry.export_bounds.max_x, 123.0);
+    assert!(visible.resources.contains_key("outside-image"));
+    assert!(to_svg(&visible).contains("data-node=\"21\""));
+
+    let mut transparent_resources = BTreeMap::new();
+    transparent_resources.insert(
+        "outside-image".into(),
+        RasterAsset {
+            width: 1,
+            height: 1,
+            rgba: vec![255, 0, 0, 0],
+        },
+    );
+    let transparent =
+        resolve_tight_with_resources(&display_list, transparent_resources, plot_bounds, 3.0);
+    assert_eq!(transparent.geometry.export_bounds.max_x, 93.0);
+    assert!(transparent.resources.contains_key("outside-image"));
 }

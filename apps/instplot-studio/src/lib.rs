@@ -22,8 +22,9 @@ pub use data::{
 };
 pub use document::{
     AutoscalePolicy, AxisDimension, AxisRanges, DataBounds, DocumentLayout, DocumentLayoutError,
-    FigureDocument, MoveDirection, SeriesCreationStyle, SeriesDescriptor, SeriesKind, VisualBounds,
-    apply_visual_padding, compute_data_bounds, layout_label_from_nodes,
+    FigureDocument, MeasurementArrowSpec, MoveDirection, SeriesCreationStyle, SeriesDescriptor,
+    SeriesKind, VisualBounds, apply_visual_padding, compute_axis_data_bounds, compute_data_bounds,
+    layout_label_from_nodes,
 };
 pub use editing::{EditCommand, EditGroup, EditHistory, EditOutcome};
 pub use export::{
@@ -44,23 +45,25 @@ pub use palette::{
 };
 pub use preview::{EguiPreviewAdapter, PreviewAdapter, PreviewMetrics};
 pub use project::{
-    AnnotationConnectorRecord, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole, AxesRecord,
-    AxisAppearanceRecord, AxisRecord, AxisScale, DEFAULT_CURVE_WIDTH_PT,
-    DEFAULT_ERROR_BAR_WIDTH_PT, DataBinding, DataSourceKind, DataSourceOrigin, DataSourcePayload,
-    DataSourceRecord, EmbeddedColumn, ExportPreferences, FigureRecord, FitIdentity, FontFaceRecord,
-    FontStyle, FormatterSpec, LabelNode, LegendEntry, LegendGrid, LegendPlacement, LocatorSpec,
-    ManagedDataFile, ManagedDataFormat, ManualDataRecipe, ManualErrorStatistic,
-    ManualMeasurementRecord, ManualPlotStyle, MarkerShape, MarkerStyle, OpenProjectReport,
-    OpenProjectSource, OverrideRecord, PROJECT_SCHEMA_VERSION, PaletteColor, PaletteRegistry,
-    ProjectDocument, ProjectError, ProvenanceRecord, ReferenceOrientation, SemanticLabel,
-    SourceFingerprint, SourceState, StrokeStyle, TickDirection, TypographyProfile, decode_project,
-    open_project, save_project,
+    AnnotationConnectorRecord, ArrowHead, ArtistKind, ArtistProperties, ArtistRecord, ArtistRole,
+    AxesRecord, AxisAppearanceRecord, AxisBinding, AxisDisplayScaleRecord, AxisEdge, AxisIdentity,
+    AxisMode, AxisRecord, AxisScale, AxisVisibilityRecord, DEFAULT_CURVE_WIDTH_PT,
+    DEFAULT_ERROR_BAR_WIDTH_PT, DEFAULT_REFERENCE_DASH_PT, DataBinding, DataSourceKind,
+    DataSourceOrigin, DataSourcePayload, DataSourceRecord, EmbeddedColumn, ExportPreferences,
+    FigureRecord, FitIdentity, FontFaceRecord, FontStyle, FormatterSpec, LabelNode, LegendEntry,
+    LegendGrid, LegendPlacement, LocatorSpec, ManagedDataFile, ManagedDataFormat, ManualDataRecipe,
+    ManualErrorStatistic, ManualMeasurementRecord, ManualPlotStyle, MarkerShape, MarkerStyle,
+    MeasurementConstraint, OpenProjectReport, OpenProjectSource, OverrideRecord,
+    PROJECT_SCHEMA_VERSION, PaletteColor, PaletteRegistry, ProjectDocument, ProjectError,
+    ProvenanceRecord, ReferenceOrientation, SemanticLabel, SeriesGroupRecord, SourceFingerprint,
+    SourceState, StrokeStyle, TickDirection, TypographyProfile, XAxisSlot, YAxisSlot,
+    decode_project, open_project, save_project,
 };
 pub use publication::{
     CVD_SIMULATION_VERSION, CheckSeverity, PUBLICATION_RULES_VERSION, PublicationFinding,
     PublicationReport, check_publication,
 };
-pub use render::{ResolvedFigure, resolve_document};
+pub use render::{ResolvedFigure, resolve_document, resolve_document_for_export};
 pub use semantic::{
     ColorPolicy, RequiredNonColorChannel, SEMANTIC_REGISTRY_VERSION, SemanticPolicy,
     non_color_signature, policy_for,
@@ -86,7 +89,7 @@ mod tests {
     fn product_identity_is_stable_and_independent() {
         assert_eq!(PRODUCT_NAME, "InstPlot Studio");
         assert_eq!(BINARY_NAME, "instplot-studio");
-        assert_eq!(product_info(), "InstPlot Studio\tinstplot-studio\t0.1.0");
+        assert_eq!(product_info(), "InstPlot Studio\tinstplot-studio\t0.1.1");
     }
 
     #[test]

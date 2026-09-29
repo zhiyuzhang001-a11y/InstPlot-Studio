@@ -48,7 +48,22 @@ For a minimal import/export flow:
 
 `apps/instplot-demo` is an executable example of this exact flow with a different brand and feature combination.
 
-## 5. Required verification
+## 5. Where to extend Studio itself
+
+The Studio binary keeps product coordination separate from reusable scientific rules:
+
+- `app_controller/lifecycle.rs`, `data_workflow.rs`, and `export_workflow.rs` coordinate complete user workflows;
+- `app_controller/axis_editor.rs` and `artist_editor.rs` edit drafts and submit document commands;
+- `app_controller/tool_windows.rs` owns tool-window lifecycle, while `instplot-ui::ToolWindowPolicy` owns the common normal/maximized/fullscreen policy;
+- `app_ui/shell.rs` assembles the application chrome and tool windows;
+- `app_ui/canvas_view.rs` owns the central canvas composition, and `app_ui/canvas_interaction.rs` contains pure pointer-event decisions;
+- `document/axes.rs`, `series.rs`, `objects.rs`, and `datasets.rs` are the authoritative domain rules;
+- `instplot-layout::layout/{axes,legend,series,objects}.rs` owns physical geometry;
+- `instplot-export::resolve/bounds.rs` owns tight visible-ink bounds and `resolve/text.rs` owns text shaping.
+
+Add a rule at the lowest applicable layer. UI modules should not duplicate autoscale, axis binding, object visibility, legend sample, or export-bound calculations.
+
+## 6. Required verification
 
 ```sh
 cargo fmt --all -- --check

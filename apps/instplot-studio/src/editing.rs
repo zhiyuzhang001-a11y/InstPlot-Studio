@@ -1,6 +1,8 @@
 use crate::{
-    ArtistRecord, AxisDimension, AxisRanges, AxisRecord, DocumentLayout, ExportPreferences,
-    FigureDocument, LabelNode, MoveDirection, ProjectDocument, SeriesCreationStyle,
+    ArtistRecord, AxisBinding, AxisDimension, AxisIdentity, AxisMode, AxisRanges, AxisRecord,
+    DocumentLayout, ExportPreferences, FigureDocument, LabelNode, MeasurementArrowSpec,
+    MeasurementConstraint, MoveDirection, ProjectDocument, ReferenceOrientation,
+    SeriesCreationStyle, StrokeStyle,
 };
 
 const MAX_HISTORY: usize = 100;
@@ -21,8 +23,32 @@ pub enum EditGroup {
 
 pub enum EditCommand {
     SetAxisRanges(AxisRanges),
+    RefreshAutoscale,
     AddAnnotation {
         nodes: Vec<LabelNode>,
+    },
+    AddReferenceLine {
+        orientation: ReferenceOrientation,
+        value: f64,
+        axes: AxisBinding,
+        stroke: StrokeStyle,
+        include_in_autoscale: bool,
+    },
+    AddMeasurementArrow {
+        start: (f64, f64),
+        end: (f64, f64),
+        axes: AxisBinding,
+        constraint: MeasurementConstraint,
+        start_arrow: bool,
+        end_arrow: bool,
+        label_nodes: Option<Vec<LabelNode>>,
+    },
+    DeleteDrawingObject {
+        artist_id: String,
+    },
+    SetMeasurementArrowLabel {
+        artist_id: String,
+        nodes: Option<Vec<LabelNode>>,
     },
     CreateSeries {
         data_source_id: String,
@@ -40,9 +66,18 @@ pub enum EditCommand {
         artist_id: String,
         visible: bool,
     },
+    SetAxisMode(AxisMode),
+    SetSeriesAxisBinding {
+        artist_id: String,
+        axes: AxisBinding,
+    },
     SetSeriesStyle {
         artist_id: String,
         style: SeriesCreationStyle,
+    },
+    SetSeriesColor {
+        artist_id: String,
+        color_id: String,
     },
     MoveSeries {
         artist_id: String,
@@ -71,8 +106,25 @@ pub enum EditCommand {
         dimension: AxisDimension,
         record: AxisRecord,
     },
+    SetAxisRecordByIdentity {
+        identity: AxisIdentity,
+        record: AxisRecord,
+    },
+    SetAxisScaleAndLabel {
+        identity: AxisIdentity,
+        record: AxisRecord,
+        nodes: Vec<LabelNode>,
+    },
+    SetAxisVisibility {
+        identity: AxisIdentity,
+        visibility: crate::AxisVisibilityRecord,
+    },
     SetAxisLabel {
         dimension: AxisDimension,
+        nodes: Vec<LabelNode>,
+    },
+    SetAxisLabelByIdentity {
+        identity: AxisIdentity,
         nodes: Vec<LabelNode>,
     },
     SetFigureSize {
@@ -107,20 +159,32 @@ impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
             Self::SetAxisRanges(_) => "Change axes ranges",
+            Self::RefreshAutoscale => "Refresh automatic ranges",
             Self::AddAnnotation { .. } => "Add text annotation",
+            Self::AddReferenceLine { .. } => "Add reference line",
+            Self::AddMeasurementArrow { .. } => "Add measurement arrow",
+            Self::DeleteDrawingObject { .. } => "Delete drawing object",
+            Self::SetMeasurementArrowLabel { .. } => "Change measurement label",
             Self::CreateSeries { .. } => "Create series",
             Self::DuplicateSeries { .. } => "Duplicate series",
             Self::DeleteSeries { .. } => "Delete series",
             Self::SetSeriesVisible { visible: true, .. } => "Show series",
             Self::SetSeriesVisible { visible: false, .. } => "Hide series",
+            Self::SetAxisMode(_) => "Change axes mode",
+            Self::SetSeriesAxisBinding { .. } => "Change series axes",
             Self::SetSeriesStyle { .. } => "Change plot type",
+            Self::SetSeriesColor { .. } => "Change series color",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
             Self::SetSeriesErrorColumns { .. } => "Change error columns",
             Self::DeleteDataSource { .. } => "Delete data source",
             Self::DeleteDataSources { .. } => "Remove imported data",
             Self::SetAxisRecord { .. } => "Change axis settings",
+            Self::SetAxisRecordByIdentity { .. } => "Change axis settings",
+            Self::SetAxisScaleAndLabel { .. } => "Change axis scale and label",
+            Self::SetAxisVisibility { .. } => "Change axis visibility",
             Self::SetAxisLabel { .. } => "Change axis label",
+            Self::SetAxisLabelByIdentity { .. } => "Change axis label",
             Self::SetFigureSize { .. } => "Change figure size",
             Self::SetArtistRecord(_) => "Change artist properties",
             Self::SetAllMarkerDensity { .. } => "Change all marker density",
@@ -138,7 +202,50 @@ impl EditCommand {
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }
+            Self::RefreshAutoscale => document.refresh_autoscale(),
             Self::AddAnnotation { nodes } => document.add_annotation(nodes).map(|_| ()),
+            Self::AddReferenceLine {
+                orientation,
+                value,
+                axes,
+                stroke,
+                include_in_autoscale,
+            } => {
+                document.add_reference_line_with_style(
+                    orientation,
+                    value,
+                    axes,
+                    stroke,
+                    include_in_autoscale,
+                )?;
+                if include_in_autoscale {
+                    document.refresh_autoscale()?;
+                }
+                Ok(())
+            }
+            Self::AddMeasurementArrow {
+                start,
+                end,
+                axes,
+                constraint,
+                start_arrow,
+                end_arrow,
+                label_nodes,
+            } => document
+                .add_measurement_arrow(MeasurementArrowSpec {
+                    start,
+                    end,
+                    axes,
+                    constraint,
+                    start_arrow,
+                    end_arrow,
+                    label_nodes,
+                })
+                .map(|_| ()),
+            Self::DeleteDrawingObject { artist_id } => document.delete_drawing_object(&artist_id),
+            Self::SetMeasurementArrowLabel { artist_id, nodes } => {
+                document.set_measurement_arrow_label(&artist_id, nodes)
+            }
             Self::CreateSeries {
                 data_source_id,
                 x_column,
@@ -155,9 +262,17 @@ impl EditCommand {
             Self::SetSeriesVisible { artist_id, visible } => {
                 document.set_series_visible(&artist_id, visible)
             }
+            Self::SetAxisMode(mode) => document.set_axis_mode(mode),
+            Self::SetSeriesAxisBinding { artist_id, axes } => {
+                document.set_series_axis_binding(&artist_id, axes)
+            }
             Self::SetSeriesStyle { artist_id, style } => {
                 document.set_series_style(&artist_id, style)
             }
+            Self::SetSeriesColor {
+                artist_id,
+                color_id,
+            } => document.set_series_color(&artist_id, &color_id),
             Self::MoveSeries {
                 artist_id,
                 direction,
@@ -194,7 +309,29 @@ impl EditCommand {
             Self::SetAxisRecord { dimension, record } => {
                 document.set_axis_record(dimension, record)
             }
+            Self::SetAxisRecordByIdentity { identity, record } => {
+                document.set_axis_record_by_identity(identity, record)
+            }
+            Self::SetAxisScaleAndLabel {
+                identity,
+                record,
+                nodes,
+            } => {
+                // Apply the label first so an Incorporated scale never exists
+                // alongside a ScaleFactorSlot, even transiently. EditHistory
+                // applies this command to a candidate document, so both
+                // changes commit and undo atomically.
+                document.set_axis_label_by_identity(identity, nodes)?;
+                document.set_axis_record_by_identity(identity, record)
+            }
+            Self::SetAxisVisibility {
+                identity,
+                visibility,
+            } => document.set_axis_visibility(identity, visibility),
             Self::SetAxisLabel { dimension, nodes } => document.set_axis_label(dimension, nodes),
+            Self::SetAxisLabelByIdentity { identity, nodes } => {
+                document.set_axis_label_by_identity(identity, nodes)
+            }
             Self::SetFigureSize {
                 width_mm,
                 height_mm,
@@ -365,6 +502,7 @@ impl EditHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ArtistProperties, DEFAULT_REFERENCE_DASH_PT};
 
     #[test]
     fn applying_marker_density_to_all_is_one_undoable_edit() {
@@ -384,6 +522,48 @@ mod tests {
         assert_ne!(document, before);
         history.undo(&mut document).unwrap();
         assert_eq!(document, before);
+    }
+
+    #[test]
+    fn axis_mode_and_series_binding_are_undoable_without_rewriting_visibility() {
+        let mut document = FigureDocument::fixed();
+        let artist_id = "node-11".to_owned();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAxisMode(AxisMode::DualY),
+                None,
+            )
+            .unwrap();
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSeriesAxisBinding {
+                    artist_id: artist_id.clone(),
+                    axes: AxisBinding {
+                        x: crate::XAxisSlot::X1,
+                        y: crate::YAxisSlot::Y2,
+                    },
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record(&artist_id).unwrap().visible);
+        assert_eq!(
+            document.series_axis_binding(&artist_id).unwrap().y,
+            crate::YAxisSlot::Y2
+        );
+        history.undo(&mut document).unwrap();
+        assert_eq!(
+            document.series_axis_binding(&artist_id),
+            Some(AxisBinding::PRIMARY)
+        );
+        history.redo(&mut document).unwrap();
+        history.undo(&mut document).unwrap();
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.axis_mode(), AxisMode::Single);
+        assert!(document.artist_record(&artist_id).unwrap().visible);
     }
 
     #[test]
@@ -736,6 +916,55 @@ mod tests {
     }
 
     #[test]
+    fn incorporated_scale_and_label_change_share_one_undo_step() {
+        let mut document = FigureDocument::fixed();
+        document
+            .set_axis_label_by_identity(
+                AxisIdentity::X1,
+                vec![
+                    LabelNode::Text("R ".to_owned()),
+                    LabelNode::ScaleFactorSlot,
+                    LabelNode::Unit("Ω".to_owned()),
+                ],
+            )
+            .unwrap();
+        let before = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+        let mut record = document.axis_record_by_identity(AxisIdentity::X1).unwrap();
+        record.display_scale = crate::AxisDisplayScaleRecord::manual_incorporated(-3).unwrap();
+        let nodes = vec![
+            LabelNode::Text("R ".to_owned()),
+            LabelNode::Unit("mΩ".to_owned()),
+        ];
+
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAxisScaleAndLabel {
+                    identity: AxisIdentity::X1,
+                    record,
+                    nodes: nodes.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(document.axis_label_by_identity(AxisIdentity::X1), nodes);
+        assert!(matches!(
+            document
+                .axis_record_by_identity(AxisIdentity::X1)
+                .unwrap()
+                .display_scale,
+            crate::AxisDisplayScaleRecord::ManualIncorporated { .. }
+        ));
+
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &before);
+        assert!(history.undo(&mut document).is_none());
+        history.redo(&mut document).unwrap();
+        assert_eq!(document.axis_label_by_identity(AxisIdentity::X1), nodes);
+    }
+
+    #[test]
     fn palette_selection_is_one_atomic_undoable_edit() {
         let mut document = FigureDocument::showcase();
         let original = document.project().clone();
@@ -755,5 +984,97 @@ mod tests {
         assert_eq!(document.project(), &original);
         history.redo(&mut document).unwrap();
         assert_eq!(document.palette_id(), "tol-burd-v1");
+    }
+
+    #[test]
+    fn logical_series_color_change_is_one_atomic_undoable_edit() {
+        let mut document = FigureDocument::showcase();
+        let original = document.project().clone();
+        let group = document.project().figure.axes[0].series_groups[0].clone();
+        let artist_id = group.artist_ids[0].clone();
+        let current_color = document
+            .artist_record(&artist_id)
+            .and_then(|artist| match &artist.properties {
+                ArtistProperties::Line { stroke, .. }
+                | ArtistProperties::ErrorBar { stroke, .. } => Some(stroke.color_id.clone()),
+                ArtistProperties::Scatter { marker, .. } => Some(marker.color_id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let target_color = document
+            .palette_colors()
+            .iter()
+            .find(|color| color.id != current_color)
+            .unwrap()
+            .id
+            .clone();
+        let mut history = EditHistory::new(&document, true);
+
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetSeriesColor {
+                    artist_id,
+                    color_id: target_color.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        for member_id in &group.artist_ids {
+            let member = document.artist_record(member_id).unwrap();
+            let color = match &member.properties {
+                ArtistProperties::Line { stroke, .. }
+                | ArtistProperties::ErrorBar { stroke, .. } => &stroke.color_id,
+                ArtistProperties::Scatter { marker, .. } => &marker.color_id,
+                _ => continue,
+            };
+            assert_eq!(color, &target_color);
+        }
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &original);
+        history.redo(&mut document).unwrap();
+        assert_ne!(document.project(), &original);
+    }
+
+    #[test]
+    fn scientific_guide_creation_and_deletion_are_single_undo_steps() {
+        let mut document = FigureDocument::fixed();
+        let original = document.project().clone();
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::AddReferenceLine {
+                    orientation: ReferenceOrientation::Vertical,
+                    value: 0.5,
+                    axes: AxisBinding::PRIMARY,
+                    stroke: StrokeStyle {
+                        color_id: "object-black".to_owned(),
+                        width_pt: 0.9,
+                        dash_pt: DEFAULT_REFERENCE_DASH_PT.to_vec(),
+                    },
+                    include_in_autoscale: false,
+                },
+                None,
+            )
+            .unwrap();
+        let reference_id = document.project().figure.artists.last().unwrap().id.clone();
+        history.undo(&mut document).unwrap();
+        assert_eq!(document.project(), &original);
+        history.redo(&mut document).unwrap();
+        assert!(document.artist_record(&reference_id).is_some());
+
+        history
+            .execute(
+                &mut document,
+                EditCommand::DeleteDrawingObject {
+                    artist_id: reference_id.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        assert!(document.artist_record(&reference_id).is_none());
+        history.undo(&mut document).unwrap();
+        assert!(document.artist_record(&reference_id).is_some());
     }
 }

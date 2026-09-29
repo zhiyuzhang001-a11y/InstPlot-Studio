@@ -6,6 +6,34 @@ All notable changes to InstPlot Studio are recorded here.
 
 No changes yet.
 
+## [0.1.1] - 2026-09-29
+
+### Added
+
+- Dual X and dual Y axis workflows with explicit per-series bindings, independent autoscale,
+  secondary-axis placeholders and per-axis visibility controls.
+- Publication reference lines and measurement arrows with editable geometry, labels and styles.
+- Automatic and manually incorporated shared `×10ⁿ` axis factors, including scale-aware range and
+  tick-interval editing for primary and secondary axes.
+- Additional publication palettes, dash patterns and compact object-editing workflows.
+- A clickable product/version footer that opens the latest GitHub Release for update checks.
+
+### Changed
+
+- Autoscale now responds consistently to imports, manual-data edits, column changes, error bars,
+  data removal and series movement between enabled axes.
+- Export uses tight content geometry without changing the normal editing canvas.
+- Data files, manual data, line/point/error components and legends retain one logical-series
+  identity across editing, saving and reopening.
+
+### Fixed
+
+- Rebinding a series that was suspended on a disabled secondary axis now restores autoscale on its
+  newly enabled axis.
+- Multiple curves sharing an axis now use the combined range for one shared display exponent, while
+  X1/X2 and Y1/Y2 determine their exponents independently.
+- Removed the internal timestamp build identifier from the visible application footer.
+
 ## [0.1.0] - 2026-09-27
 
 ### Added
@@ -54,5 +82,6 @@ No changes yet.
 - The local macOS installer uses ad-hoc signing; public distribution signing and notarization are
   separate release work.
 
-[Unreleased]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v0.1.0

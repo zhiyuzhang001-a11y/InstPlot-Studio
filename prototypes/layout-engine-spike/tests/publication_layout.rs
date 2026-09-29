@@ -1,9 +1,10 @@
 use instplot_export::{FontOrigin, resolve};
 use layout_engine_spike::{
-    AnnotationPosition, Bounds, DashStyle, DataPoint, Formatter, HitItem, HitMap, LayoutWarning,
-    LegendGrid, LegendPosition, LineStyle, Locator, MarkerShape, MarkerStyle, Scale,
-    SelectableRole, TextMeasurer, TextSize, TickDirection, layout, layout_with_measurer,
-    marker_gallery_fixture, publication_fixture,
+    AnnotationConnector, AnnotationPosition, ArrowHead, AxisPair, Bounds, DashStyle, DataPoint,
+    Formatter, HitItem, HitMap, LayoutWarning, LegendGrid, LegendPosition, LineStyle, Locator,
+    MarkerShape, MarkerStyle, MeasurementArrow, MeasurementConstraint, ReferenceLine,
+    ReferenceOrientation, Scale, SelectableRole, TextMeasurer, TextSize, TickDirection, layout,
+    layout_with_measurer, marker_gallery_fixture, publication_fixture,
 };
 
 use instplot_render::{Color, DisplayItem, NodeId, PathVerb};
@@ -885,4 +886,426 @@ fn layout_reports_non_convergence_from_unstable_metrics() {
         node: publication_fixture().id,
         iterations: 4,
     }));
+}
+
+#[test]
+fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
+    let mut baseline_chart = publication_fixture();
+    baseline_chart.legend = None;
+    let baseline = layout(&baseline_chart).unwrap();
+
+    let mut dual_y = baseline_chart.clone();
+    let mut y2 = dual_y.y.clone();
+    y2.id = NodeId(30);
+    y2.label = Label::Text("Secondary Y".into());
+    y2.minimum = -100.0;
+    y2.maximum = 100.0;
+    dual_y.y2 = Some(y2);
+    let marker_id = dual_y
+        .series
+        .iter()
+        .find(|series| series.marker.is_some())
+        .unwrap()
+        .id;
+    dual_y.series_axes.insert(marker_id, AxisPair::X1Y2);
+    let placed = layout(&dual_y).unwrap();
+
+    assert!((placed.axes.width - baseline.axes.width).abs() < 0.05);
+    assert!((placed.axes.height - baseline.axes.height).abs() < 0.05);
+    assert!(placed.display_list.width.get() > baseline.display_list.width.get());
+    assert!(
+        placed
+            .y2_axis
+            .as_ref()
+            .is_some_and(|axis| !axis.major.is_empty())
+    );
+    assert!(placed.y2_label_bounds.is_some());
+    let right_edge_owners = placed
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            item.role == SelectableRole::Axis
+                && (item.bounds.x - placed.axes.right()).abs() < 0.01
+                && item.bounds.height > 0.0
+        })
+        .map(|item| item.node)
+        .collect::<Vec<_>>();
+    assert_eq!(right_edge_owners, vec![NodeId(30)]);
+
+    let marker_point = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.node == marker_id && item.role == SelectableRole::DataPoint)
+        .unwrap();
+    let source_y = dual_y
+        .series
+        .iter()
+        .find(|series| series.id == marker_id)
+        .unwrap()
+        .points[marker_point.data_index.unwrap()]
+    .y;
+    let expected_fraction = (source_y + 100.0) / 200.0;
+    let expected_y = placed.axes.bottom() - expected_fraction * placed.axes.height;
+    assert!((marker_point.path_proximity[0].1 - expected_y).abs() < 0.01);
+    assert!(!placed.warnings.iter().any(|warning| {
+        matches!(warning, LayoutWarning::TextOutsideFigure { node, .. } if *node == NodeId(30))
+    }));
+
+    let mut dual_x = baseline_chart;
+    let mut x2 = dual_x.x.clone();
+    x2.id = NodeId(32);
+    x2.label = Label::Text("Secondary X".into());
+    x2.minimum = -300.0;
+    x2.maximum = 300.0;
+    dual_x.x2 = Some(x2);
+    dual_x.series_axes.insert(marker_id, AxisPair::X2Y1);
+    let placed_x = layout(&dual_x).unwrap();
+    assert!((placed_x.axes.width - baseline.axes.width).abs() < 0.05);
+    assert!((placed_x.axes.height - baseline.axes.height).abs() < 0.05);
+    assert!(placed_x.display_list.height.get() > baseline.display_list.height.get());
+    assert!(
+        placed_x
+            .x2_axis
+            .as_ref()
+            .is_some_and(|axis| !axis.major.is_empty())
+    );
+    let marker_point_x = placed_x
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.node == marker_id && item.role == SelectableRole::DataPoint)
+        .unwrap();
+    let source_x = dual_x
+        .series
+        .iter()
+        .find(|series| series.id == marker_id)
+        .unwrap()
+        .points[marker_point_x.data_index.unwrap()]
+    .x;
+    let expected_x = placed_x.axes.x + (source_x + 300.0) / 600.0 * placed_x.axes.width;
+    assert!((marker_point_x.path_proximity[0].0 - expected_x).abs() < 0.01);
+}
+
+#[test]
+fn an_enabled_secondary_axis_without_data_owns_its_edge_without_fake_ticks() {
+    let mut chart = publication_fixture();
+    let mut x2 = chart.x.clone();
+    x2.id = NodeId(31);
+    x2.label = Label::Text("Secondary X".into());
+    x2.has_data = false;
+    chart.x2 = Some(x2);
+    let placed = layout(&chart).unwrap();
+
+    assert!(
+        placed
+            .x2_axis
+            .as_ref()
+            .is_some_and(|axis| axis.major.is_empty())
+    );
+    assert!(
+        !placed
+            .hit_map
+            .items
+            .iter()
+            .any(|item| item.node == NodeId(31) && item.role == SelectableRole::Tick)
+    );
+    let top_edge_owners = placed
+        .hit_map
+        .items
+        .iter()
+        .filter(|item| {
+            item.role == SelectableRole::Axis
+                && (item.bounds.y - placed.axes.y).abs() < 0.01
+                && item.bounds.width > 0.0
+        })
+        .map(|item| item.node)
+        .collect::<Vec<_>>();
+    assert_eq!(top_edge_owners, vec![NodeId(31)]);
+}
+
+#[test]
+fn scientific_guides_have_distinct_layers_and_hit_roles() {
+    let mut chart = publication_fixture();
+    chart.reference_lines.push(ReferenceLine {
+        id: NodeId(700),
+        orientation: ReferenceOrientation::Vertical,
+        value: 0.25,
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 0.9,
+            dash: DashStyle::Dashed,
+        },
+        color: Color(0, 0, 0, 255),
+    });
+    chart.measurement_arrows.push(MeasurementArrow {
+        id: NodeId(701),
+        start: DataPoint { x: -1.0, y: 1.0 },
+        end: DataPoint { x: 1.0, y: 1.0 },
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 0.9,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: true,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 5.0,
+        constraint: MeasurementConstraint::Horizontal,
+        labels: vec![Label::Text("Δx".into())],
+        label_offset_pt: (0.0, -8.0),
+    });
+    let placed = layout(&chart).unwrap();
+    assert!(
+        placed
+            .hit_map
+            .items
+            .iter()
+            .any(|item| { item.node == NodeId(700) && item.role == SelectableRole::ReferenceLine })
+    );
+    for role in [
+        SelectableRole::MeasurementArrow,
+        SelectableRole::MeasurementArrowStart,
+        SelectableRole::MeasurementArrowEnd,
+        SelectableRole::MeasurementArrowLabel,
+    ] {
+        assert!(
+            placed
+                .hit_map
+                .items
+                .iter()
+                .any(|item| item.node == NodeId(701) && item.role == role)
+        );
+    }
+    let reference_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if *source == NodeId(700)))
+        .unwrap();
+    let first_data_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if chart.series.iter().any(|series| series.id == *source)))
+        .unwrap();
+    let measurement_item = placed
+        .display_list
+        .items
+        .iter()
+        .position(|item| matches!(item, DisplayItem::Path { source, .. } if *source == NodeId(701)))
+        .unwrap();
+    assert!(reference_item < first_data_item);
+    assert!(measurement_item > first_data_item);
+}
+
+#[test]
+fn filled_arrow_shafts_end_at_head_bases_and_tips_stay_on_endpoints() {
+    let mut chart = publication_fixture();
+    chart.measurement_arrows.push(MeasurementArrow {
+        id: NodeId(710),
+        start: DataPoint { x: -1.0, y: 1.0 },
+        end: DataPoint { x: 1.0, y: 1.0 },
+        axes: AxisPair::X1Y1,
+        stroke: LineStyle {
+            width: 4.0,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: true,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 8.0,
+        constraint: MeasurementConstraint::Horizontal,
+        labels: Vec::new(),
+        label_offset_pt: (0.0, 0.0),
+    });
+    chart.annotations[0].connectors.push(AnnotationConnector {
+        target: DataPoint { x: 2.0, y: -1.0 },
+        stroke: LineStyle {
+            width: 4.0,
+            dash: DashStyle::Solid,
+        },
+        color: Color(0, 0, 0, 255),
+        start_arrow: false,
+        end_arrow: true,
+        arrow_head: ArrowHead::Filled,
+        arrow_size: 8.0,
+        axes: AxisPair::X1Y1,
+    });
+
+    let placed = layout(&chart).unwrap();
+    let endpoint = |role| {
+        placed
+            .hit_map
+            .items
+            .iter()
+            .find(|item| item.node == NodeId(710) && item.role == role)
+            .unwrap()
+            .path_proximity[0]
+    };
+    let start = endpoint(SelectableRole::MeasurementArrowStart);
+    let end = endpoint(SelectableRole::MeasurementArrowEnd);
+    let arrow_paths = placed
+        .display_list
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Path {
+                source,
+                path,
+                fill,
+                stroke,
+            } if *source == NodeId(710) => Some((path, fill, stroke)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let (shaft, _, _) = arrow_paths
+        .iter()
+        .copied()
+        .find(|(_, _, stroke)| stroke.is_some())
+        .unwrap();
+    let [
+        PathVerb::MoveTo(shaft_start_x, shaft_start_y),
+        PathVerb::LineTo(shaft_end_x, shaft_end_y),
+    ] = shaft.verbs.as_slice()
+    else {
+        panic!("filled arrow shaft should contain exactly one trimmed segment")
+    };
+    assert!((shaft_start_x.get() - start.0 - 8.0).abs() < 0.01);
+    assert!((shaft_start_y.get() - start.1).abs() < 0.01);
+    assert!((shaft_end_x.get() - end.0 + 8.0).abs() < 0.01);
+    assert!((shaft_end_y.get() - end.1).abs() < 0.01);
+    let tips = arrow_paths
+        .iter()
+        .filter(|(_, fill, _)| fill.is_some())
+        .filter_map(|(path, _, _)| match path.verbs.first() {
+            Some(PathVerb::MoveTo(x, y)) => Some((x.get(), y.get())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        tips.iter()
+            .any(|tip| { (tip.0 - start.0).abs() < 0.01 && (tip.1 - start.1).abs() < 0.01 })
+    );
+    assert!(
+        tips.iter()
+            .any(|tip| (tip.0 - end.0).abs() < 0.01 && (tip.1 - end.1).abs() < 0.01)
+    );
+    let arrow_bounds = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| item.node == NodeId(710) && item.role == SelectableRole::MeasurementArrow)
+        .unwrap()
+        .bounds;
+    for (path, fill, _) in &arrow_paths {
+        if fill.is_none() {
+            continue;
+        }
+        for verb in &path.verbs {
+            if let PathVerb::MoveTo(x, y) | PathVerb::LineTo(x, y) = verb {
+                assert!((arrow_bounds.x..=arrow_bounds.x + arrow_bounds.width).contains(&x.get()));
+                assert!((arrow_bounds.y..=arrow_bounds.y + arrow_bounds.height).contains(&y.get()));
+            }
+        }
+    }
+
+    let connector_paths = placed
+        .display_list
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DisplayItem::Path {
+                source,
+                path,
+                fill,
+                stroke,
+            } if *source == chart.annotations[0].id => Some((path, fill, stroke)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let connector_shaft = connector_paths
+        .iter()
+        .find(|(_, _, stroke)| stroke.is_some())
+        .map(|(path, _, _)| *path)
+        .unwrap();
+    let connector_tip = connector_paths
+        .iter()
+        .find(|(_, fill, _)| fill.is_some())
+        .and_then(|(path, _, _)| path.verbs.first())
+        .and_then(|verb| match verb {
+            PathVerb::MoveTo(x, y) => Some((x.get(), y.get())),
+            _ => None,
+        })
+        .unwrap();
+    let PathVerb::LineTo(connector_shaft_x, connector_shaft_y) = connector_shaft.verbs[1] else {
+        unreachable!()
+    };
+    assert!(
+        (connector_shaft_x.get() - connector_tip.0)
+            .hypot(connector_shaft_y.get() - connector_tip.1)
+            > 7.9
+    );
+    let connector_bounds = placed
+        .hit_map
+        .items
+        .iter()
+        .find(|item| {
+            item.node == chart.annotations[0].id
+                && item.role == SelectableRole::AnnotationConnector
+                && item.data_index == Some(0)
+        })
+        .unwrap()
+        .bounds;
+    for (path, fill, _) in &connector_paths {
+        if fill.is_none() {
+            continue;
+        }
+        for verb in &path.verbs {
+            if let PathVerb::MoveTo(x, y) | PathVerb::LineTo(x, y) = verb {
+                assert!(
+                    (connector_bounds.x..=connector_bounds.x + connector_bounds.width)
+                        .contains(&x.get())
+                );
+                assert!(
+                    (connector_bounds.y..=connector_bounds.y + connector_bounds.height)
+                        .contains(&y.get())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn axis_ink_is_black_while_secondary_spines_can_use_distinct_colors() {
+    let mut chart = publication_fixture();
+    chart.x.appearance.spine_color = Color(0, 0, 0, 255);
+    chart.y.appearance.spine_color = Color(0, 0, 0, 255);
+    let mut y2 = chart.y.clone();
+    y2.id = NodeId(702);
+    y2.appearance.spine_color = Color(204, 0, 0, 255);
+    chart.y2 = Some(y2);
+    let placed = layout(&chart).unwrap();
+    assert!(placed.display_list.items.iter().any(|item| matches!(
+        item,
+        DisplayItem::Path {
+            source,
+            stroke: Some(stroke),
+            ..
+        } if *source == NodeId(702) && stroke.color == Color(204, 0, 0, 255)
+    )));
+    assert!(
+        placed
+            .display_list
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::GlyphRun(run) => Some(run.color),
+                _ => None,
+            })
+            .all(|color| color == Color(0, 0, 0, 255))
+    );
 }

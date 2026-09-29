@@ -4,7 +4,7 @@ use std::path::Path;
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 
-use crate::{DocumentLayoutError, FigureDocument, ResolvedFigure, resolve_document};
+use crate::{DocumentLayoutError, FigureDocument, ResolvedFigure, resolve_document_for_export};
 
 #[derive(Debug)]
 pub enum FixedPdfExportError {
@@ -34,7 +34,7 @@ pub fn fixed_figure_pdf() -> Result<Vec<u8>, FixedPdfExportError> {
 }
 
 pub fn figure_pdf(document: &FigureDocument) -> Result<Vec<u8>, FixedPdfExportError> {
-    let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
+    let resolved = resolve_document_for_export(document).map_err(FixedPdfExportError::Layout)?;
     resolved_figure_pdf(&resolved)
 }
 
@@ -43,7 +43,7 @@ pub fn resolved_figure_pdf(resolved: &ResolvedFigure) -> Result<Vec<u8>, FixedPd
 }
 
 pub fn figure_svg(document: &FigureDocument) -> Result<Vec<u8>, FixedPdfExportError> {
-    let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
+    let resolved = resolve_document_for_export(document).map_err(FixedPdfExportError::Layout)?;
     Ok(resolved_figure_svg(&resolved))
 }
 
@@ -64,7 +64,7 @@ pub fn figure_png_with_background(
     dpi: u32,
     transparent_background: bool,
 ) -> Result<Vec<u8>, FixedPdfExportError> {
-    let resolved = resolve_document(document).map_err(FixedPdfExportError::Layout)?;
+    let resolved = resolve_document_for_export(document).map_err(FixedPdfExportError::Layout)?;
     resolved_figure_png_with_background(&resolved, dpi, transparent_background)
 }
 
@@ -169,6 +169,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FixedPdfExportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AxisBinding, AxisMode, SeriesKind, XAxisSlot, YAxisSlot};
 
     #[test]
     fn fixed_export_is_a_nonempty_pdf() {
@@ -179,11 +180,18 @@ mod tests {
 
     #[test]
     fn fixed_png_uses_the_formal_resolved_figure() {
+        let resolved = resolve_document_for_export(&FigureDocument::fixed()).unwrap();
         let png = fixed_figure_png(300).unwrap();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         assert!(png.len() > 1_000);
-        assert!(u32::from_be_bytes(png[16..20].try_into().unwrap()) > 1_000);
-        assert!(u32::from_be_bytes(png[20..24].try_into().unwrap()) > 700);
+        assert_eq!(
+            u32::from_be_bytes(png[16..20].try_into().unwrap()),
+            (f64::from(resolved.display.width) / 72.0 * 300.0).ceil() as u32
+        );
+        assert_eq!(
+            u32::from_be_bytes(png[20..24].try_into().unwrap()),
+            (f64::from(resolved.display.height) / 72.0 * 300.0).ceil() as u32
+        );
     }
 
     #[test]
@@ -210,12 +218,55 @@ mod tests {
 
     #[test]
     fn svg_uses_the_same_resolved_canvas() {
-        let resolved = resolve_document(&FigureDocument::fixed()).unwrap();
+        let resolved = resolve_document_for_export(&FigureDocument::fixed()).unwrap();
         let svg = String::from_utf8(resolved_figure_svg(&resolved)).unwrap();
         assert!(svg.contains(&format!(
             "viewBox=\"0 0 {:.5} {:.5}\"",
             resolved.display.width, resolved.display.height
         )));
+    }
+
+    #[test]
+    fn dual_axis_pdf_svg_and_png_share_the_formal_resolved_canvas() {
+        let mut document = FigureDocument::fixed();
+        document.set_axis_mode(AxisMode::DualY).unwrap();
+        let series_id = document
+            .series()
+            .into_iter()
+            .find(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+            .unwrap()
+            .id;
+        document
+            .set_series_axis_binding(
+                &series_id,
+                AxisBinding {
+                    x: XAxisSlot::X1,
+                    y: YAxisSlot::Y2,
+                },
+            )
+            .unwrap();
+        let resolved = resolve_document_for_export(&document).unwrap();
+        assert!(resolved.layout.result.y2_axis.is_some());
+
+        let pdf = resolved_figure_pdf(&resolved).unwrap();
+        let svg = String::from_utf8(resolved_figure_svg(&resolved)).unwrap();
+        let png = resolved_figure_png_with_background(&resolved, 300, false).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert!(svg.contains(&format!(
+            "viewBox=\"0 0 {:.5} {:.5}\"",
+            resolved.display.width, resolved.display.height
+        )));
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let expected_width = (f64::from(resolved.display.width) / 72.0 * 300.0).ceil() as u32;
+        let expected_height = (f64::from(resolved.display.height) / 72.0 * 300.0).ceil() as u32;
+        assert_eq!(
+            u32::from_be_bytes(png[16..20].try_into().unwrap()),
+            expected_width
+        );
+        assert_eq!(
+            u32::from_be_bytes(png[20..24].try_into().unwrap()),
+            expected_height
+        );
     }
 
     #[test]

@@ -43,6 +43,12 @@ pub fn to_svg(list: &ResolvedDisplayList) -> String {
         .unwrap();
     }
     svg.push_str("    </style>\n  </defs>\n");
+    let (translate_x, translate_y) = list.geometry.export_translation;
+    writeln!(
+        svg,
+        "  <g transform=\"translate({translate_x:.5} {translate_y:.5})\">"
+    )
+    .unwrap();
 
     let mut clip_serial = 0_u32;
     let mut open_clips = 0_u32;
@@ -104,6 +110,7 @@ pub fn to_svg(list: &ResolvedDisplayList) -> String {
         svg.push_str("  </g>\n");
         open_clips -= 1;
     }
+    svg.push_str("  </g>\n");
     svg.push_str("</svg>\n");
     svg
 }
@@ -214,7 +221,7 @@ fn svg_stroke(stroke: Option<&Stroke>) -> String {
         )
     };
     format!(
-        " stroke=\"{}\" stroke-opacity=\"{:.6}\" stroke-width=\"{:.3}\" stroke-linecap=\"{}\" stroke-linejoin=\"{}\"{dash}",
+        " stroke=\"{}\" stroke-opacity=\"{:.6}\" stroke-width=\"{:.3}\" stroke-linecap=\"{}\" stroke-linejoin=\"{}\" stroke-miterlimit=\"10\"{dash}",
         hex(stroke.color),
         stroke.color.3 as f32 / 255.0,
         stroke.width.get(),
