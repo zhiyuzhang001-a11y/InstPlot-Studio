@@ -134,3 +134,66 @@ jobs:
           & target/release/instplot-studio.exe --create-handoff apps/instplot-studio/tests/fixtures/lite-source-fit.txt target/b5-ci.instplot-handoff
           & target/release/instplot-studio.exe --import-handoff target/b5-ci.instplot-handoff target/b5-ci.instplot
           & target/release/instplot-studio.exe --check-project target/b5-ci.instplot
+
+      - name: Build, install, and remove Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packaging/linux/build_packages.sh
+          deb="target/packages/linux/InstPlot-Studio-${INSTPLOT_VERSION}-linux-x86_64.deb"
+          sudo apt-get install -y "./${deb}"
+          test "$(instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${INSTPLOT_VERSION}"
+          sudo apt-get remove -y instplot-studio
+          if command -v instplot-studio; then
+            echo "instplot-studio remains on PATH after uninstall" >&2
+            exit 1
+          fi
+          mkdir target/portable-ci
+          tar -xzf "target/packages/linux/InstPlot-Studio-${INSTPLOT_VERSION}-linux-x86_64.tar.gz" -C target/portable-ci
+          portable="target/portable-ci/InstPlot-Studio-${INSTPLOT_VERSION}-linux-x86_64/bin/instplot-studio"
+          test "$("${portable}" --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${INSTPLOT_VERSION}"
+
+      - name: Build, mount, and verify macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 packaging/macos/build_package.py
+          dmg="target/packages/macos/InstPlot-Studio-${INSTPLOT_VERSION}-macos-aarch64.dmg"
+          mount_point=$(mktemp -d)
+          cleanup() { hdiutil detach "${mount_point}" -quiet || true; rmdir "${mount_point}" || true; }
+          trap cleanup EXIT
+          hdiutil attach "${dmg}" -readonly -nobrowse -mountpoint "${mount_point}" -quiet
+          app="${mount_point}/InstPlot Studio.app"
+          codesign --verify --deep --strict "${app}"
+          test "$(defaults read "${app}/Contents/Info" CFBundleIdentifier)" = "com.instplot.studio"
+          test "$(defaults read "${app}/Contents/Info" CFBundleShortVersionString)" = "${INSTPLOT_VERSION}"
+          test "$(lipo -archs "${app}/Contents/MacOS/instplot-studio")" = "arm64"
+          test "$("${app}/Contents/MacOS/instplot-studio" --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${INSTPLOT_VERSION}"
+
+      - name: Install pinned Inno Setup when absent
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+          }
+
+      - name: Build, install, and remove Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/build_package.ps1
+          $installer = "target/packages/windows/InstPlot-Studio-$env:INSTPLOT_VERSION-windows-x86_64-setup.exe"
+          $installRoot = Join-Path $env:RUNNER_TEMP "InstPlot Studio CI"
+          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$installRoot"
+          if ($LASTEXITCODE -ne 0) { throw "Installer failed with $LASTEXITCODE" }
+          $binary = Join-Path $installRoot "instplot-studio.exe"
+          $actual = & $binary --product-info
+          if ($actual -ne "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION") { throw "Unexpected installed identity: $actual" }
+          & (Join-Path $installRoot "unins000.exe") /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if ($LASTEXITCODE -ne 0) { throw "Uninstaller failed with $LASTEXITCODE" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $binary) { throw "Installed binary remains after uninstall" }
