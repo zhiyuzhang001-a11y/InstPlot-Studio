@@ -55,6 +55,7 @@ OSS 身份使用 GitHub OIDC 换取阿里云短期 STS 凭据，不保存长期 
 ## 4. 工作流职责
 
 - `instplot-studio.yml`：普通 PR/main 三平台质量门。
+- `verify-aliyun-oidc.yml`：只验证 GitHub OIDC 能否换取短期阿里云 STS 凭据；不读取签名私钥、不写 OSS。
 - `release.yml`：冻结同一 source SHA，构建三平台包，真实安装/运行/卸载，核对草稿资产后发布 GitHub prerelease。
 - `publish-oss-update.yml`：从既有 GitHub Release 重新下载并核对资产，签名新 metadata revision，先验证不可变公网对象，最后只切换目标 channel。
 - `refresh-update-metadata.yml`：不改版本和 Release，只请求新的递增 sequence/expiry，并转交受保护 OSS 工作流。
