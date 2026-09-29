@@ -7,6 +7,17 @@ $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Set-Location $RepositoryRoot
 $Version = (& python3 scripts/read_version.py).Trim()
 if (-not $Version) { throw "Unable to read product version" }
+$VersionComponents = @(($Version -split '-', 2)[0] -split '\.')
+if ($VersionComponents.Count -gt 4 -or $VersionComponents.Count -lt 1) {
+    throw "Product version cannot be represented as a Windows file version: $Version"
+}
+foreach ($Component in $VersionComponents) {
+    if ($Component -notmatch '^\d+$') {
+        throw "Product version cannot be represented as a Windows file version: $Version"
+    }
+}
+while ($VersionComponents.Count -lt 4) { $VersionComponents += '0' }
+$VersionInfoVersion = $VersionComponents -join '.'
 
 & cargo build --release --locked --package instplot-studio --bin instplot-studio
 if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
@@ -31,7 +42,7 @@ if (-not $Iscc) {
 }
 
 $Iss = Join-Path $RepositoryRoot "packaging/windows/InstPlotStudio.iss"
-& $IsccPath "/DMyVersion=$Version" "/DSourceDir=$SourceRoot" "/DOutputDir=$OutputRoot" $Iss
+& $IsccPath "/DMyVersion=$Version" "/DMyVersionInfoVersion=$VersionInfoVersion" "/DSourceDir=$SourceRoot" "/DOutputDir=$OutputRoot" $Iss
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup build failed" }
 
 $Installer = Join-Path $OutputRoot "InstPlot-Studio-$Version-windows-x86_64-setup.exe"
