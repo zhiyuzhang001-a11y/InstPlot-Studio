@@ -1,0 +1,256 @@
+name: Publish signed update metadata to OSS
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing verified GitHub Release tag
+        required: true
+        type: string
+      source_sha:
+        description: Frozen source commit used by the Release
+        required: true
+        type: string
+      release_sequence:
+        description: Monotonic sequence for this channel
+        required: true
+        type: number
+      expires_at:
+        description: Signed metadata expiry in RFC 3339 form
+        required: true
+        type: string
+      metadata_only:
+        description: Refresh signed metadata without uploading existing packages
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oss-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Sign, stage, activate, and verify OSS update
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: release-production
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      RELEASE_SEQUENCE: ${{ inputs.release_sequence }}
+      EXPIRES_AT: ${{ inputs.expires_at }}
+      METADATA_ONLY: ${{ inputs.metadata_only }}
+      PRODUCT_SLUG: instplot-studio
+      OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+      OSS_REGION: ${{ vars.OSS_REGION }}
+      OSS_ENDPOINT: ${{ vars.OSS_ENDPOINT }}
+      OSS_PUBLIC_ROOT: ${{ vars.OSS_PUBLIC_ROOT }}
+      UPDATE_KEY_ID: ${{ vars.UPDATE_KEY_ID }}
+      UPDATE_PUBLIC_KEY_HEX: ${{ vars.UPDATE_PUBLIC_KEY_HEX }}
+      UPDATE_NEXT_KEY_ID: ${{ vars.UPDATE_NEXT_KEY_ID }}
+      UPDATE_NEXT_PUBLIC_KEY_HEX: ${{ vars.UPDATE_NEXT_PUBLIC_KEY_HEX }}
+      OSS_ACCESS_KEY_ID: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.ALIYUN_OSS_ACCESS_KEY_SECRET }}
+
+    steps:
+      - name: Check out the frozen Release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify protected configuration and Release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in RELEASE_TAG SOURCE_SHA RELEASE_SEQUENCE EXPIRES_AT OSS_BUCKET OSS_REGION \
+            OSS_ENDPOINT OSS_PUBLIC_ROOT UPDATE_KEY_ID UPDATE_PUBLIC_KEY_HEX \
+            OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
+            [[ -n "${!name}" ]] || { echo "Missing protected configuration: ${name}" >&2; exit 1; }
+          done
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          version=$(scripts/read-version.sh)
+          test "${RELEASE_TAG}" = "v${version}"
+          release_target=$(gh release view "${RELEASE_TAG}" --json targetCommitish,isDraft --jq 'select(.isDraft == false) | .targetCommitish')
+          test "${release_target}" = "${SOURCE_SHA}"
+          if [[ "${version}" == *-* ]]; then channel=prerelease; else channel=stable; fi
+          echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "UPDATE_CHANNEL=${channel}" >> "${GITHUB_ENV}"
+
+      - name: Enforce monotonic sequence and snapshot the other channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/channel-state
+          latest_url="${OSS_PUBLIC_ROOT}/channels/${UPDATE_CHANNEL}/latest.json"
+          status=$(curl --silent --show-error --location --output target/channel-state/current.json \
+            --write-out '%{http_code}' "${latest_url}?sequence-check=${GITHUB_RUN_ID}")
+          if [[ "${status}" == 200 ]]; then
+            python3 - "${RELEASE_SEQUENCE}" "${UPDATE_CHANNEL}" <<'PY'
+          import json, sys
+          from pathlib import Path
+          current = json.loads(Path("target/channel-state/current.json").read_text(encoding="utf-8"))
+          requested = int(sys.argv[1])
+          if current.get("channel") != sys.argv[2]:
+              raise SystemExit("current channel pointer names the wrong channel")
+          if not isinstance(current.get("release_sequence"), int) or requested <= current["release_sequence"]:
+              raise SystemExit(f"release sequence must increase beyond {current.get('release_sequence')}")
+          PY
+          elif [[ "${status}" != 404 ]]; then
+            echo "Cannot safely read current channel pointer: HTTP ${status}" >&2
+            exit 1
+          fi
+          if [[ "${UPDATE_CHANNEL}" == stable ]]; then other=prerelease; else other=stable; fi
+          other_url="${OSS_PUBLIC_ROOT}/channels/${other}/latest.json"
+          other_status=$(curl --silent --show-error --location --output target/channel-state/other-before.json \
+            --write-out '%{http_code}' "${other_url}?isolation-before=${GITHUB_RUN_ID}")
+          [[ "${other_status}" == 200 || "${other_status}" == 404 ]] || { echo "Cannot snapshot ${other}: HTTP ${other_status}" >&2; exit 1; }
+          echo "OTHER_CHANNEL=${other}" >> "${GITHUB_ENV}"
+          echo "OTHER_CHANNEL_STATUS=${other_status}" >> "${GITHUB_ENV}"
+
+      - name: Download and validate GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/release-assets
+          gh release download "${RELEASE_TAG}" --dir target/release-assets
+          cd target/release-assets
+          sha256sum -c SHA256SUMS.txt
+          cd ../..
+          python3 scripts/build_release_asset_spec.py \
+            --asset-dir target/release-assets \
+            --version "${RELEASE_VERSION}" \
+            --output target/release-assets.json
+
+      - name: Install pinned ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/ossutil.zip"
+          curl --fail --silent --show-error --location \
+            https://gosspublic.alicdn.com/ossutil/v2/2.3.0/ossutil-2.3.0-linux-amd64.zip \
+            --output "${archive}"
+          echo "3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a  ${archive}" \
+            | sha256sum --check --strict
+          unzip -q "${archive}" -d "${RUNNER_TEMP}"
+          install -m 0755 \
+            "${RUNNER_TEMP}/ossutil-2.3.0-linux-amd64/ossutil" \
+            "${RUNNER_TEMP}/ossutil"
+          "${RUNNER_TEMP}/ossutil" version
+
+      - name: Prepare signed immutable metadata revision
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${UPDATE_SIGNING_PRIVATE_KEY}" ]] || { echo "Missing signing key" >&2; exit 1; }
+          key_path="${RUNNER_TEMP}/update-private.pem"
+          printf '%s\n' "${UPDATE_SIGNING_PRIVATE_KEY}" > "${key_path}"
+          chmod 600 "${key_path}"
+          trap 'rm -f "${key_path}"' EXIT
+          python3 packaging/update/prepare_oss_release.py \
+            --assets target/release-assets.json \
+            --version "${RELEASE_VERSION}" \
+            --release-sequence "${RELEASE_SEQUENCE}" \
+            --product "${PRODUCT_SLUG}" \
+            --public-root "${OSS_PUBLIC_ROOT}" \
+            --private-key "${key_path}" \
+            --public-key-hex "${UPDATE_PUBLIC_KEY_HEX}" \
+            --key-id "${UPDATE_KEY_ID}" \
+            --notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
+            --expires-at "${EXPIRES_AT}" \
+            --output target/oss-upload
+
+      - name: Refuse to overwrite immutable public objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${METADATA_ONLY}" == true ]]; then
+            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}/metadata/${RELEASE_SEQUENCE}"
+          else
+            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}"
+          fi
+          prefix="target/oss-upload/${PRODUCT_SLUG}/"
+          while IFS= read -r -d '' path; do
+            relative=${path#"${prefix}"}
+            status=$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
+              "${OSS_PUBLIC_ROOT}/${relative}?existence-check=${GITHUB_RUN_ID}")
+            [[ "${status}" == 404 ]] || { echo "Immutable object is not safely absent (${status}): ${relative}" >&2; exit 1; }
+          done < <(find "${release_root}" -type f -print0 | sort -z)
+
+      - name: Upload immutable packages and metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${METADATA_ONLY}" == true ]]; then
+            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}/metadata/${RELEASE_SEQUENCE}"
+          else
+            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}"
+          fi
+          prefix="target/oss-upload/${PRODUCT_SLUG}/"
+          while IFS= read -r -d '' path; do
+            relative=${path#"${prefix}"}
+            "${RUNNER_TEMP}/ossutil" cp "${path}" \
+              "oss://${OSS_BUCKET}/${PRODUCT_SLUG}/${relative}" \
+              --endpoint "${OSS_ENDPOINT}" --region "${OSS_REGION}"
+          done < <(find "${release_root}" -type f -print0 | sort -z)
+
+      - name: Verify immutable public revision before activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          keys=(--public-key "${UPDATE_KEY_ID}=${UPDATE_PUBLIC_KEY_HEX}")
+          if [[ -n "${UPDATE_NEXT_KEY_ID}" || -n "${UPDATE_NEXT_PUBLIC_KEY_HEX}" ]]; then
+            [[ -n "${UPDATE_NEXT_KEY_ID}" && -n "${UPDATE_NEXT_PUBLIC_KEY_HEX}" ]] || { echo "Next key configuration is incomplete" >&2; exit 1; }
+            keys+=(--public-key "${UPDATE_NEXT_KEY_ID}=${UPDATE_NEXT_PUBLIC_KEY_HEX}")
+          fi
+          python3 scripts/verify_public_release.py \
+            --latest-url "${OSS_PUBLIC_ROOT}/releases/${RELEASE_VERSION}/metadata/${RELEASE_SEQUENCE}/manifest.json" \
+            --allowed-prefix "${OSS_PUBLIC_ROOT}" \
+            "${keys[@]}" \
+            --expected-channel "${UPDATE_CHANNEL}" \
+            --expected-version "${RELEASE_VERSION}" \
+            --cache-bust "immutable-${GITHUB_RUN_ID}"
+
+      - name: Atomically activate only the target channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="target/oss-upload/${PRODUCT_SLUG}/channels/${UPDATE_CHANNEL}/latest.json"
+          "${RUNNER_TEMP}/ossutil" cp "${latest}" \
+            "oss://${OSS_BUCKET}/${PRODUCT_SLUG}/channels/${UPDATE_CHANNEL}/latest.json" \
+            -f --content-type application/json \
+            --endpoint "${OSS_ENDPOINT}" --region "${OSS_REGION}"
+
+      - name: Verify activated public channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          keys=(--public-key "${UPDATE_KEY_ID}=${UPDATE_PUBLIC_KEY_HEX}")
+          if [[ -n "${UPDATE_NEXT_KEY_ID}" ]]; then
+            keys+=(--public-key "${UPDATE_NEXT_KEY_ID}=${UPDATE_NEXT_PUBLIC_KEY_HEX}")
+          fi
+          python3 scripts/verify_public_release.py \
+            --latest-url "${OSS_PUBLIC_ROOT}/channels/${UPDATE_CHANNEL}/latest.json" \
+            --allowed-prefix "${OSS_PUBLIC_ROOT}" \
+            "${keys[@]}" \
+            --expected-channel "${UPDATE_CHANNEL}" \
+            --expected-version "${RELEASE_VERSION}" \
+            --cache-bust "active-${GITHUB_RUN_ID}"
+          other_url="${OSS_PUBLIC_ROOT}/channels/${OTHER_CHANNEL}/latest.json"
+          other_status=$(curl --silent --show-error --location --output target/channel-state/other-after.json \
+            --write-out '%{http_code}' "${other_url}?isolation-after=${GITHUB_RUN_ID}")
+          test "${other_status}" = "${OTHER_CHANNEL_STATUS}"
+          if [[ "${other_status}" == 200 ]]; then
+            cmp target/channel-state/other-before.json target/channel-state/other-after.json
+          fi
+          echo "Signed ${UPDATE_CHANNEL} channel ${RELEASE_VERSION} activated and publicly verified." >> "${GITHUB_STEP_SUMMARY}"

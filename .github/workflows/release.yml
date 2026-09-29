@@ -1,0 +1,371 @@
+name: Release InstPlot Studio
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Exact v-prefixed SemVer tag matching Cargo.toml
+        required: true
+        type: string
+      expected_source_sha:
+        description: Frozen main commit to build on every platform
+        required: true
+        type: string
+      resume:
+        description: Resume an existing matching draft Release
+        required: true
+        default: false
+        type: boolean
+      publish_oss:
+        description: Dispatch protected OSS publication after GitHub Release
+        required: true
+        default: false
+        type: boolean
+      release_sequence:
+        description: Monotonic OSS sequence (required when publish_oss is true)
+        required: true
+        default: 0
+        type: number
+      expires_at:
+        description: OSS metadata expiry RFC 3339 (required when publish_oss is true)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: ${{ inputs.expected_source_sha }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+
+jobs:
+  freeze-source:
+    name: Freeze release source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.contract.outputs.version }}
+      prerelease: ${{ steps.contract.outputs.prerelease }}
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify source and release contract
+        id: contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "${SOURCE_SHA}" origin/main
+          version=$(scripts/read-version.sh)
+          test "${RELEASE_TAG}" = "v${version}"
+          python3 scripts/extract_changelog.py "${version}" --output target-release-notes.md
+          if [[ "${version}" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          if [[ "${prerelease}" == false ]]; then
+            echo "Stable publication is blocked until Developer ID/notarization and Authenticode jobs are configured." >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+  linux-package:
+    name: Package and install Linux
+    needs: freeze-source
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libwayland-dev
+
+      - name: Build Linux packages
+        run: packaging/linux/build_packages.sh
+
+      - name: Install and verify DEB
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.freeze-source.outputs.version }}'
+          deb="target/packages/linux/InstPlot-Studio-${version}-linux-x86_64.deb"
+          sudo apt-get install -y "./${deb}"
+          test "$(instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${version}"
+          instplot-studio --export-fixed-png target/linux-installed.png
+          test -s target/linux-installed.png
+          sudo apt-get remove -y instplot-studio
+          ! command -v instplot-studio
+
+      - name: Verify portable archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.freeze-source.outputs.version }}'
+          mkdir target/portable-check
+          tar -xzf "target/packages/linux/InstPlot-Studio-${version}-linux-x86_64.tar.gz" -C target/portable-check
+          binary="target/portable-check/InstPlot-Studio-${version}-linux-x86_64/bin/instplot-studio"
+          test "$("${binary}" --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${version}"
+
+      - name: Upload Linux release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-${{ env.SOURCE_SHA }}
+          path: |
+            target/packages/linux/*.deb
+            target/packages/linux/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-package:
+    name: Package and mount macOS arm64
+    needs: freeze-source
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Build macOS DMG
+        run: python3 packaging/macos/build_package.py
+
+      - name: Mount and verify DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.freeze-source.outputs.version }}'
+          dmg="target/packages/macos/InstPlot-Studio-${version}-macos-aarch64.dmg"
+          mount_point=$(mktemp -d)
+          cleanup() { hdiutil detach "${mount_point}" -quiet || true; rmdir "${mount_point}" || true; }
+          trap cleanup EXIT
+          hdiutil attach "${dmg}" -readonly -nobrowse -mountpoint "${mount_point}" -quiet
+          app="${mount_point}/InstPlot Studio.app"
+          codesign --verify --deep --strict "${app}"
+          test "$(defaults read "${app}/Contents/Info" CFBundleIdentifier)" = "com.instplot.studio"
+          test "$(defaults read "${app}/Contents/Info" CFBundleShortVersionString)" = "${version}"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes:0:CFBundleTypeExtensions:0' "${app}/Contents/Info.plist")" = "instplot"
+          binary="${app}/Contents/MacOS/instplot-studio"
+          test "$(lipo -archs "${binary}")" = "arm64"
+          test "$("${binary}" --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${version}"
+
+      - name: Upload macOS release asset
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos-${{ env.SOURCE_SHA }}
+          path: target/packages/macos/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-package:
+    name: Package, install, and uninstall Windows
+    needs: freeze-source
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Install pinned Inno Setup when absent
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --version=6.4.3 --yes --no-progress
+          }
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./packaging/windows/build_package.ps1
+
+      - name: Install, verify, and uninstall
+        shell: pwsh
+        run: |
+          $version = '${{ needs.freeze-source.outputs.version }}'
+          $installer = "target/packages/windows/InstPlot-Studio-$version-windows-x86_64-setup.exe"
+          $installRoot = Join-Path $env:RUNNER_TEMP "InstPlot Studio"
+          & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$installRoot"
+          if ($LASTEXITCODE -ne 0) { throw "Installer failed with $LASTEXITCODE" }
+          $binary = Join-Path $installRoot "instplot-studio.exe"
+          $actual = & $binary --product-info
+          if ($actual -ne "InstPlot Studio`tinstplot-studio`t$version") { throw "Unexpected identity: $actual" }
+          & $binary --export-fixed-png target/windows-installed.png
+          if (-not (Test-Path target/windows-installed.png)) { throw "Installed export failed" }
+          $uninstaller = Join-Path $installRoot "unins000.exe"
+          & $uninstaller /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+          if ($LASTEXITCODE -ne 0) { throw "Uninstaller failed with $LASTEXITCODE" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $binary) { throw "Installed binary remains after uninstall" }
+
+      - name: Upload Windows release asset
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-${{ env.SOURCE_SHA }}
+          path: target/packages/windows/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-github-release:
+    name: Verify and publish GitHub Release
+    needs: [freeze-source, linux-package, macos-package, windows-package]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download verified platform assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*-${{ env.SOURCE_SHA }}
+          path: target/release-assets
+          merge-multiple: true
+
+      - name: Validate complete asset set
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.freeze-source.outputs.version }}'
+          cd target/release-assets
+          expected=(
+            "InstPlot-Studio-${version}-linux-x86_64.deb"
+            "InstPlot-Studio-${version}-linux-x86_64.tar.gz"
+            "InstPlot-Studio-${version}-macos-aarch64.dmg"
+            "InstPlot-Studio-${version}-windows-x86_64-setup.exe"
+          )
+          mapfile -t actual < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
+          mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
+          diff -u <(printf '%s\n' "${wanted[@]}") <(printf '%s\n' "${actual[@]}")
+          sha256sum "${expected[@]}" > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+
+      - name: Create or resume matching draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME: ${{ inputs.resume }}
+          VERSION: ${{ needs.freeze-source.outputs.version }}
+          PRERELEASE: ${{ needs.freeze-source.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/extract_changelog.py "${VERSION}" --output target/release-notes-body.md
+          {
+            echo "Built from immutable source \`${SOURCE_SHA}\`."
+            echo
+            if [[ "${PRERELEASE}" == true ]]; then
+              echo "> Technical prerelease: macOS and Windows commercial code signing may be absent. Verify the checksums before use."
+              echo
+            fi
+            cat target/release-notes-body.md
+          } > target/release-notes.md
+          state=$(gh release view "${RELEASE_TAG}" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || true)
+          if [[ -z "${state}" ]]; then
+            [[ "${RESUME}" == false ]] || { echo "No draft exists to resume" >&2; exit 1; }
+            args=("${RELEASE_TAG}" --draft --target "${SOURCE_SHA}" --title "InstPlot Studio ${RELEASE_TAG}" --notes-file target/release-notes.md)
+            [[ "${PRERELEASE}" == true ]] && args+=(--prerelease)
+            gh release create "${args[@]}"
+          else
+            [[ "${RESUME}" == true && "${state}" == draft ]] || { echo "Release already exists in state ${state}" >&2; exit 1; }
+            target=$(gh release view "${RELEASE_TAG}" --json targetCommitish --jq .targetCommitish)
+            [[ "${target}" == "${SOURCE_SHA}" ]] || { echo "Draft targets ${target}, expected ${SOURCE_SHA}" >&2; exit 1; }
+          fi
+
+      - name: Upload assets without replacing mismatched draft data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/existing-assets
+          while IFS= read -r -d '' asset; do
+            name=$(basename "${asset}")
+            if gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | grep -Fxq "${name}"; then
+              gh release download "${RELEASE_TAG}" --pattern "${name}" --dir target/existing-assets
+              cmp "${asset}" "target/existing-assets/${name}" || { echo "Existing draft asset differs: ${name}" >&2; exit 1; }
+            else
+              gh release upload "${RELEASE_TAG}" "${asset}"
+            fi
+          done < <(find target/release-assets -maxdepth 1 -type f -print0 | sort -z)
+
+      - name: Download and verify draft assets before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/release-download
+          mkdir target/release-download
+          gh release download "${RELEASE_TAG}" --dir target/release-download
+          cd target/release-download
+          test "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          sha256sum -c SHA256SUMS.txt
+
+      - name: Publish verified Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "${RELEASE_TAG}" --draft=false
+          release_target=$(gh release view "${RELEASE_TAG}" --json targetCommitish,isDraft,isPrerelease \
+            --jq 'select(.isDraft == false and .isPrerelease == true) | .targetCommitish')
+          test "${release_target}" = "${SOURCE_SHA}"
+
+      - name: Write release summary
+        shell: bash
+        run: |
+          {
+            echo "## InstPlot Studio ${RELEASE_TAG}"
+            echo "- Source: \`${SOURCE_SHA}\`"
+            echo "- Version: \`${{ needs.freeze-source.outputs.version }}\`"
+            echo "- Prerelease: \`${{ needs.freeze-source.outputs.prerelease }}\`"
+            echo "- Platform assets: 4 plus SHA256SUMS.txt"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  dispatch-oss-publication:
+    name: Hand verified Release to protected OSS workflow
+    needs: [freeze-source, publish-github-release]
+    if: inputs.publish_oss
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Validate OSS dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.release_sequence }}' -gt 0
+          test -n '${{ inputs.expires_at }}'
+
+      - name: Dispatch protected OSS publication and return
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run publish-oss-update.yml --ref main \
+            -f release_tag="${RELEASE_TAG}" \
+            -f source_sha="${SOURCE_SHA}" \
+            -f release_sequence='${{ inputs.release_sequence }}' \
+            -f expires_at='${{ inputs.expires_at }}'
+          echo "OSS publication was dispatched separately; this release job will not poll it." >> "${GITHUB_STEP_SUMMARY}"

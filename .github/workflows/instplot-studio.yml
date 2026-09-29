@@ -11,9 +11,11 @@ on:
       - "crates/**"
       - "prototypes/layout-engine-spike/**"
       - "scripts/**"
+      - "packaging/**"
       - "adr/**"
+      - "docs/**"
       - "LICENSE"
-      - ".github/workflows/instplot-studio.yml"
+      - ".github/workflows/**"
   pull_request:
     paths:
       - "Cargo.toml"
@@ -23,9 +25,11 @@ on:
       - "crates/**"
       - "prototypes/layout-engine-spike/**"
       - "scripts/**"
+      - "packaging/**"
       - "adr/**"
+      - "docs/**"
       - "LICENSE"
-      - ".github/workflows/instplot-studio.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -60,6 +64,9 @@ jobs:
       - name: Check repository hygiene
         run: python3 scripts/check_repository_hygiene.py
 
+      - name: Test release metadata tools
+        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py
+
       - name: Run all tests and examples
         run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast
 
@@ -83,13 +90,17 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked --package instplot-studio
 
+      - name: Read product version
+        shell: bash
+        run: echo "INSTPLOT_VERSION=$(python3 scripts/read_version.py)" >> "${GITHUB_ENV}"
+
       - name: Generate P0 real-workflow baseline
         run: cargo run --locked --package instplot-studio --example p0_baseline -- target/b5p-p0-ci
 
       - name: Check product identity
         if: runner.os != 'Windows'
         run: |
-          test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.1'
+          test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t'"${INSTPLOT_VERSION}"
           target/release/instplot-studio --export-fixed-pdf target/b1-fixed.pdf
           test -s target/b1-fixed.pdf
           target/release/instplot-studio --export-fixed-png target/b3-fixed.png
@@ -107,7 +118,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = & target/release/instplot-studio.exe --product-info
-          $expected = "InstPlot Studio`tinstplot-studio`t0.1.1"
+          $expected = "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION"
           if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }
           & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
           if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
