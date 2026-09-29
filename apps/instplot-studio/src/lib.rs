@@ -14,6 +14,7 @@ mod render;
 mod semantic;
 mod session;
 mod text_edit;
+mod update;
 
 pub use data::{
     DATA_FORMAT_CAPABILITIES, DataDiagnostic, DataFormatCapability, DataImporter, ErrorStatistic,
@@ -70,6 +71,10 @@ pub use semantic::{
 };
 pub use session::StudioSession;
 pub use text_edit::{BracketEdit, BracketMode, pair_bracket_edit};
+pub use update::{
+    AllowedUpdateRoot, SignedManifestError, TrustedUpdateKey, UpdateChannel, UpdateManifest,
+    verify_signed_manifest,
+};
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";
 pub const BINARY_NAME: &str = "instplot-studio";
@@ -89,7 +94,13 @@ mod tests {
     fn product_identity_is_stable_and_independent() {
         assert_eq!(PRODUCT_NAME, "InstPlot Studio");
         assert_eq!(BINARY_NAME, "instplot-studio");
-        assert_eq!(product_info(), "InstPlot Studio\tinstplot-studio\t0.1.1");
+        assert_eq!(
+            product_info(),
+            format!(
+                "InstPlot Studio\tinstplot-studio\t{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
     }
 
     #[test]

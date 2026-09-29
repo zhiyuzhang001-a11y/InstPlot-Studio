@@ -1,0 +1,57 @@
+name: Refresh signed OSS update metadata
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable GitHub Release tag
+        required: true
+        type: string
+      source_sha:
+        description: Frozen commit used by that Release
+        required: true
+        type: string
+      release_sequence:
+        description: New monotonic channel sequence
+        required: true
+        type: number
+      expires_at:
+        description: New RFC 3339 expiry
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: oss-metadata-refresh-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch-protected-refresh:
+    name: Dispatch protected metadata-only publication
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate refresh request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.release_sequence }}' -gt 0
+          test -n '${{ inputs.release_tag }}'
+          test -n '${{ inputs.source_sha }}'
+          test -n '${{ inputs.expires_at }}'
+
+      - name: Dispatch and return without polling
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run publish-oss-update.yml --ref main \
+            -f release_tag='${{ inputs.release_tag }}' \
+            -f source_sha='${{ inputs.source_sha }}' \
+            -f release_sequence='${{ inputs.release_sequence }}' \
+            -f expires_at='${{ inputs.expires_at }}' \
+            -f metadata_only=true
+          echo "Protected metadata refresh dispatched; no polling is performed here." >> "${GITHUB_STEP_SUMMARY}"

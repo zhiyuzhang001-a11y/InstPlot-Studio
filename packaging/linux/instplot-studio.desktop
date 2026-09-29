@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=InstPlot Studio
+Comment=Create publication-ready scientific plots
+Exec=instplot-studio %F
+Icon=instplot-studio
+Terminal=false
+Categories=Science;Graphics;
+MimeType=application/vnd.instplot.project+json;

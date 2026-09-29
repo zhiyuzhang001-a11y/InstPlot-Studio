@@ -14,8 +14,21 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "target" / "b1-validation"
 PDF = OUTPUT / "fixed-figure.pdf"
 EXPECTED_REVISION = "80ad374044d91dd3c306a384fc7f07ba82cac429"
-EXPECTED_PRODUCT = "InstPlot Studio\tinstplot-studio\t0.1.1"
 SIZE_CEILING = 12 * 1024 * 1024
+
+
+def product_version() -> str:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "read_version.py")],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "unable to read product version")
+    return result.stdout.strip()
 
 
 @dataclass
@@ -51,6 +64,7 @@ def fact(name: str, passed: bool, detail: str) -> Check:
 
 def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    expected_product = f"InstPlot Studio\tinstplot-studio\t{product_version()}"
     checks = [
         run("format", ["cargo", "fmt", "--all", "--check"]),
         run("test", ["cargo", "test", "--workspace", "--locked"]),
@@ -96,7 +110,7 @@ def main() -> int:
         checks.append(
             fact(
                 "product-identity",
-                identity.returncode == 0 and identity.stdout.strip() == EXPECTED_PRODUCT,
+                identity.returncode == 0 and identity.stdout.strip() == expected_product,
                 identity.stdout.strip() or identity.stderr.strip(),
             )
         )
