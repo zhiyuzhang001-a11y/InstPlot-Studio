@@ -6,6 +6,7 @@ mod app_controller;
 mod app_state;
 mod app_transactions;
 mod app_ui;
+mod app_update;
 mod canvas_support;
 mod editor_support;
 mod import_flow;
@@ -19,6 +20,7 @@ mod workspace;
 
 use app_state::*;
 use app_transactions::*;
+use app_update::*;
 use canvas_support::*;
 use editor_support::*;
 use eframe::egui;

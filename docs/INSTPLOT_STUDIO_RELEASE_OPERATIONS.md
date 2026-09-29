@@ -1,6 +1,6 @@
 # InstPlot Studio 发布运维清单
 
-> 状态：仓库侧技术 RC 基础设施已实现；正式 OSS 信任根与商业平台签名尚未配置。
+> 状态：仓库侧技术 RC 基础设施与 GitHub OIDC→阿里云 STS 信任链已验证；正式更新信任根配置中，商业平台签名尚未配置。
 
 本文只记录实际操作入口和账户侧配置。安全契约、分阶段门禁与验收标准以
 `INSTPLOT_STUDIO_GITHUB_OSS_RELEASE_PLAN.md` 为准。
@@ -36,8 +36,8 @@ Variables：
 当前和下一把公钥必须在构建 RC 前同时固化到应用；对应私钥离线生成并备份，只有当前私钥进入 Environment。
 
 OSS 身份使用 GitHub OIDC 换取阿里云短期 STS 凭据，不保存长期 AccessKey。OIDC
-角色的 `oidc:sub` 必须精确限制为
-`repo:zhiyuzhang001-a11y/InstPlot-Studio:environment:release-production`，角色权限只允许
+角色的 `oidc:sub` 必须精确限制为仓库当前启用的稳定 ID 格式：
+`repo:zhiyuzhang001-a11y@235626644/InstPlot-Studio@1379312831:environment:release-production`，角色权限只允许
 `instplot-release/instplot-studio/*` 的 `GetObject` 和 `PutObject`。
 
 ## 3. 首次 RC 的准备顺序
@@ -70,11 +70,12 @@ OSS 身份使用 GitHub OIDC 换取阿里云短期 STS 凭据，不保存长期 
 - 只有 `channels/stable/latest.json` 或 `channels/prerelease/latest.json` 是可切换指针。
 - RC 只改变 prerelease；stable 只改变 stable。工作流在切换前后逐字节检查另一个 channel。
 - metadata refresh 必须使用更大的 `release_sequence`，并引用同一不可变 Release 资产。
+- 清单有效期最长 120 天；运维目标是在剩余 30 天前运行 metadata refresh，避免客户端因过期清单无法确认更新状态。
 
 ## 6. 仍需用户/账户侧完成
 
-- OSS Public Root、Bucket、地域、OIDC RAM 最小权限和费用/保留策略已配置；首次发布前仍需执行真实短期凭据探针。
-- 正式当前/下一把 Ed25519 信任根。
+- OSS Public Root、Bucket、地域与 OIDC RAM 最小权限已配置；只读短期凭据探针已于 2026-09-29 通过。Bucket 版本控制/WORM、缓存和费用/保留策略仍须在首次发布前复核。
+- 正式当前/下一把 Ed25519 信任根已生成并配置工作副本；首次 RC 前仍须完成离线备份、公钥入客户端及一致性检查。
 - Apple Developer ID、notarization 凭据。
 - Windows Authenticode 证书或受控云签名服务。
 - 至少一台非开发 macOS、Windows、Linux 设备的最终黑盒安装验收。

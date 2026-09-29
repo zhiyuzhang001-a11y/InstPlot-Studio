@@ -6,8 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[build-dependencies]
+ed25519-dalek.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
 [dependencies]
 atomicwrites.workspace = true
+directories.workspace = true
 ed25519-dalek.workspace = true
 eframe.workspace = true
 instplot-export.workspace = true
@@ -18,12 +24,14 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 sha2.workspace = true
+time.workspace = true
 instplot-render.workspace = true
 instplot-text.workspace = true
 ttf-parser = "=0.25.1"
 instplot-ui.workspace = true
 percent-encoding.workspace = true
 url.workspace = true
+ureq.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { workspace = true, features = ["xdg-portal"] }

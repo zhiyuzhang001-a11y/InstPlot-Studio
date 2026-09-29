@@ -1,12 +1,12 @@
 # InstPlot Studio GitHub + OSS 自动发布与更新计划
 
-> 状态：`IN PROGRESS — REPOSITORY-SIDE IMPLEMENTATION; FORMAL TRUST ROOT BLOCKED`
+> 状态：`IN PROGRESS — OIDC VERIFIED; TRUST ROOT AND CLIENT IMPLEMENTATION`
 > 制定日期：2026-09-29
 > 当前发布基线：`v0.1.1`
 > 目标首个演练版本：`v0.1.2-rc.1`
 > 配套总规范：用户提供的《GitHub Actions + 阿里云 OSS 自动发布流程》
 
-> 实施状态（2026-09-29）：Stage 0 仓库治理已完成；Stage 1 的清单/签名原型、Stage 3 技术打包定义、Stage 4/5/7 工作流骨架已实现并在本地通过静态检查。正式 Stage 1 门仍等待用户冻结 OSS Public Root、当前/下一把公钥和 key ID；Stage 2 生产更新入口及 Stage 8 真实 RC 尚未开始，不能标记完成。操作配置见 `INSTPLOT_STUDIO_RELEASE_OPERATIONS.md`。
+> 实施状态（2026-09-29）：Stage 0 仓库治理已完成；Stage 1 的清单/签名原型、Stage 3 技术打包定义、Stage 4/5/7 工作流骨架已实现。OSS Public Root 已冻结，GitHub OIDC→阿里云 STS 真实短期凭据探针通过，当前/下一把正式 Ed25519 工作密钥已生成；Stage 1 尚待离线备份和客户端公钥一致性门，Stage 2 生产更新入口正在实施，Stage 8 真实 RC 尚未开始。操作配置见 `INSTPLOT_STUDIO_RELEASE_OPERATIONS.md`。
 > 本文件职责：把通用规范落实为 InstPlot Studio 的产品边界、代码边界、阶段门和验收标准。
 
 本文件是 InstPlot Studio 的项目级约束。通用总规范提供可复用原则和示例；两者冲突时，以本文件冻结的阶段范围为准。本阶段不会实现通用规范示例中的“客户端启动安装程序、自动覆盖和重启”，只验证安装器自身具备用户手动执行的安装与升级能力。
@@ -374,7 +374,7 @@ apps/instplot-studio/src/update/
 3. 建立受保护的 GitHub `production` Environment，配置审批、分支/tag 限制和 Secret 访问边界。
 4. 在 `release-production` Environment 配置 `ALIYUN_OIDC_PROVIDER_ARN` 和
    `ALIYUN_ROLE_ARN`；工作流只请求短期 STS 凭据，角色的 `oidc:sub` 精确限制为
-   `repo:zhiyuzhang001-a11y/InstPlot-Studio:environment:release-production`。
+   `repo:zhiyuzhang001-a11y@235626644/InstPlot-Studio@1379312831:environment:release-production`。
 5. 将 Stage 1 已离线生成的当前正式 `UPDATE_SIGNING_PRIVATE_KEY` 放入 Environment Secret；下一把轮换私钥继续离线保存，未轮换前不上传。
 6. 配置产品 Variables：Bucket、Endpoint、Public Root、Product Slug、当前 key ID、公钥和资产文件规则，并与应用常量做自动一致性检查。
 7. 将 Apple Developer ID/notarization 凭据和 Windows Authenticode 凭据放入同一受保护 Environment 的独立 Secrets，只让各自平台签名 job 读取。macOS 使用临时 keychain/API key 并在 `always()` 清理；Windows 使用临时证书存储或受控云签名并在 `always()` 清理，随后用平台工具验证最终签名。

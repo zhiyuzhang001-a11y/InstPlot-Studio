@@ -1,0 +1,13 @@
+{
+  "public_root": "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio",
+  "keys": [
+    {
+      "id": "instplot-update-2026-09-a",
+      "public_key_hex": "f74c6b9d54cba76dbe2fd9680686fdb013841550bc87bfe6dc9661381328ee6c"
+    },
+    {
+      "id": "instplot-update-2026-09-b",
+      "public_key_hex": "0326c92be50a9a0e80bb3b2d15ad860955c4d2a040669a788ab0c3aa866bb7e0"
+    }
+  ]
+}

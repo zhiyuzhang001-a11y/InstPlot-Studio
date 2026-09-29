@@ -1,8 +1,5 @@
 use super::*;
 
-const LATEST_RELEASE_URL: &str =
-    "https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/latest";
-
 impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
@@ -434,11 +431,18 @@ impl eframe::App for StudioApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(egui::Hyperlink::from_label_and_url(
-                        egui::RichText::new(self.branding.footer_label()).weak(),
-                        LATEST_RELEASE_URL,
-                    ))
-                    .on_hover_text(self.language.text(Text::CheckUpdates));
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(self.branding.footer_label()).weak(),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text(self.language.text(Text::CheckUpdates))
+                        .clicked()
+                    {
+                        self.update.request_check(&context);
+                    }
                     if let Some(coordinates) = self.hover_data_coordinates {
                         ui.separator();
                         let mut text = format!(
@@ -517,6 +521,7 @@ impl eframe::App for StudioApp {
         self.reference_draft_window(&context);
         self.context_editor(&context);
         self.manual_data_window(&context);
+        self.update.window(&context);
 
         if self.first_frame {
             self.first_frame = false;

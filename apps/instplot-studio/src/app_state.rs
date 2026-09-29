@@ -72,6 +72,7 @@ pub(super) struct StudioApp {
     pub(super) marker_interval_for_all: bool,
     pub(super) marker_fill_for_all: bool,
     pub(super) language: UiLanguage,
+    pub(super) update: AppUpdateState,
     #[cfg(target_os = "macos")]
     pub(super) macos_open_files: Option<crate::macos_open_files::MacOpenFiles>,
     pub(super) first_frame: bool,
