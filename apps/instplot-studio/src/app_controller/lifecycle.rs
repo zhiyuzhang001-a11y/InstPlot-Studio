@@ -46,8 +46,7 @@ impl StudioApp {
         let x_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::X));
         let y_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::Y));
         Self {
-            branding: instplot_ui::Branding::new(PRODUCT_NAME, env!("CARGO_PKG_VERSION"))
-                .with_build_id(BUILD_ID),
+            branding: instplot_ui::Branding::new(PRODUCT_NAME, env!("CARGO_PKG_VERSION")),
             features: instplot_ui::FeatureSet::STUDIO,
             session,
             document,

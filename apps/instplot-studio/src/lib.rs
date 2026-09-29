@@ -89,7 +89,7 @@ mod tests {
     fn product_identity_is_stable_and_independent() {
         assert_eq!(PRODUCT_NAME, "InstPlot Studio");
         assert_eq!(BINARY_NAME, "instplot-studio");
-        assert_eq!(product_info(), "InstPlot Studio\tinstplot-studio\t0.1.0");
+        assert_eq!(product_info(), "InstPlot Studio\tinstplot-studio\t0.1.1");
     }
 
     #[test]

@@ -258,4 +258,4 @@ rustup component list --toolchain 1.98.0-aarch64-apple-darwin --installed
 - 数据变化恢复 autoscale、Auto locator、自动副刻度和 Auto formatter，同时保留自定义标签、display-scale、轴类型及外观；仅 Y error 等局部变化不扰动无关轴。
 - 全 workspace、format、check、严格 Clippy、repository hygiene、diff check、B5 19 项验证和 release build 全部 PASS。
 - 独立 agent 对安装应用执行真实普通/最大化/全屏操作，覆盖极小值、误差棒、倍率范围/主副间隔、数据修改、同路径重导、双 Y、保存重开及 PNG 导出，结论 PASS。
-- 最终唯一 Spotlight 应用：`/Users/zhiyu/Applications/InstPlot Studio.app`，版本 `0.1.0`，build `202609282305`，bundle ID `com.instplot.studio`，arm64、签名和 Spotlight 唯一索引均通过。
+- 最终唯一 Spotlight 应用：`$HOME/Applications/InstPlot Studio.app`，版本 `0.1.0`，build `202609282305`，bundle ID `com.instplot.studio`，arm64、签名和 Spotlight 唯一索引均通过。

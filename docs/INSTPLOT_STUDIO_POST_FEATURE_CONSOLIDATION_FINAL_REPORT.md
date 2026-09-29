@@ -50,7 +50,7 @@ It confirmed unchanged transaction/state behavior, unchanged stable viewport/obj
 
 Installed and verified the unique Spotlight application:
 
-- path: `/Users/zhiyu/Applications/InstPlot Studio.app`;
+- path: `$HOME/Applications/InstPlot Studio.app`;
 - version: `0.1.0`;
 - build: `202609281706`;
 - bundle ID: `com.instplot.studio`;
@@ -74,6 +74,6 @@ The temporary UI project was intentionally not saved and the test process was cl
 
 The external recovery package remains at:
 
-`/Users/zhiyu/Downloads/InstPlot-Consolidation-Recovery-20260928-162441`
+`$HOME/Downloads/InstPlot-Consolidation-Recovery-20260928-162441`
 
 It contains the recorded baseline, verified tracked patch, untracked archive/hashes, public API snapshots, serde contracts and window identities. The current work remains uncommitted so the user can inspect the installed application before deciding how to commit or push it.

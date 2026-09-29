@@ -191,4 +191,4 @@ AutoFactor 的指数可能随范围改变，因此编辑期间必须避免字段
 - 全 workspace 测试最终通过：Studio 库 `195 passed / 1 ignored`，Studio 应用 `91 passed`，其余 layout、export、text、UI、demo 及集成合同全部通过。
 - `cargo fmt --all -- --check`、workspace check、Rust 1.98 Clippy `-D warnings`、`git diff --check`、repository hygiene 和 B5 Studio 19 项验证全部 PASS。
 - 独立 agent 在真实 UI 中验证：极小值＋重复测量误差棒、`×10^-3` 范围/主副间隔、旧手动状态后修改录入数据、同路径 CSV 数值替换、双 Y 迁移、保存重开、PNG 导出，以及普通/最大化/全屏，结论 PASS。
-- 唯一 Spotlight 应用最终安装于 `/Users/zhiyu/Applications/InstPlot Studio.app`，版本 `0.1.0`，build `202609282305`，bundle ID `com.instplot.studio`，arm64 且签名有效。
+- 唯一 Spotlight 应用最终安装于 `$HOME/Applications/InstPlot Studio.app`，版本 `0.1.0`，build `202609282305`，bundle ID `com.instplot.studio`，arm64 且签名有效。

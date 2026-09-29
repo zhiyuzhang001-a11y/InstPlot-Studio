@@ -913,7 +913,12 @@ fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
     assert!((placed.axes.width - baseline.axes.width).abs() < 0.05);
     assert!((placed.axes.height - baseline.axes.height).abs() < 0.05);
     assert!(placed.display_list.width.get() > baseline.display_list.width.get());
-    assert!(placed.y2_axis.as_ref().is_some_and(|axis| !axis.major.is_empty()));
+    assert!(
+        placed
+            .y2_axis
+            .as_ref()
+            .is_some_and(|axis| !axis.major.is_empty())
+    );
     assert!(placed.y2_label_bounds.is_some());
     let right_edge_owners = placed
         .hit_map
@@ -940,7 +945,7 @@ fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
         .find(|series| series.id == marker_id)
         .unwrap()
         .points[marker_point.data_index.unwrap()]
-        .y;
+    .y;
     let expected_fraction = (source_y + 100.0) / 200.0;
     let expected_y = placed.axes.bottom() - expected_fraction * placed.axes.height;
     assert!((marker_point.path_proximity[0].1 - expected_y).abs() < 0.01);
@@ -960,7 +965,12 @@ fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
     assert!((placed_x.axes.width - baseline.axes.width).abs() < 0.05);
     assert!((placed_x.axes.height - baseline.axes.height).abs() < 0.05);
     assert!(placed_x.display_list.height.get() > baseline.display_list.height.get());
-    assert!(placed_x.x2_axis.as_ref().is_some_and(|axis| !axis.major.is_empty()));
+    assert!(
+        placed_x
+            .x2_axis
+            .as_ref()
+            .is_some_and(|axis| !axis.major.is_empty())
+    );
     let marker_point_x = placed_x
         .hit_map
         .items
@@ -973,7 +983,7 @@ fn secondary_axes_expand_only_the_outer_canvas_and_map_series_independently() {
         .find(|series| series.id == marker_id)
         .unwrap()
         .points[marker_point_x.data_index.unwrap()]
-        .x;
+    .x;
     let expected_x = placed_x.axes.x + (source_x + 300.0) / 600.0 * placed_x.axes.width;
     assert!((marker_point_x.path_proximity[0].0 - expected_x).abs() < 0.01);
 }
@@ -988,12 +998,19 @@ fn an_enabled_secondary_axis_without_data_owns_its_edge_without_fake_ticks() {
     chart.x2 = Some(x2);
     let placed = layout(&chart).unwrap();
 
-    assert!(placed.x2_axis.as_ref().is_some_and(|axis| axis.major.is_empty()));
-    assert!(!placed
-        .hit_map
-        .items
-        .iter()
-        .any(|item| item.node == NodeId(31) && item.role == SelectableRole::Tick));
+    assert!(
+        placed
+            .x2_axis
+            .as_ref()
+            .is_some_and(|axis| axis.major.is_empty())
+    );
+    assert!(
+        !placed
+            .hit_map
+            .items
+            .iter()
+            .any(|item| item.node == NodeId(31) && item.role == SelectableRole::Tick)
+    );
     let top_edge_owners = placed
         .hit_map
         .items
@@ -1041,20 +1058,26 @@ fn scientific_guides_have_distinct_layers_and_hit_roles() {
         label_offset_pt: (0.0, -8.0),
     });
     let placed = layout(&chart).unwrap();
-    assert!(placed.hit_map.items.iter().any(|item| {
-        item.node == NodeId(700) && item.role == SelectableRole::ReferenceLine
-    }));
+    assert!(
+        placed
+            .hit_map
+            .items
+            .iter()
+            .any(|item| { item.node == NodeId(700) && item.role == SelectableRole::ReferenceLine })
+    );
     for role in [
         SelectableRole::MeasurementArrow,
         SelectableRole::MeasurementArrowStart,
         SelectableRole::MeasurementArrowEnd,
         SelectableRole::MeasurementArrowLabel,
     ] {
-        assert!(placed
-            .hit_map
-            .items
-            .iter()
-            .any(|item| item.node == NodeId(701) && item.role == role));
+        assert!(
+            placed
+                .hit_map
+                .items
+                .iter()
+                .any(|item| item.node == NodeId(701) && item.role == role)
+        );
     }
     let reference_item = placed
         .display_list
@@ -1144,8 +1167,10 @@ fn filled_arrow_shafts_end_at_head_bases_and_tips_stay_on_endpoints() {
         .copied()
         .find(|(_, _, stroke)| stroke.is_some())
         .unwrap();
-    let [PathVerb::MoveTo(shaft_start_x, shaft_start_y), PathVerb::LineTo(shaft_end_x, shaft_end_y)] =
-        shaft.verbs.as_slice()
+    let [
+        PathVerb::MoveTo(shaft_start_x, shaft_start_y),
+        PathVerb::LineTo(shaft_end_x, shaft_end_y),
+    ] = shaft.verbs.as_slice()
     else {
         panic!("filled arrow shaft should contain exactly one trimmed segment")
     };
@@ -1161,19 +1186,19 @@ fn filled_arrow_shafts_end_at_head_bases_and_tips_stay_on_endpoints() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(tips.iter().any(|tip| {
-        (tip.0 - start.0).abs() < 0.01 && (tip.1 - start.1).abs() < 0.01
-    }));
-    assert!(tips
-        .iter()
-        .any(|tip| (tip.0 - end.0).abs() < 0.01 && (tip.1 - end.1).abs() < 0.01));
+    assert!(
+        tips.iter()
+            .any(|tip| { (tip.0 - start.0).abs() < 0.01 && (tip.1 - start.1).abs() < 0.01 })
+    );
+    assert!(
+        tips.iter()
+            .any(|tip| (tip.0 - end.0).abs() < 0.01 && (tip.1 - end.1).abs() < 0.01)
+    );
     let arrow_bounds = placed
         .hit_map
         .items
         .iter()
-        .find(|item| {
-            item.node == NodeId(710) && item.role == SelectableRole::MeasurementArrow
-        })
+        .find(|item| item.node == NodeId(710) && item.role == SelectableRole::MeasurementArrow)
         .unwrap()
         .bounds;
     for (path, fill, _) in &arrow_paths {
@@ -1220,7 +1245,8 @@ fn filled_arrow_shafts_end_at_head_bases_and_tips_stay_on_endpoints() {
         unreachable!()
     };
     assert!(
-        (connector_shaft_x.get() - connector_tip.0).hypot(connector_shaft_y.get() - connector_tip.1)
+        (connector_shaft_x.get() - connector_tip.0)
+            .hypot(connector_shaft_y.get() - connector_tip.1)
             > 7.9
     );
     let connector_bounds = placed
@@ -1271,8 +1297,15 @@ fn axis_ink_is_black_while_secondary_spines_can_use_distinct_colors() {
             ..
         } if *source == NodeId(702) && stroke.color == Color(204, 0, 0, 255)
     )));
-    assert!(placed.display_list.items.iter().filter_map(|item| match item {
-        DisplayItem::GlyphRun(run) => Some(run.color),
-        _ => None,
-    }).all(|color| color == Color(0, 0, 0, 255)));
+    assert!(
+        placed
+            .display_list
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::GlyphRun(run) => Some(run.color),
+                _ => None,
+            })
+            .all(|color| color == Color(0, 0, 0, 255))
+    );
 }

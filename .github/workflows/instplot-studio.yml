@@ -89,7 +89,7 @@ jobs:
       - name: Check product identity
         if: runner.os != 'Windows'
         run: |
-          test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.0'
+          test "$(target/release/instplot-studio --product-info)" = $'InstPlot Studio\tinstplot-studio\t0.1.1'
           target/release/instplot-studio --export-fixed-pdf target/b1-fixed.pdf
           test -s target/b1-fixed.pdf
           target/release/instplot-studio --export-fixed-png target/b3-fixed.png

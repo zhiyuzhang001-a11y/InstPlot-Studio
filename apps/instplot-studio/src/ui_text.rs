@@ -174,6 +174,7 @@ pub enum Text {
     Why,
     Impact,
     HowToFix,
+    CheckUpdates,
 }
 
 impl UiLanguage {
@@ -345,6 +346,7 @@ impl UiLanguage {
             (Self::Chinese, Why) => "原因",
             (Self::Chinese, Impact) => "影响",
             (Self::Chinese, HowToFix) => "修复方法",
+            (Self::Chinese, CheckUpdates) => "检查更新",
             (Self::English, File) => "File",
             (Self::English, Export) => "Export Image",
             (Self::English, NewProject) => "New Project",
@@ -516,6 +518,7 @@ impl UiLanguage {
             (Self::English, Why) => "Why",
             (Self::English, Impact) => "Impact",
             (Self::English, HowToFix) => "How to fix",
+            (Self::English, CheckUpdates) => "Check for updates",
         }
     }
 

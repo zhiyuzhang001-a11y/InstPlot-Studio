@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "target" / "b1-validation"
 PDF = OUTPUT / "fixed-figure.pdf"
 EXPECTED_REVISION = "80ad374044d91dd3c306a384fc7f07ba82cac429"
-EXPECTED_PRODUCT = "InstPlot Studio\tinstplot-studio\t0.1.0"
+EXPECTED_PRODUCT = "InstPlot Studio\tinstplot-studio\t0.1.1"
 SIZE_CEILING = 12 * 1024 * 1024
 
 

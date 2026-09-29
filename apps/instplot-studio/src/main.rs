@@ -46,11 +46,6 @@ use ui_chrome::*;
 use ui_text::{Text, UiLanguage};
 use workspace::WorkspaceState;
 
-const BUILD_ID: &str = match option_env!("INSTPLOT_BUILD_ID") {
-    Some(value) => value,
-    None => "dev",
-};
-
 const DATA_SIDEBAR_DEFAULT_WIDTH: f32 = 260.0;
 const DATA_SIDEBAR_MIN_WIDTH: f32 = 170.0;
 const DATA_SIDEBAR_MAX_WIDTH: f32 = 520.0;
