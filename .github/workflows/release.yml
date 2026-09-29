@@ -200,7 +200,7 @@ jobs:
         run: |
           $version = '${{ needs.freeze-source.outputs.version }}'
           $installer = "target/packages/windows/InstPlot-Studio-$version-windows-x86_64-setup.exe"
-          $installRoot = Join-Path $env:RUNNER_TEMP "InstPlot Studio"
+          $installRoot = Join-Path $env:RUNNER_TEMP "instplot-studio-release"
           & $installer /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$installRoot"
           if ($LASTEXITCODE -ne 0) { throw "Installer failed with $LASTEXITCODE" }
           $binary = Join-Path $installRoot "instplot-studio.exe"
