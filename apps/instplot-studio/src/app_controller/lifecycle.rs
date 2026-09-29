@@ -103,6 +103,7 @@ impl StudioApp {
             marker_interval_for_all: false,
             marker_fill_for_all: false,
             language,
+            update: AppUpdateState::default(),
             #[cfg(target_os = "macos")]
             macos_open_files: None,
             first_frame: true,

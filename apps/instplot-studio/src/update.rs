@@ -9,11 +9,16 @@ use std::fmt;
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use semver::Version;
-use serde::Deserialize;
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use url::Url;
 
 const PRODUCT_SLUG: &str = "instplot-studio";
 const MANIFEST_SCHEMA: u32 = 1;
+pub const GITHUB_RELEASES_ROOT: &str =
+    "https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +35,20 @@ impl UpdateChannel {
             Self::Prerelease
         }
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Prerelease => "prerelease",
+        }
+    }
+}
+
+pub fn production_latest_url(channel: UpdateChannel) -> String {
+    format!(
+        "{PRODUCTION_PUBLIC_ROOT}/channels/{}/latest.json",
+        channel.as_str()
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -72,6 +91,8 @@ pub struct TrustedUpdateKey {
     pub id: &'static str,
     pub bytes: [u8; 32],
 }
+
+include!(concat!(env!("OUT_DIR"), "/update_trust.rs"));
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AllowedUpdateRoot {
@@ -184,6 +205,13 @@ struct SignatureLocator {
     signature_url: String,
 }
 
+pub fn signature_url_from_manifest_bytes(raw: &[u8]) -> Result<String, SignedManifestError> {
+    reject_duplicate_json_keys(raw)?;
+    let locator: SignatureLocator = serde_json::from_slice(raw)
+        .map_err(|error| SignedManifestError::InvalidJson(error.to_string()))?;
+    Ok(locator.signature_url)
+}
+
 pub fn verify_signed_manifest(
     raw: &[u8],
     signature_bytes: &[u8],
@@ -191,9 +219,26 @@ pub fn verify_signed_manifest(
     allowed_root: &AllowedUpdateRoot,
     expected_channel: UpdateChannel,
 ) -> Result<UpdateManifest, SignedManifestError> {
-    let locator: SignatureLocator = serde_json::from_slice(raw)
-        .map_err(|error| SignedManifestError::InvalidJson(error.to_string()))?;
-    allowed_root.permits(&locator.signature_url)?;
+    verify_signed_manifest_at(
+        raw,
+        signature_bytes,
+        keys,
+        allowed_root,
+        expected_channel,
+        OffsetDateTime::now_utc(),
+    )
+}
+
+pub fn verify_signed_manifest_at(
+    raw: &[u8],
+    signature_bytes: &[u8],
+    keys: &[TrustedUpdateKey],
+    allowed_root: &AllowedUpdateRoot,
+    expected_channel: UpdateChannel,
+    now: OffsetDateTime,
+) -> Result<UpdateManifest, SignedManifestError> {
+    let signature_url = signature_url_from_manifest_bytes(raw)?;
+    allowed_root.permits(&signature_url)?;
     let signature = Signature::from_slice(signature_bytes)
         .map_err(|_| SignedManifestError::InvalidSignature)?;
     let mut successful_key = None;
@@ -213,7 +258,7 @@ pub fn verify_signed_manifest(
     if manifest.key_id != successful_key {
         return Err(SignedManifestError::KeyIdMismatch);
     }
-    validate_manifest(&manifest, allowed_root, expected_channel)?;
+    validate_manifest(&manifest, allowed_root, expected_channel, now)?;
     Ok(manifest)
 }
 
@@ -221,6 +266,7 @@ fn validate_manifest(
     manifest: &UpdateManifest,
     allowed_root: &AllowedUpdateRoot,
     expected_channel: UpdateChannel,
+    now: OffsetDateTime,
 ) -> Result<(), SignedManifestError> {
     if manifest.schema != MANIFEST_SCHEMA {
         return Err(SignedManifestError::Manifest(
@@ -248,6 +294,26 @@ fn validate_manifest(
         ));
     }
     allowed_root.permits(&manifest.signature_url)?;
+    validate_notes_url(&manifest.notes_url)?;
+    let published_at = OffsetDateTime::parse(&manifest.published_at, &Rfc3339)
+        .map_err(|error| SignedManifestError::Manifest(error.to_string()))?;
+    let expires_at = OffsetDateTime::parse(&manifest.expires_at, &Rfc3339)
+        .map_err(|error| SignedManifestError::Manifest(error.to_string()))?;
+    if expires_at <= now {
+        return Err(SignedManifestError::Manifest(
+            "update metadata has expired".to_owned(),
+        ));
+    }
+    if published_at > now + time::Duration::hours(24) || expires_at <= published_at {
+        return Err(SignedManifestError::Manifest(
+            "invalid update metadata validity window".to_owned(),
+        ));
+    }
+    if expires_at - published_at > time::Duration::days(120) {
+        return Err(SignedManifestError::Manifest(
+            "update metadata validity window is too long".to_owned(),
+        ));
+    }
     if manifest.platforms.is_empty() {
         return Err(SignedManifestError::Manifest(
             "no platform assets".to_owned(),
@@ -266,7 +332,10 @@ fn validate_manifest(
                 || package.file_name.is_empty()
                 || package.size_bytes == 0
                 || package.sha256.len() != 64
-                || !package.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !package
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 || !ids.insert(package.id.as_str())
             {
                 return Err(SignedManifestError::Manifest(format!(
@@ -282,6 +351,106 @@ fn validate_manifest(
         }
     }
     Ok(())
+}
+
+fn validate_notes_url(value: &str) -> Result<(), SignedManifestError> {
+    let parsed =
+        Url::parse(value).map_err(|error| SignedManifestError::InvalidUrl(error.to_string()))?;
+    let allowed = Url::parse(GITHUB_RELEASES_ROOT)
+        .expect("the compiled GitHub release root must be a valid URL");
+    if parsed.scheme() != "https"
+        || parsed.host_str() != allowed.host_str()
+        || parsed.port_or_known_default() != allowed.port_or_known_default()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !normalized_path(parsed.path())?.starts_with(&normalized_path(allowed.path())?)
+    {
+        return Err(SignedManifestError::UrlOutsideAllowedRoot(value.to_owned()));
+    }
+    Ok(())
+}
+
+fn reject_duplicate_json_keys(raw: &[u8]) -> Result<(), SignedManifestError> {
+    serde_json::from_slice::<UniqueJson>(raw)
+        .map(|_| ())
+        .map_err(|error| SignedManifestError::InvalidJson(error.to_string()))
+}
+
+struct UniqueJson;
+
+impl<'de> Deserialize<'de> for UniqueJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueJsonVisitor)
+    }
+}
+
+struct UniqueJsonVisitor;
+
+impl<'de> Visitor<'de> for UniqueJsonVisitor {
+    type Value = UniqueJson;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("JSON without duplicate object keys")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut keys = BTreeSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !keys.insert(key.clone()) {
+                return Err(de::Error::custom(format!("duplicate object key: {key}")));
+            }
+            map.next_value::<UniqueJson>()?;
+        }
+        Ok(UniqueJson)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while sequence.next_element::<UniqueJson>()?.is_some() {}
+        Ok(UniqueJson)
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_string<E>(self, _: String) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueJson)
+    }
 }
 
 #[cfg(test)]
@@ -308,7 +477,7 @@ mod tests {
         format!(
             concat!(
                 "{{\"channel\":\"{}\",\"expires_at\":\"2026-12-29T00:00:00Z\",",
-                "\"key_id\":\"{}\",\"notes_url\":\"https://github.com/example/release\",",
+                "\"key_id\":\"{}\",\"notes_url\":\"https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v{2}\",",
                 "\"platforms\":{{\"linux-x86_64\":{{\"packages\":[{{",
                 "\"file_name\":\"InstPlot-Studio-{2}.deb\",\"id\":\"deb\",",
                 "\"minimum_system\":\"Ubuntu 22.04\",\"package_type\":\"deb\",",
@@ -338,29 +507,39 @@ mod tests {
             bytes: signing.verifying_key().to_bytes(),
         };
         let allowed = AllowedUpdateRoot::parse(ROOT).unwrap();
-        let parsed = verify_signed_manifest(
+        let now = OffsetDateTime::parse("2026-09-29T12:00:00Z", &Rfc3339).unwrap();
+        let parsed = verify_signed_manifest_at(
             &raw,
             &signature,
             &[key],
             &allowed,
             UpdateChannel::Prerelease,
+            now,
         )
         .unwrap();
         assert_eq!(parsed.version, "0.1.2-rc.1");
 
         assert!(matches!(
-            verify_signed_manifest(
+            verify_signed_manifest_at(
                 &raw,
                 &signature,
                 &[TrustedUpdateKey { id: "next", ..key }],
                 &allowed,
                 UpdateChannel::Prerelease,
+                now,
             ),
             Err(SignedManifestError::KeyIdMismatch)
         ));
         assert!(
-            verify_signed_manifest(&raw, &signature, &[key], &allowed, UpdateChannel::Stable,)
-                .is_err()
+            verify_signed_manifest_at(
+                &raw,
+                &signature,
+                &[key],
+                &allowed,
+                UpdateChannel::Stable,
+                now,
+            )
+            .is_err()
         );
     }
 
@@ -368,7 +547,7 @@ mod tests {
     fn python_and_rust_share_one_signed_raw_byte_fixture() {
         let raw = include_bytes!("../tests/fixtures/update-manifest.json");
         let signature = decode_hex(include_str!("../tests/fixtures/update-manifest.sig.hex"));
-        let manifest = verify_signed_manifest(
+        let manifest = verify_signed_manifest_at(
             raw,
             &signature,
             &[TrustedUpdateKey {
@@ -377,6 +556,7 @@ mod tests {
             }],
             &AllowedUpdateRoot::parse(ROOT).unwrap(),
             UpdateChannel::Prerelease,
+            OffsetDateTime::parse("2026-09-29T12:00:00Z", &Rfc3339).unwrap(),
         )
         .unwrap();
         assert_eq!(manifest.version, "0.1.2-rc.1");
@@ -398,5 +578,14 @@ mod tests {
         ] {
             assert!(allowed.permits(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn duplicate_json_keys_are_rejected_before_signature_location_is_trusted() {
+        let raw = br#"{"signature_url":"https://downloads.example.test/instplot-studio/a","signature_url":"https://downloads.example.test/instplot-studio/b"}"#;
+        assert!(matches!(
+            signature_url_from_manifest_bytes(raw),
+            Err(SignedManifestError::InvalidJson(_))
+        ));
     }
 }

@@ -172,7 +172,17 @@ def main() -> int:
         checks.append(
             fact(
                 "workspace-members",
-                members == ["instplot-studio", "instplot-layout"],
+                members
+                == [
+                    "instplot-studio",
+                    "instplot-export",
+                    "instplot-render",
+                    "instplot-text",
+                    "instplot-layout",
+                    "instplot-ui",
+                    "instplot-demo",
+                    "instplot-update-signature",
+                ],
                 repr(members),
             )
         )

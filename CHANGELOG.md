@@ -6,6 +6,35 @@ All notable changes to InstPlot Studio are recorded here.
 
 No changes yet.
 
+## [0.1.2-rc.1] - 2026-09-29
+
+### Added
+
+- A manually triggered in-app update window backed by the fixed InstPlot Studio OSS channel.
+- Ed25519 verification with current and next embedded trust keys, strict update URL boundaries,
+  signed manifest validation, platform-specific package selection and downgrade protection.
+- Background package downloads with progress, cancellation, bounded size, SHA-256 verification,
+  no-clobber saving and explicit manual-install handoff.
+- GitHub OIDC authentication for short-lived Alibaba Cloud STS credentials and least-privilege
+  publication under the dedicated `instplot-studio/` OSS prefix.
+- Reproducible Windows, macOS and Linux technical-prerelease packaging and installation checks.
+
+### Security and release infrastructure
+
+- Public-root and update-key configuration now has one checked-in build-time source, verified
+  against protected GitHub Environment variables before OSS publication.
+- Signed metadata rejects duplicate JSON keys, invalid validity windows, untrusted release-note
+  links, cross-origin redirects, stale sequences and mismatched key identifiers.
+- Immutable OSS objects receive explicit content types and long-lived immutable caching; channel
+  pointers use revalidation caching and are activated only after public verification.
+
+### Compatibility and limitations
+
+- This is an unsigned technical prerelease. The macOS package uses ad-hoc signing and is not
+  notarized; the Windows installer has no Authenticode signature and may trigger SmartScreen.
+- The application downloads and verifies an installer but never launches it or replaces the
+  installed application automatically.
+
 ## [0.1.1] - 2026-09-29
 
 ### Added
@@ -82,6 +111,7 @@ No changes yet.
 - The local macOS installer uses ad-hoc signing; public distribution signing and notarization are
   separate release work.
 
-[Unreleased]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.2-rc.1...HEAD
+[0.1.2-rc.1]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.1...v0.1.2-rc.1
 [0.1.1]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v0.1.0

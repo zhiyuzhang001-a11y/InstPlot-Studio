@@ -72,8 +72,10 @@ pub use semantic::{
 pub use session::StudioSession;
 pub use text_edit::{BracketEdit, BracketMode, pair_bracket_edit};
 pub use update::{
-    AllowedUpdateRoot, SignedManifestError, TrustedUpdateKey, UpdateChannel, UpdateManifest,
-    verify_signed_manifest,
+    AllowedUpdateRoot, GITHUB_RELEASES_ROOT, PRODUCTION_PUBLIC_ROOT, PRODUCTION_TRUSTED_KEYS,
+    SignedManifestError, TrustedUpdateKey, UpdateChannel, UpdateManifest, UpdatePackage,
+    UpdatePlatform, production_latest_url, signature_url_from_manifest_bytes,
+    verify_signed_manifest, verify_signed_manifest_at,
 };
 
 pub const PRODUCT_NAME: &str = "InstPlot Studio";

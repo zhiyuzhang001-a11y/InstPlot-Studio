@@ -21,7 +21,7 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayName=InstPlot Studio
-VersionInfoVersion={#MyVersion}
+VersionInfoVersion={#MyVersionInfoVersion}
 
 [Files]
 Source: "{#SourceDir}\instplot-studio.exe"; DestDir: "{app}"; Flags: ignoreversion

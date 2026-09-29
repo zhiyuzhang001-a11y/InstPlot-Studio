@@ -84,6 +84,27 @@ jobs:
           echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
           echo "UPDATE_CHANNEL=${channel}" >> "${GITHUB_ENV}"
 
+      - name: Verify client trust root matches protected configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          trust = json.loads(Path("packaging/update/trust.json").read_text(encoding="utf-8"))
+          expected = [
+              (os.environ["UPDATE_KEY_ID"], os.environ["UPDATE_PUBLIC_KEY_HEX"]),
+              (os.environ["UPDATE_NEXT_KEY_ID"], os.environ["UPDATE_NEXT_PUBLIC_KEY_HEX"]),
+          ]
+          actual = [(entry["id"], entry["public_key_hex"]) for entry in trust["keys"]]
+          if trust["public_root"] != os.environ["OSS_PUBLIC_ROOT"]:
+              raise SystemExit("client OSS public root differs from protected configuration")
+          if actual != expected:
+              raise SystemExit("client update keys differ from protected configuration")
+          PY
+
       - name: Enforce monotonic sequence and snapshot the other channel
         shell: bash
         run: |
@@ -171,23 +192,6 @@ jobs:
             --expires-at "${EXPIRES_AT}" \
             --output target/oss-upload
 
-      - name: Refuse to overwrite immutable public objects
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${METADATA_ONLY}" == true ]]; then
-            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}/metadata/${RELEASE_SEQUENCE}"
-          else
-            release_root="target/oss-upload/${PRODUCT_SLUG}/releases/${RELEASE_VERSION}"
-          fi
-          prefix="target/oss-upload/${PRODUCT_SLUG}/"
-          while IFS= read -r -d '' path; do
-            relative=${path#"${prefix}"}
-            status=$(curl --silent --show-error --location --output /dev/null --write-out '%{http_code}' \
-              "${OSS_PUBLIC_ROOT}/${relative}?existence-check=${GITHUB_RUN_ID}")
-            [[ "${status}" == 404 ]] || { echo "Immutable object is not safely absent (${status}): ${relative}" >&2; exit 1; }
-          done < <(find "${release_root}" -type f -print0 | sort -z)
-
       - name: Obtain short-lived Alibaba Cloud credentials
         uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1
         with:
@@ -209,8 +213,18 @@ jobs:
           prefix="target/oss-upload/${PRODUCT_SLUG}/"
           while IFS= read -r -d '' path; do
             relative=${path#"${prefix}"}
-            "${RUNNER_TEMP}/ossutil" cp "${path}" \
-              "oss://${OSS_BUCKET}/${PRODUCT_SLUG}/${relative}" \
+            case "${relative}" in
+              *.json) content_type=application/json ;;
+              *.sig) content_type=application/octet-stream ;;
+              *) content_type=application/octet-stream ;;
+            esac
+            "${RUNNER_TEMP}/ossutil" api put-object \
+              --bucket "${OSS_BUCKET}" \
+              --key "${PRODUCT_SLUG}/${relative}" \
+              --body "file://${path}" \
+              --forbid-overwrite true \
+              --content-type "${content_type}" \
+              --cache-control "public, max-age=31536000, immutable" \
               --endpoint "${OSS_ENDPOINT}" --region "${OSS_REGION}"
           done < <(find "${release_root}" -type f -print0 | sort -z)
 
@@ -239,6 +253,7 @@ jobs:
           "${RUNNER_TEMP}/ossutil" cp "${latest}" \
             "oss://${OSS_BUCKET}/${PRODUCT_SLUG}/channels/${UPDATE_CHANNEL}/latest.json" \
             -f --content-type application/json \
+            --cache-control "no-cache, max-age=0, must-revalidate" \
             --endpoint "${OSS_ENDPOINT}" --region "${OSS_REGION}"
 
       - name: Verify activated public channel
