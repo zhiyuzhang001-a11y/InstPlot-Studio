@@ -37,6 +37,8 @@
 
 这些新增项尚未在 Windows 执行，不计为通过。Mac 没有 PowerShell；本地只完成脚本逐段审阅和差异检查，不以此代替 Inno 编译或 Windows 运行证据。`f8c5da9` CI 不包含这批后续故障测试；已等待其终态后集中提交新一批验收。完整助手仍须实现恢复失败的持久状态及停止重试，本原型不代替该实现。
 
+上述新增故障原型现已通过：提交 `b518a8c` 四项 CI 成功，运行 `36893724170` 的 results.json 已读取；桌面图标有/无两例均确认 `interrupted_after_payload_restored`、`failed_recovery_kept_assets_and_user_data`、`modified_added_file_cleanup_rejected` 为 true，旧版恢复、用户文件、卸载及原生发现断言全通过。这里仍是原型证据，不是产品助手持久恢复状态或 Windows 实机 GUI 验收；后续只读租约批次不在该提交内。
+
 ## 后续门槛
 
 ### Windows 可信恢复资产（本地模块验收）
@@ -65,6 +67,8 @@ Windows `TransactionStore` 已强制私有目录/锁文件/状态文件权限，
 
 Windows API、进程模块及实际事务/交换源文件的隔离交叉类型/Clippy 检查通过；检查器的路径适配器固定拒绝，不能当路径或权限的运行测试。Mac 全目标/全功能 Clippy 与 18 项相关本地测试通过。恢复资产克隆保留权限策略，使用前重复验证目录/文件权限。这批权限实现仍待新 Windows CI 实际执行；不能计为 Windows 更新助手端到端通过，原位入口保持默认关闭。权限及恢复原型故障批次进入下一轮 CI。
 
+该权限批次现已在 `b518a8c` Windows CI 通过：日志确认 `private_directory_is_created_atomically_and_foreign_acl_is_not_repaired` 和 `production_private_acl_requirement_is_retained_by_clones` 通过。此前“待运行”记录保留为阶段历史，不再是这两项的当前状态。
+
 ### 安装器使用期间的只读租约（实现，Windows 运行待验）
 
 `VerifiedWindowsInstaller::pin` 在路径/权限检查后以仅 `FILE_SHARE_READ` 打开安装器，在句柄持有期间重新校验大小与 SHA-256；新旧配对均须取得租约后才允许请求旧 GUI 退出。任一获取失败会释放另一句柄，安装不开始。租约不序列化、不克隆，也不代替安装事务锁；不得提前释放后仅凭缓存描述执行安装。
@@ -74,3 +78,5 @@ Windows API、进程模块及实际事务/交换源文件的隔离交叉类型/C
 Mac 10 项安装契约/资产测试及全目标全功能 Clippy 通过。隔离 Windows 检查器现包含实际签名清单、完整安装契约/原生发现/资产/权限/进程与事务源文件，Windows x64 全目标 Clippy 通过，不再使用拒绝型路径适配器；它仍只是交叉类型检查，不是 Windows 运行或 GUI 验收。
 
 本轮本机 Studio `cargo test --locked --package instplot-studio --all-targets --all-features` 完整通过：335 项通过，1 项原有跳过，包括真实 DMG 组件及导入/录入、坐标轴、文字、持久化和导出回归。Windows 专有租约/ACL 用例不在此 Mac 数字内。
+
+补充 4 项工作保护控制器测试通过：项目无 dirty 不隐藏录入草稿，数值/文字/工具草稿保留，写盘失败保持重启待确认且旧应用不关闭，执行重启动作时重新检查草稿及外部数据保存冲突。后两项新增；这些是控制器断言，未冒充真实保存对话框点击、取消或完整下载/重启 GUI 验收。

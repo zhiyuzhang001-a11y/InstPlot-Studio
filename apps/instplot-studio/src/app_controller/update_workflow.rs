@@ -113,4 +113,63 @@ mod tests {
         assert_eq!(app.numeric_inputs["test"].text, "");
         assert!(app.reference_draft.is_some());
     }
+
+    #[test]
+    fn failed_project_save_keeps_restart_pending_and_old_application_open() {
+        let mut app = app();
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let missing_parent = std::env::temp_dir().join(format!(
+            "studio-update-missing-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        assert!(!missing_parent.exists());
+        assert!(app.execute_document_edit(
+            EditCommand::SetFigureSize {
+                width_mm: 91.0,
+                height_mm: 71.0,
+            },
+            "update save protection",
+        ));
+        app.request_replacement(PendingAction::RestartForUpdate);
+        assert_eq!(app.pending_action, Some(PendingAction::RestartForUpdate));
+        assert!(!app.execute_project_save(missing_parent.join("project.instplot"), false));
+        assert_eq!(app.pending_action, Some(PendingAction::RestartForUpdate));
+        assert!(app.edit_history.is_dirty(&app.document));
+        assert!(!app.allow_close);
+        assert!(!app.update.is_launching());
+        assert!(!app.update.take_close_request());
+        assert!(!missing_parent.exists());
+    }
+
+    #[test]
+    fn restart_rechecks_drafts_and_conflicts_without_discarding_work() {
+        let mut app = app();
+        app.numeric_inputs.insert(
+            "update-draft".into(),
+            DeferredNumericInput {
+                source_value: 2.0,
+                text: "3.5".into(),
+                error: None,
+            },
+        );
+        // This is the action taken after saving or explicitly discarding the
+        // project; neither choice is permission to discard editor drafts.
+        app.perform_action(PendingAction::RestartForUpdate);
+        assert_eq!(app.numeric_inputs["update-draft"].text, "3.5");
+        assert!(!app.allow_close);
+        assert!(!app.update.is_launching());
+        assert!(!app.update.take_close_request());
+
+        app.numeric_inputs.clear();
+        app.pending_managed_save_conflict = Some(ManagedSaveConflict {
+            project_path: PathBuf::from("conflicted-project.instplot"),
+            explanation: "external data changed".into(),
+        });
+        app.perform_action(PendingAction::RestartForUpdate);
+        assert!(app.pending_managed_save_conflict.is_some());
+        assert!(!app.allow_close);
+        assert!(!app.update.is_launching());
+        assert!(!app.update.take_close_request());
+    }
 }
