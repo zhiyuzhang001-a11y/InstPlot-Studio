@@ -12,6 +12,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowsControllerPhase {
+    WaitingForExit,
     Applying,
     AwaitingCandidate,
     StoppingCandidate,
@@ -20,6 +21,7 @@ pub enum WindowsControllerPhase {
     StoppingRecovery,
     Completed,
     RolledBack,
+    FailedBeforeApply,
     InspectionRequired,
 }
 
@@ -34,6 +36,22 @@ pub struct WindowsUpdateController<'a> {
 }
 
 impl<'a> WindowsUpdateController<'a> {
+    /// Called only in the authenticated copied helper after parent-side work
+    /// and compatibility preflight. Readiness is durable before the parent is
+    /// allowed to close. This method does not close the parent or install.
+    pub fn wait_after_preflight(helper: &'a WindowsHelperSession) -> io::Result<Self> {
+        helper.acknowledge_ready()?;
+        Ok(Self {
+            helper,
+            phase: WindowsControllerPhase::WaitingForExit,
+            installer: None,
+            gui: None,
+            access: None,
+            entered: Instant::now(),
+            exit_recorded: false,
+        })
+    }
+
     /// Internal adapter after work freezing, compatibility checks, helper
     /// readiness and old-GUI normal exit. NOT authorization to bypass those
     /// gates. There is deliberately no production caller/CLI yet.
@@ -79,6 +97,7 @@ impl<'a> WindowsUpdateController<'a> {
 
     fn step(&mut self) -> io::Result<()> {
         match self.phase {
+            WindowsControllerPhase::WaitingForExit => self.poll_old_exit(),
             WindowsControllerPhase::Applying | WindowsControllerPhase::Restoring => {
                 self.poll_installer()
             }
@@ -86,9 +105,37 @@ impl<'a> WindowsUpdateController<'a> {
             | WindowsControllerPhase::AwaitingRecovery => self.poll_health(),
             WindowsControllerPhase::StoppingCandidate
             | WindowsControllerPhase::StoppingRecovery => self.poll_normal_exit(),
-            WindowsControllerPhase::Completed | WindowsControllerPhase::RolledBack => Ok(()),
+            WindowsControllerPhase::Completed
+            | WindowsControllerPhase::RolledBack
+            | WindowsControllerPhase::FailedBeforeApply => Ok(()),
             WindowsControllerPhase::InspectionRequired => Err(invalid("inspection required")),
         }
+    }
+
+    fn poll_old_exit(&mut self) -> io::Result<()> {
+        if exit_wait_expired(self.entered.elapsed()) {
+            self.helper.abort_before_apply(
+                "normal exit or installation exclusion timed out before apply",
+            )?;
+            self.enter(WindowsControllerPhase::FailedBeforeApply);
+            return Ok(());
+        }
+        let exited = self.helper.old_process().wait_for_exit(Duration::ZERO)?;
+        if !exited {
+            return Ok(());
+        }
+        match WindowsInstallAccess::exclusive(self.helper.installation().directory()) {
+            Ok(access) => self.access = Some(access),
+            Err(_) => return Ok(()),
+        }
+        let installer = self.helper.start_candidate_installer(
+            self.access
+                .take()
+                .ok_or_else(|| invalid("exclusion missing"))?,
+        )?;
+        self.installer = Some(installer);
+        self.enter(WindowsControllerPhase::Applying);
+        Ok(())
     }
 
     fn poll_installer(&mut self) -> io::Result<()> {
@@ -263,9 +310,21 @@ fn health_wait_allowed(recovery: bool, stage: UpdateStage, elapsed: Duration) ->
     Ok(elapsed < Duration::from_secs(60))
 }
 
+fn exit_wait_expired(elapsed: Duration) -> bool {
+    elapsed >= Duration::from_secs(30)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normal_exit_wait_has_an_exact_boundary_not_a_forced_exit() {
+        assert!(!exit_wait_expired(Duration::ZERO));
+        assert!(!exit_wait_expired(Duration::from_secs(29)));
+        assert!(exit_wait_expired(Duration::from_secs(30)));
+        assert!(exit_wait_expired(Duration::from_secs(31)));
+    }
 
     #[test]
     fn committed_or_foreign_stage_never_authorizes_a_stop_or_rollback() {

@@ -226,9 +226,13 @@ impl PreparedWindowsHelper {
     /// ready file alone. Success still does not request or authorize GUI exit.
     pub fn confirm_ready(&self, child: &std::process::Child) -> io::Result<()> {
         confirm_process_ready(&self.directory, &self.request, child)?;
+        confirm_waiting_request(&self.directory, &self.request)?;
         let installation = self.request.installation()?;
         super::native::revalidate_installation(&installation)?;
-        require_original_files(&installation, &self.request)
+        require_original_files(&installation, &self.request)?;
+        // Re-observe the owned native helper after potentially slow file checks.
+        // The parent must not close based only on a stale ready file.
+        confirm_process_ready(&self.directory, &self.request, child)
     }
 
     /// Call only AFTER the work-protection controller has accepted user restart.
@@ -778,6 +782,20 @@ fn confirm_process_ready(
     Ok(())
 }
 
+fn confirm_waiting_request(directory: &Path, request: &HelperRequest) -> io::Result<()> {
+    // The authenticated helper owns the writer lock; parent validation must be
+    // read-only and must not repair or contend for that lock.
+    let state = crate::update_transaction::read_snapshot(directory, &request.identity)?;
+    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    let actual: HelperRequest =
+        serde_json::from_slice(&read_private(&directory.join("request.json"), 64 * 1024)?)
+            .map_err(invalid)?;
+    if actual != *request {
+        return Err(invalid("waiting helper request changed before GUI exit"));
+    }
+    Ok(())
+}
+
 fn require_transaction(
     request: &HelperRequest,
     state: &UpdateTransaction,
@@ -943,6 +961,50 @@ mod tests {
         let mut changed_license = self::request();
         changed_license.previous_license_sha256 = "e".repeat(64);
         assert!(changed_license.transaction().is_err());
+    }
+
+    #[test]
+    fn parent_ready_request_check_is_read_only_under_helper_writer_lock() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-parent-ready-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        write_new_json(&root.join("request.json"), &request).unwrap();
+        let mut state = request.transaction().unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(TransactionStore::lock(&root).is_err());
+        confirm_waiting_request(&root, &request).unwrap();
+        let before = fs::read(root.join("request.json")).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(confirm_waiting_request(&root, &foreign).is_err());
+        foreign = request.clone();
+        foreign.desktop_shortcut = true;
+        super::super::write_private_atomic(
+            &root.join("request.json"),
+            &serde_json::to_vec(&foreign).unwrap(),
+        )
+        .unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        assert_eq!(
+            fs::read(root.join("request.json")).unwrap(),
+            serde_json::to_vec(&foreign).unwrap()
+        );
+        super::super::write_private_atomic(&root.join("request.json"), &before).unwrap();
+        confirm_waiting_request(&root, &request).unwrap();
+        state.transition(UpdateStage::Applying).unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        drop(store);
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
     }
 
     #[test]
