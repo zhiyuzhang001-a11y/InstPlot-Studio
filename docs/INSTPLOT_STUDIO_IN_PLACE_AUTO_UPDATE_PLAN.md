@@ -25,7 +25,7 @@
 核查位置：
 
 - Studio：`apps/instplot-studio/src/app_update.rs`、`src/update.rs`、`packaging/windows/InstPlotStudio.iss`。
-- Lite：本机 `/Users/zhiyu/Downloads/PlotApp/src/updater.rs` 和 `packaging/windows/InstPlotLite.iss`；此路径仅为调查来源，不进入产品配置。
+- Lite：InstPlot Lite 仓库中的 `src/updater.rs` 和 `packaging/windows/InstPlotLite.iss`；仅作为调查参考，不共用产品配置。
 
 Studio 已有签名清单验证、平台包选择、版本比较、更新序列防倒退、受限下载地址/重定向、大小与 SHA-256 检查、临时文件及取消下载。下载完成后仍要求用户手动安装；并没有原位应用替换或重启事务。
 
