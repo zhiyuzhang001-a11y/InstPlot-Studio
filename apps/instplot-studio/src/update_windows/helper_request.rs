@@ -555,6 +555,41 @@ impl WindowsHelperSession {
         )
     }
 
+    /// A failed installation may require recovery before a GUI was reserved.
+    /// Only this helper's retained native installer can authorize that path.
+    pub fn start_recovery_after_failed_installer(
+        &self,
+        failed: &mut super::RunningWindowsInstaller<'_>,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("original application is still running"));
+        }
+        self.request
+            .recovery
+            .require(self.installers.recovery.installer())?;
+        let recovery = self.installers.recovery.installer().pin()?;
+        let state = begin_failed_installer_recovery(&self.store, &self.request, reason, |state| {
+            failed.require_owned_failed_exit(
+                &self.store,
+                state,
+                &self.installation,
+                self.installers.candidate.installer(),
+            )
+        })?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            recovery,
+            access,
+            &self.old_process,
+            &self.directory.join("restore.log"),
+            &self.store,
+            &state,
+        )
+    }
+
     /// Verify the current fixed release-file contract AFTER a durable successful
     /// old-installer exit. No GUI launch, deletion, configuration restoration or
     /// RolledBack transition is performed here.
@@ -630,6 +665,38 @@ fn require_no_execution(store: &TransactionStore) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn begin_failed_installer_recovery(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    reason: &str,
+    verify_owned_exit: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, UpdateStage::Applying)?;
+    for name in [
+        "candidate-launch.json",
+        "restore-installer.json",
+        "recovery-launch.json",
+    ] {
+        match fs::symlink_metadata(store.directory().join(name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => {
+                return Err(invalid(
+                    "execution intent already exists; inspection required",
+                ));
+            }
+        }
+    }
+    verify_owned_exit(&state)?;
+    state.record_error(reason);
+    state.transition(UpdateStage::RecoveryRequired)?;
+    store.write(&state)?;
+    state.transition(UpdateStage::Restoring)?;
+    store.write(&state)?;
+    Ok(state)
 }
 
 const RELEASE_LICENSE: &[u8] =
@@ -927,6 +994,78 @@ mod tests {
         assert!(abort_waiting(&store, &request, "late cancellation", || Ok(())).is_err());
         assert!(!root.join("apply-installer.json").exists());
         assert!(!root.join("candidate-launch.json").exists());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_installer_recovery_requires_native_proof_and_no_gui_intent() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-failed-install-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "failure", |_| panic!(
+                "not applying"
+            ))
+            .is_err()
+        );
+        state.transition(UpdateStage::Applying).unwrap();
+        store.write(&state).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(
+            begin_failed_installer_recovery(&store, &foreign, "failure", |_| panic!("foreign"))
+                .is_err()
+        );
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "failure", |_| Err(invalid(
+                "live/unknown native installer"
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        for name in [
+            "candidate-launch.json",
+            "restore-installer.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial intent").unwrap();
+            assert!(
+                begin_failed_installer_recovery(&store, &request, "failure", |_| panic!(
+                    "existing intent"
+                ))
+                .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial intent\"");
+            // Isolated synthetic fixture only, never production replay cleanup.
+            fs::remove_file(path).unwrap();
+        }
+        let restored =
+            begin_failed_installer_recovery(&store, &request, "failure", |_| Ok(())).unwrap();
+        assert_eq!(restored.stage(), UpdateStage::Restoring);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Restoring
+        );
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "repeat", |_| panic!("no replay"))
+                .is_err()
+        );
+        assert!(!root.join("restore-installer.json").exists());
+        assert!(!root.join("recovery-launch.json").exists());
         drop(store);
         fs::remove_dir_all(root).unwrap();
     }

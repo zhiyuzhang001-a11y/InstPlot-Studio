@@ -182,6 +182,30 @@ impl<'a> InstallerJournal<'a> {
         self.attempt.phase = Phase::NotStarted;
         self.persist()
     }
+
+    pub(super) fn require_owned_failed_exit(
+        &self,
+        store: &TransactionStore,
+        transaction: &UpdateTransaction,
+        installation: &WindowsInstallation,
+        installer: &VerifiedWindowsInstaller,
+        process: (u32, u64),
+        exit_code: i32,
+    ) -> io::Result<()> {
+        self.store.require_directory(store.directory())?;
+        let persisted = read_journal(store, transaction, installation, installer)?;
+        if exit_code == 0
+            || persisted.path != self.path
+            || persisted.attempt != self.attempt
+            || persisted.attempt.process != Some(process)
+            || persisted.attempt.status()? != (InstallerAttemptStatus::Exited { exit_code })
+        {
+            return Err(invalid(
+                "failed installer evidence differs from retained native child",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Read evidence under the private transaction lock. Running/Unresolved is not

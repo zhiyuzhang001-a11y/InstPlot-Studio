@@ -180,6 +180,49 @@ impl<'a> RunningWindowsInstaller<'a> {
         self.child.id()
     }
 
+    /// Read-only failed-exit proof for recovery before any candidate GUI exists.
+    /// Requires this retained Child and the already-transferred owned exclusion;
+    /// a journal on disk alone cannot authorize recovery or replay.
+    pub(super) fn require_owned_failed_exit(
+        &mut self,
+        store: &TransactionStore,
+        transaction: &UpdateTransaction,
+        installation: &WindowsInstallation,
+        installer: &super::VerifiedWindowsInstaller,
+    ) -> io::Result<()> {
+        if self.access.is_some() || self.checkpoint_error.is_some() {
+            return Err(invalid(
+                "installer exclusion has not been durably transferred",
+            ));
+        }
+        if self._installer.installer().path() != installer.path()
+            || self._installer.installer().sha256() != installer.sha256()
+            || self._installer.installer().version() != installer.version()
+            || self._installer.installer().size_bytes() != installer.size_bytes()
+        {
+            return Err(invalid(
+                "failed installer asset differs from retained package",
+            ));
+        }
+        let status = self
+            .child
+            .try_wait()?
+            .ok_or_else(|| invalid("installer is still running"))?;
+        self.journal.require_owned_failed_exit(
+            store,
+            transaction,
+            installation,
+            installer,
+            (
+                self.child.id(),
+                super::process::child_process_created(&self.child)?,
+            ),
+            status
+                .code()
+                .ok_or_else(|| invalid("installer exit code unavailable"))?,
+        )
+    }
+
     /// No drop-on-error ownership transfer. A live child or checkpoint error
     /// leaves this object holding its guard and package lease for inspection.
     pub fn take_owned_access_after_exit(&mut self) -> io::Result<WindowsInstallAccess> {

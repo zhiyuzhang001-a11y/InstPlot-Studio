@@ -784,6 +784,11 @@ mod tests {
         );
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         assert!(running.take_owned_access_after_exit().is_err());
+        assert!(
+            running
+                .require_owned_failed_exit(&store, &transaction, &installation, &asset)
+                .is_err()
+        );
         drop(blocked_checkpoint);
         loop {
             if running.try_wait().unwrap().is_some() {
@@ -799,6 +804,34 @@ mod tests {
         assert!(running.take_owned_access_after_exit().is_err());
         assert!(running.try_wait().is_err());
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
+        // The fixture executable is a Rust test harness receiving Inno flags,
+        // so its real nonzero exit is installation failure, not success/health.
+        running
+            .require_owned_failed_exit(&store, &transaction, &installation, &asset)
+            .unwrap();
+        let original = fs::read(locks.join("restore-installer.json")).unwrap();
+        let mut tampered: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        tampered["process"][0] = (running.process_id() + 1).into();
+        super::super::write_private_atomic(
+            &locks.join("restore-installer.json"),
+            &serde_json::to_vec(&tampered).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            running
+                .require_owned_failed_exit(&store, &transaction, &installation, &asset)
+                .is_err()
+        );
+        super::super::write_private_atomic(&locks.join("restore-installer.json"), &original)
+            .unwrap();
+        running
+            .require_owned_failed_exit(&store, &transaction, &installation, &asset)
+            .unwrap();
+        assert!(
+            running
+                .require_owned_failed_exit(&store, &foreign_transaction, &installation, &asset)
+                .is_err()
+        );
         drop(running);
         assert!(matches!(
             installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
