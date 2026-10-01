@@ -440,6 +440,12 @@ impl<'a> WindowsCandidateLaunch<'a> {
         Ok(())
     }
 
+    fn release_project_after_health(&mut self) -> io::Result<()> {
+        self.verify_committed_health()?;
+        self._resume_lease.take();
+        Ok(())
+    }
+
     fn commit_health(
         &self,
         persist: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
@@ -552,6 +558,15 @@ impl WindowsCandidateProcess<'_> {
             return Err(invalid("no live successfully checkpointed owned GUI"));
         }
         self.launch.verify_committed_health()
+    }
+
+    pub(super) fn release_project_after_health(
+        &mut self,
+        store: &TransactionStore,
+    ) -> io::Result<()> {
+        self.launch.store.require_directory(store.directory())?;
+        self.verify_committed_health()?;
+        self.launch.release_project_after_health()
     }
 
     pub fn request_normal_exit(&mut self) -> io::Result<()> {
@@ -1251,13 +1266,33 @@ mod tests {
         let (resume, original_lease) =
             super::super::WindowsResumeProject::capture(&project, &state.identity().installed_path)
                 .unwrap();
-        let launch =
+        let mut launch =
             WindowsCandidateLaunch::begin_with_resume(&store, &state, executable(), Some(&resume))
                 .unwrap();
         assert_eq!(launch.record.resume_project.as_ref(), Some(&resume));
         assert!(launch._resume_lease.is_some());
         drop(original_lease);
         assert!(std::fs::write(&project, b"changed during launch").is_err());
+        assert!(launch.release_project_after_health().is_err());
+        assert!(launch._resume_lease.is_some());
+        let mut child = child(&executable());
+        launch.bind_child(&child).unwrap();
+        write_receipt(&fixture.0.join("health.json"), &receipt(&state, &launch));
+        assert!(launch.release_project_after_health().is_err());
+        launch.accept_health().unwrap();
+        launch.release_project_after_health().unwrap();
+        assert!(launch._resume_lease.is_none());
+        // Open for writing without changing any saved project bytes.
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&project)
+                .unwrap(),
+        );
+        launch.release_project_after_health().unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        assert!(launch.release_project_after_health().is_err());
         let mut changed = launch.record.clone();
         changed.resume_project = None;
         super::super::write_private_atomic(

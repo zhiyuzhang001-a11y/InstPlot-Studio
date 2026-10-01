@@ -303,7 +303,7 @@ pub struct WindowsHelperSession {
     installers: PinnedWindowsInstallerPair,
     old_process: TrackedWindowsProcess,
     _helper_lease: File,
-    _resume_lease: Option<File>,
+    _resume_lease: std::cell::Cell<Option<File>>,
 }
 
 impl WindowsHelperSession {
@@ -363,7 +363,7 @@ impl WindowsHelperSession {
             installers,
             old_process,
             _helper_lease: helper_lease,
-            _resume_lease: resume_lease,
+            _resume_lease: std::cell::Cell::new(resume_lease),
         })
     }
 
@@ -406,6 +406,17 @@ impl WindowsHelperSession {
     }
     pub fn resume_project(&self) -> Option<&super::WindowsResumeProject> {
         self.request.resume_project.as_ref()
+    }
+
+    /// Only after the exact live GUI's durable health commit. No file edits,
+    /// backup cleanup or security-watermark rollback accompany this release.
+    pub(super) fn release_project_after_health(
+        &self,
+        gui: &mut super::WindowsCandidateProcess<'_>,
+    ) -> io::Result<()> {
+        gui.release_project_after_health(&self.store)?;
+        drop(self._resume_lease.take());
+        Ok(())
     }
 
     /// Enter apply only after normal old-GUI exit and exact installation

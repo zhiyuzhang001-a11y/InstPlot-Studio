@@ -207,6 +207,7 @@ impl<'a> WindowsUpdateController<'a> {
             .as_mut()
             .ok_or_else(|| invalid("GUI witness missing"))?;
         if gui.accept_health().is_ok() || gui.verify_committed_health().is_ok() {
+            self.helper.release_project_after_health(gui)?;
             self.enter(if recovery {
                 WindowsControllerPhase::RolledBack
             } else {
