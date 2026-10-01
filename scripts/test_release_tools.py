@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,6 +35,38 @@ class ExtractChangelogTests(unittest.TestCase):
             MODULE.extract_section("## [1.0.0]\n", "1.0.0")
         with self.assertRaises(ValueError):
             MODULE.extract_section("## [1.0.0]\n- ok\n", "2.0.0")
+
+
+class ReleaseDispatchTests(unittest.TestCase):
+    def test_oss_dispatch_identifies_repository_without_checkout(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        command = workflow.split("          gh workflow run publish-oss-update.yml", 1)[1]
+        command = "gh workflow run publish-oss-update.yml" + command.split(
+            '          echo "OSS publication', 1
+        )[0]
+        command = command.replace("${{ inputs.release_sequence }}", "2").replace(
+            "${{ inputs.expires_at }}", "2026-12-29T00:00:00Z"
+        )
+        # Execute the actual workflow command outside a checkout without network writes.
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                ["bash", "-eu", "-c", 'gh() { printf "%s\\n" "$@"; }; ' + command],
+                cwd=temporary,
+                env={
+                    "GITHUB_REPOSITORY": "example/studio",
+                    "RELEASE_TAG": "v0.1.2-rc.2",
+                    "SOURCE_SHA": "frozen-source",
+                },
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        self.assertEqual(result.stdout.splitlines(), [
+            "workflow", "run", "publish-oss-update.yml", "--repo", "example/studio",
+            "--ref", "main", "-f", "release_tag=v0.1.2-rc.2", "-f",
+            "source_sha=frozen-source", "-f", "release_sequence=2", "-f",
+            "expires_at=2026-12-29T00:00:00Z",
+        ])
 
 
 class ReleaseAssetSpecTests(unittest.TestCase):
