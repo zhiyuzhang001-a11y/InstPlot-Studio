@@ -482,6 +482,8 @@ mod tests {
             fs::remove_file(asset.path()).unwrap_err().raw_os_error(),
             Some(32)
         );
+        assert!(fs::rename(asset.path(), fixture.directory.join("moved.exe")).is_err());
+        assert!(asset.path().is_file());
         drop(lease);
         let mut bytes = fs::read(asset.path()).unwrap();
         bytes[0] ^= 1;
