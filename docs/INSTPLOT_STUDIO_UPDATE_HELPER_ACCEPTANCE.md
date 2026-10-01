@@ -313,3 +313,5 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 父窗口的 `confirm_ready` 进一步要求同一 WaitingForExit 持久事务与请求原文未变，并在原安装/固定文件复核之后重新观察实际 owned helper Child 的创建身份与存活；就绪文件本身不授权退出。该检查通过只读 snapshot，不申请助手持有的写锁，不修复请求。新增组件测试覆盖助手写锁持有时正常读取、Prepared/Applying 与外来 nonce 拒绝、请求中的桌面任务变化拒绝且不改回原文。实际 Windows 全库/测试交叉 Clippy 通过，Windows 运行待 CI。外层父窗口冻结/启动调用尚未接入。
 
 本机本批完整 `cargo test --locked -p instplot-studio --all-targets --all-features` 退出码 0：库 218 通过/1 原有忽略、二进制 114 通过、集成契约 8 通过，共 340 通过/1 忽略；工作区及实际 Windows 库/测试交叉 Clippy 通过。这不包含 Windows 专属策略/原生运行，也不是用户界面点击完成更新的验收。当前 GitHub head `5392542` 三项通过、Windows Quality 运行中；后续本地三项提交单独等待推送验收，不借旧证据。
+
+`5392542` 四项 CI 后续全部通过。Windows Quality job `110624371219` 日志明确显示候选精确持久健康/丢失确认测试、独立恢复角色/旧健康提交测试、owned 原生安装器锁测试以及恢复健康 CLI 参数测试通过；Studio 库 255 通过/2 忽略、二进制 113 通过。真实 Inno 两次运行通过；附件 `11199607448` 已下载至 ignored target/windows-recovery-5392542.ySghua，桌面 on/off 原生 JSON 均 applied/restored/user_data_preserved=true，results.json 两例无 false 断言、生产版本未改。仍仅安装器恢复原型，不是实机 GUI 自动更新；后续控制器/非零失败恢复/退出等待提交需新一轮 CI。
