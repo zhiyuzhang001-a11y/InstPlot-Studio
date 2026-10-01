@@ -371,7 +371,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          gh workflow run publish-oss-update.yml --ref main \
+          gh workflow run publish-oss-update.yml --repo "${GITHUB_REPOSITORY}" --ref main \
             -f release_tag="${RELEASE_TAG}" \
             -f source_sha="${SOURCE_SHA}" \
             -f release_sequence='${{ inputs.release_sequence }}' \
