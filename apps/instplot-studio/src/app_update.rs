@@ -79,9 +79,9 @@ enum UpdateEvent {
     BackgroundSkipped,
     Checked(Result<CheckOutcome, String>),
     Progress(u64),
-    Downloaded(Result<(AvailableUpdate, PathBuf), String>),
+    Downloaded(Box<Result<(AvailableUpdate, PathBuf), String>>),
     #[cfg(target_os = "macos")]
-    PreparedMac(Result<crate::update_macos::PreparedMacUpdate, String>),
+    PreparedMac(Box<Result<crate::update_macos::PreparedMacUpdate, String>>),
     #[cfg(target_os = "macos")]
     HelperReady(Result<(), String>),
 }
@@ -298,7 +298,7 @@ impl AppUpdateState {
             match event {
                 #[cfg(target_os = "macos")]
                 UpdateEvent::PreparedMac(result) => {
-                    self.phase = match result {
+                    self.phase = match *result {
                         Ok(prepared) => UpdatePhase::ReadyMac(prepared),
                         Err(explanation) => UpdatePhase::Failed { explanation },
                     };
@@ -348,12 +348,11 @@ impl AppUpdateState {
                     }
                     context.request_repaint();
                 }
-                UpdateEvent::Downloaded(Ok((update, path))) => {
-                    self.phase = UpdatePhase::Downloaded { path, update };
-                    keep_receiver = false;
-                }
-                UpdateEvent::Downloaded(Err(explanation)) => {
-                    self.phase = UpdatePhase::Failed { explanation };
+                UpdateEvent::Downloaded(result) => {
+                    self.phase = match *result {
+                        Ok((update, path)) => UpdatePhase::Downloaded { path, update },
+                        Err(explanation) => UpdatePhase::Failed { explanation },
+                    };
                     keep_receiver = false;
                 }
             }
@@ -520,7 +519,7 @@ impl AppUpdateState {
                         let path = path.clone();
                         std::thread::spawn(move || {
                             let result = crate::update_macos::prepare(&path, &update.version);
-                            let _ = sender.send(UpdateEvent::PreparedMac(result));
+                            let _ = sender.send(UpdateEvent::PreparedMac(Box::new(result)));
                             context.request_repaint();
                         });
                     }
@@ -591,7 +590,7 @@ impl AppUpdateState {
                 write_cache_evidence(parent, &update)?;
                 Ok((update, path))
             });
-            let _ = sender.send(UpdateEvent::Downloaded(result));
+            let _ = sender.send(UpdateEvent::Downloaded(Box::new(result)));
             context.request_repaint();
         });
     }
@@ -1162,6 +1161,29 @@ fn byte_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_events_stay_compact_on_every_platform() {
+        // macOS-only variants must not mask oversized common payloads on other targets.
+        assert!(std::mem::size_of::<UpdateEvent>() <= 64);
+    }
+
+    #[test]
+    fn boxed_download_failure_keeps_the_original_error() {
+        let mut state = AppUpdateState::default();
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender
+            .send(UpdateEvent::Downloaded(Box::new(Err(
+                "hash mismatch".into()
+            ))))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(
+            matches!(&state.phase, UpdatePhase::Failed { explanation } if explanation == "hash mismatch")
+        );
+        assert!(state.receiver.is_none());
+    }
 
     #[test]
     fn background_schedule_is_throttled_and_clock_reversal_is_safe() {
