@@ -34,6 +34,12 @@ mod preparation;
 pub use preparation::{PreparedWindowsInstallers, prepare_installers};
 
 #[cfg(windows)]
+#[path = "update_windows/helper_request.rs"]
+mod helper_request;
+#[cfg(windows)]
+pub use helper_request::{PreparedWindowsHelper, WindowsHelperSession};
+
+#[cfg(windows)]
 #[path = "update_windows/native.rs"]
 mod native;
 #[cfg(windows)]
