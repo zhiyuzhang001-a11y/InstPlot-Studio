@@ -12,6 +12,10 @@ use std::path::{Component, Path, PathBuf};
 
 use semver::Version;
 
+#[path = "update_windows/assets.rs"]
+mod assets;
+pub use assets::{VerifiedWindowsInstaller, WindowsInstallerPair};
+
 #[cfg(windows)]
 #[path = "update_windows/native.rs"]
 mod native;

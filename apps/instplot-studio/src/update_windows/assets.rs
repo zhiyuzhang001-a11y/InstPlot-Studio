@@ -1,0 +1,435 @@
+//! Verified candidate and old recovery installers. No network or process execution.
+//! Expired metadata is rejected before application, including recovery metadata.
+//! A later helper may use an already prepared recovery transaction offline, but
+//! that contract must not be confused with fresh acceptance of expired updates.
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
+use semver::Version;
+use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
+
+use super::{WindowsInstallation, invalid, reject_redirected_path};
+use crate::{
+    AllowedUpdateRoot, PRODUCTION_PUBLIC_ROOT, PRODUCTION_TRUSTED_KEYS, TrustedUpdateKey,
+    UpdateChannel, UpdatePackage, verify_signed_manifest_at,
+};
+
+const MAX_INSTALLER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+#[derive(Clone, Debug)]
+pub struct VerifiedWindowsInstaller {
+    path: PathBuf,
+    version: Version,
+    package: UpdatePackage,
+    manifest_sha256: String,
+}
+
+impl VerifiedWindowsInstaller {
+    /// Production trust is compiled in; callers cannot inject their own keys.
+    pub fn from_cache(directory: &Path, expected_version: &str) -> io::Result<Self> {
+        Self::verify_at(
+            directory,
+            expected_version,
+            &PRODUCTION_TRUSTED_KEYS,
+            &AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).map_err(invalid)?,
+            OffsetDateTime::now_utc(),
+        )
+    }
+
+    fn verify_at(
+        directory: &Path,
+        expected_version: &str,
+        keys: &[TrustedUpdateKey],
+        root: &AllowedUpdateRoot,
+        now: OffsetDateTime,
+    ) -> io::Result<Self> {
+        reject_redirected_path(directory)?;
+        if !directory.is_dir() {
+            return Err(invalid("installer cache is not a directory"));
+        }
+        let directory = fs::canonicalize(directory)?;
+        let version = Version::parse(expected_version).map_err(invalid)?;
+        let raw = read_bounded(&directory.join("manifest.json"), 256 * 1024)?;
+        let signature = read_bounded(&directory.join("manifest.json.sig"), 64)?;
+        let manifest = verify_signed_manifest_at(
+            &raw,
+            &signature,
+            keys,
+            root,
+            UpdateChannel::for_version(&version),
+            now,
+        )
+        .map_err(invalid)?;
+        if manifest.version != expected_version {
+            return Err(invalid(
+                "installer manifest does not match the exact required version",
+            ));
+        }
+        let platform = manifest
+            .platforms
+            .get("windows-x86_64")
+            .ok_or_else(|| invalid("no Windows x64 installer in verified manifest"))?;
+        let package = platform
+            .packages
+            .iter()
+            .find(|p| p.id == platform.preferred)
+            .ok_or_else(|| invalid("preferred Windows installer is missing"))?
+            .clone();
+        let expected_name = format!("InstPlot-Studio-{expected_version}-windows-x86_64-setup.exe");
+        if package.id != "inno-setup"
+            || package.package_type != "inno-setup"
+            || package.file_name != expected_name
+            || package.size_bytes > MAX_INSTALLER_BYTES
+        {
+            return Err(invalid("wrong Windows installer type/name/size"));
+        }
+        let installer = Self {
+            path: directory.join(&package.file_name),
+            version,
+            package,
+            manifest_sha256: format!("{:x}", Sha256::digest(&raw)),
+        };
+        installer.revalidate()?;
+        Ok(installer)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+    pub fn manifest_sha256(&self) -> &str {
+        &self.manifest_sha256
+    }
+    pub fn sha256(&self) -> &str {
+        &self.package.sha256
+    }
+    pub fn size_bytes(&self) -> u64 {
+        self.package.size_bytes
+    }
+
+    /// Repeat immediately before use, within the platform's private-cache lock.
+    /// Signature/expiry verification above is a prepare-time requirement; this
+    /// method only proves the already accepted file has not changed.
+    pub fn revalidate(&self) -> io::Result<()> {
+        reject_redirected_path(&self.path)?;
+        let mut file = File::open(&self.path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.len() != self.package.size_bytes
+            || metadata.len() == 0
+            || metadata.len() > MAX_INSTALLER_BYTES
+        {
+            return Err(invalid("installer size does not match verified manifest"));
+        }
+        let mut hash = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut total = 0_u64;
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            total += count as u64;
+            if total > self.package.size_bytes {
+                return Err(invalid("installer grew during verification"));
+            }
+            hash.update(&buffer[..count]);
+        }
+        if total != self.package.size_bytes
+            || format!("{:x}", hash.finalize()) != self.package.sha256
+        {
+            return Err(invalid("installer hash does not match verified manifest"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WindowsInstallerPair {
+    recovery: VerifiedWindowsInstaller,
+    candidate: VerifiedWindowsInstaller,
+}
+impl WindowsInstallerPair {
+    /// Both recovery and candidate assets must already be present and trusted
+    /// BEFORE the GUI exits. No lazy recovery download or downgrade of latest.
+    pub fn from_caches(
+        installation: &WindowsInstallation,
+        recovery_cache: &Path,
+        candidate_cache: &Path,
+        candidate_version: &str,
+    ) -> io::Result<Self> {
+        installation.validate_candidate_version(candidate_version)?;
+        let recovery = VerifiedWindowsInstaller::from_cache(
+            recovery_cache,
+            &installation.version().to_string(),
+        )?;
+        let candidate = VerifiedWindowsInstaller::from_cache(candidate_cache, candidate_version)?;
+        Self::bind_versions(installation.version(), recovery, candidate)
+    }
+
+    fn bind_versions(
+        installed_version: &Version,
+        recovery: VerifiedWindowsInstaller,
+        candidate: VerifiedWindowsInstaller,
+    ) -> io::Result<Self> {
+        if recovery.version() != installed_version
+            || candidate.version() <= installed_version
+            || candidate.version().pre.is_empty() != installed_version.pre.is_empty()
+        {
+            return Err(invalid(
+                "installer roles do not match the installed version/channel",
+            ));
+        }
+        if recovery.path == candidate.path || recovery.sha256() == candidate.sha256() {
+            return Err(invalid(
+                "recovery and candidate installers must be distinct",
+            ));
+        }
+        Ok(Self {
+            recovery,
+            candidate,
+        })
+    }
+    pub fn recovery(&self) -> &VerifiedWindowsInstaller {
+        &self.recovery
+    }
+    pub fn candidate(&self) -> &VerifiedWindowsInstaller {
+        &self.candidate
+    }
+    pub fn revalidate(&self) -> io::Result<()> {
+        self.recovery.revalidate()?;
+        self.candidate.revalidate()
+    }
+}
+
+fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    reject_redirected_path(path)?;
+    let file = File::open(path)?;
+    if !file.metadata()?.is_file() || file.metadata()?.len() > limit {
+        return Err(invalid("invalid signed installer evidence file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid("oversized installer evidence"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use time::format_description::well_known::Rfc3339;
+
+    const ROOT: &str = "https://downloads.example.test/instplot-studio";
+    const VERSION: &str = "0.1.2-rc.2";
+    struct Fixture {
+        directory: PathBuf,
+        signing: SigningKey,
+        raw: serde_json::Value,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let mut random = [0; 8];
+            getrandom::fill(&mut random).unwrap();
+            let directory = std::env::temp_dir().join(format!(
+                "studio-install-assets-{:x}",
+                u64::from_le_bytes(random)
+            ));
+            fs::create_dir(&directory).unwrap();
+            let directory = fs::canonicalize(directory).unwrap();
+            let name = format!("InstPlot-Studio-{VERSION}-windows-x86_64-setup.exe");
+            let bytes = b"not a real installer; signed fixture only";
+            fs::write(directory.join(&name), bytes).unwrap();
+            let raw = serde_json::json!({
+                "schema":1,"product":"instplot-studio","version":VERSION,"channel":"prerelease",
+                "key_id":"fixture","release_sequence":2,"published_at":"2026-09-29T00:00:00Z",
+                "expires_at":"2026-12-29T00:00:00Z",
+                "notes_url":format!("https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v{VERSION}"),
+                "signature_url":format!("{ROOT}/releases/{VERSION}/metadata/2/manifest.json.sig"),
+                "platforms":{"windows-x86_64":{"preferred":"inno-setup","packages":[{
+                    "id":"inno-setup","package_type":"inno-setup","file_name":name,
+                    "minimum_system":"Windows 10","size_bytes":bytes.len(),
+                    "sha256":format!("{:x}",Sha256::digest(bytes)),"url":format!("{ROOT}/releases/{VERSION}/{name}")
+                }]}}
+            });
+            let fixture = Self {
+                directory,
+                signing: SigningKey::from_bytes(&[7; 32]),
+                raw,
+            };
+            fixture.save();
+            fixture
+        }
+        fn save(&self) {
+            let raw = serde_json::to_vec(&self.raw).unwrap();
+            fs::write(
+                self.directory.join("manifest.json.sig"),
+                self.signing.sign(&raw).to_bytes(),
+            )
+            .unwrap();
+            fs::write(self.directory.join("manifest.json"), raw).unwrap();
+        }
+        fn verify(&self) -> io::Result<VerifiedWindowsInstaller> {
+            VerifiedWindowsInstaller::verify_at(
+                &self.directory,
+                VERSION,
+                &[TrustedUpdateKey {
+                    id: "fixture",
+                    bytes: self.signing.verifying_key().to_bytes(),
+                }],
+                &AllowedUpdateRoot::parse(ROOT).unwrap(),
+                OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
+            )
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn trusted_current_version_installer_is_verified_and_tampering_is_rejected() {
+        let fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        assert_eq!(asset.version().to_string(), VERSION);
+        assert_eq!(asset.manifest_sha256().len(), 64);
+        asset.revalidate().unwrap();
+        let mut bytes = fs::read(asset.path()).unwrap();
+        bytes[0] ^= 1;
+        fs::write(asset.path(), bytes).unwrap();
+        assert!(asset.revalidate().is_err());
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn missing_package_signature_and_expired_metadata_fail_closed() {
+        let mut fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        fs::remove_file(asset.path()).unwrap();
+        assert!(fixture.verify().is_err());
+        fixture.raw["expires_at"] = "2026-09-30T00:00:00Z".into();
+        fixture.save();
+        assert!(
+            fixture
+                .verify()
+                .unwrap_err()
+                .to_string()
+                .contains("expired")
+        );
+        fs::write(fixture.directory.join("manifest.json.sig"), [0; 64]).unwrap();
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn wrong_product_platform_version_name_and_type_are_rejected() {
+        let cases = [
+            ("/product", "instplot-lite"),
+            ("/version", "0.1.2-rc.1"),
+            ("/channel", "stable"),
+            (
+                "/platforms/windows-x86_64/packages/0/url",
+                "https://foreign.example/setup.exe",
+            ),
+            (
+                "/platforms/windows-x86_64/packages/0/file_name",
+                "../setup.exe",
+            ),
+            ("/platforms/windows-x86_64/packages/0/package_type", "zip"),
+        ];
+        for (pointer, value) in cases {
+            let mut fixture = Fixture::new();
+            *fixture.raw.pointer_mut(pointer).unwrap() = value.into();
+            fixture.save();
+            assert!(fixture.verify().is_err(), "{pointer}");
+        }
+        let mut fixture = Fixture::new();
+        let platform = fixture.raw["platforms"].as_object_mut().unwrap();
+        let value = platform.remove("windows-x86_64").unwrap();
+        platform.insert("macos-aarch64".into(), value);
+        fixture.save();
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn oversized_metadata_and_changed_package_size_are_rejected() {
+        let fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        fs::write(asset.path(), b"too short").unwrap();
+        assert!(asset.revalidate().is_err());
+        fs::write(
+            fixture.directory.join("manifest.json"),
+            vec![b' '; 256 * 1024 + 1],
+        )
+        .unwrap();
+        assert!(fixture.verify().is_err());
+    }
+
+    #[test]
+    fn pair_requires_exact_recovery_newer_candidate_and_distinct_assets() {
+        let recovery_fixture = Fixture::new();
+        let recovery = recovery_fixture.verify().unwrap();
+        let mut candidate_fixture = Fixture::new();
+        let next = "0.1.2-rc.3";
+        let name = format!("InstPlot-Studio-{next}-windows-x86_64-setup.exe");
+        let bytes = b"different signed candidate fixture";
+        fs::write(candidate_fixture.directory.join(&name), bytes).unwrap();
+        candidate_fixture.raw["version"] = next.into();
+        candidate_fixture.raw["notes_url"] =
+            format!("https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v{next}")
+                .into();
+        candidate_fixture.raw["signature_url"] =
+            format!("{ROOT}/releases/{next}/metadata/2/manifest.json.sig").into();
+        let package = &mut candidate_fixture.raw["platforms"]["windows-x86_64"]["packages"][0];
+        package["file_name"] = name.clone().into();
+        package["url"] = format!("{ROOT}/releases/{next}/{name}").into();
+        package["size_bytes"] = bytes.len().into();
+        package["sha256"] = format!("{:x}", Sha256::digest(bytes)).into();
+        candidate_fixture.save();
+        let candidate = VerifiedWindowsInstaller::verify_at(
+            &candidate_fixture.directory,
+            next,
+            &[TrustedUpdateKey {
+                id: "fixture",
+                bytes: candidate_fixture.signing.verifying_key().to_bytes(),
+            }],
+            &AllowedUpdateRoot::parse(ROOT).unwrap(),
+            OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
+        )
+        .unwrap();
+        let installed = Version::parse(VERSION).unwrap();
+        let pair =
+            WindowsInstallerPair::bind_versions(&installed, recovery.clone(), candidate.clone())
+                .unwrap();
+        pair.revalidate().unwrap();
+        assert!(
+            WindowsInstallerPair::bind_versions(&installed, candidate.clone(), recovery.clone())
+                .is_err()
+        );
+        assert!(
+            WindowsInstallerPair::bind_versions(
+                &Version::parse("0.1.2-rc.1").unwrap(),
+                recovery.clone(),
+                candidate.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            WindowsInstallerPair::bind_versions(&installed, recovery.clone(), recovery.clone())
+                .is_err()
+        );
+        let mut same_hash = candidate.clone();
+        same_hash.package.sha256 = recovery.sha256().into();
+        assert!(
+            WindowsInstallerPair::bind_versions(&installed, recovery.clone(), same_hash).is_err()
+        );
+        fs::write(pair.recovery().path(), b"modified after preparation").unwrap();
+        assert!(pair.revalidate().is_err());
+    }
+}
