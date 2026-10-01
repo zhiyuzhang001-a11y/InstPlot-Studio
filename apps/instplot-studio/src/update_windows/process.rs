@@ -12,6 +12,7 @@ use windows::core::PWSTR;
 
 pub struct TrackedWindowsProcess {
     handle: HANDLE,
+    bound_executable: Option<std::path::PathBuf>,
 }
 
 impl Drop for TrackedWindowsProcess {
@@ -24,6 +25,13 @@ impl Drop for TrackedWindowsProcess {
 }
 
 impl TrackedWindowsProcess {
+    /// Bind a child launched by this helper. The Child retains its native
+    /// handle while creation time/path are checked, preventing PID reuse.
+    pub fn bind_child(child: &std::process::Child, executable: &Path) -> io::Result<Self> {
+        let created = Self::capture(child.id())?.created()?;
+        Self::bind(child.id(), created, executable)
+    }
+
     fn capture(pid: u32) -> io::Result<Self> {
         if pid == 0 {
             return Err(io::Error::other("invalid update process identity"));
@@ -37,11 +45,14 @@ impl TrackedWindowsProcess {
             )
         }
         .map_err(|e| io::Error::other(e.to_string()))?;
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            bound_executable: None,
+        })
     }
 
     pub fn bind(pid: u32, created: u64, executable: &Path) -> io::Result<Self> {
-        let process = Self::capture(pid)?;
+        let mut process = Self::capture(pid)?;
         if created == 0 || process.created()? != created {
             return Err(io::Error::other(
                 "update process creation time does not match",
@@ -70,7 +81,31 @@ impl TrackedWindowsProcess {
         {
             return Err(io::Error::other("update process executable does not match"));
         }
+        process.bound_executable = Some(std::fs::canonicalize(executable)?);
         Ok(process)
+    }
+
+    pub(super) fn require_executable(&self, executable: &Path) -> io::Result<()> {
+        // A partially failed installer may have removed the old exe. Recovery
+        // still uses the previously bound process identity, not a new process
+        // guessed from the missing path. Its parent must remain the same.
+        let expected = match std::fs::canonicalize(executable) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let parent = executable.parent().ok_or(error)?;
+                let name = executable
+                    .file_name()
+                    .ok_or_else(|| io::Error::other("missing executable name"))?;
+                std::fs::canonicalize(parent)?.join(name)
+            }
+            Err(error) => return Err(error),
+        };
+        if self.bound_executable.as_ref() != Some(&expected) {
+            return Err(io::Error::other(
+                "old process is not bound to this installation",
+            ));
+        }
+        Ok(())
     }
 
     fn created(&self) -> io::Result<u64> {
@@ -123,6 +158,7 @@ mod tests {
         let executable = std::env::current_exe().unwrap();
         let process =
             TrackedWindowsProcess::bind(std::process::id(), created, &executable).unwrap();
+        process.require_executable(&executable).unwrap();
         assert!(!process.wait_for_exit(Duration::ZERO).unwrap());
         assert!(process.wait_for_exit(Duration::from_secs(31)).is_err());
         assert!(TrackedWindowsProcess::bind(std::process::id(), created + 1, &executable).is_err());

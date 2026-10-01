@@ -1,8 +1,9 @@
 //! Windows installation contract, before any installer is allowed to run.
 //!
-//! This module deliberately does not execute installers. The Windows adapter must
-//! obtain the record from HKCU, verify the executable/product/version, acquire a
-//! private transaction lock, and verify both installer assets before using it.
+//! The Windows adapter must obtain the record from HKCU, verify the
+//! executable/product/version, acquire a private transaction lock, and verify
+//! both installer assets before using the restricted execution adapter.
+//! The production UI does not yet start a Windows update transaction.
 //! Registry identity alone is not authentication of an installer or process.
 
 use std::ffi::OsString;
@@ -29,6 +30,18 @@ pub use native::discover_current_installation;
 mod process;
 #[cfg(windows)]
 pub use process::{TrackedWindowsProcess, current_process_created};
+
+#[cfg(windows)]
+#[path = "update_windows/access.rs"]
+mod access;
+#[cfg(windows)]
+pub use access::WindowsInstallAccess;
+
+#[cfg(windows)]
+#[path = "update_windows/runner.rs"]
+mod runner;
+#[cfg(windows)]
+pub use runner::RunningWindowsInstaller;
 
 #[cfg(windows)]
 #[path = "update_windows/cache.rs"]

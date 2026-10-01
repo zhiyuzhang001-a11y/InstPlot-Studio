@@ -98,6 +98,8 @@ pub(super) struct AppUpdateState {
     close_requested: bool,
     #[cfg(target_os = "macos")]
     instance_guard: Result<instplot_studio::update_bundle::BundleAccess, String>,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    _windows_instance_guard: Result<instplot_studio::update_windows::WindowsInstallAccess, String>,
 }
 
 impl Default for AppUpdateState {
@@ -114,6 +116,8 @@ impl Default for AppUpdateState {
             close_requested: false,
             #[cfg(target_os = "macos")]
             instance_guard: Err("尚未初始化安装进程锁。".into()),
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            _windows_instance_guard: Err("尚未初始化安装进程锁。".into()),
         }
     }
 }
@@ -125,6 +129,16 @@ impl Drop for AppUpdateState {
 }
 
 impl AppUpdateState {
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    pub(super) fn set_windows_instance_guard(
+        &mut self,
+        guard: Result<instplot_studio::update_windows::WindowsInstallAccess, String>,
+    ) {
+        // Lifetime ownership only. Windows update UI remains disabled until
+        // full installer/health/recovery acceptance is complete.
+        self._windows_instance_guard = guard;
+    }
+
     #[cfg(target_os = "macos")]
     pub(super) fn set_instance_guard(
         &mut self,

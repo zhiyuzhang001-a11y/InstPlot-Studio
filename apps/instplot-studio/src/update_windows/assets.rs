@@ -467,6 +467,97 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn installer_test_child_waits_for_normal_parent_pipe_close() {
+        if std::env::var_os("STUDIO_INSTALLER_TEST_WAIT").is_some() {
+            let mut input = Vec::new();
+            std::io::stdin().read_to_end(&mut input).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_runner_requires_normal_exit_and_retains_exclusive_access() {
+        use super::super::{RunningWindowsInstaller, TrackedWindowsProcess, WindowsInstallAccess};
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+
+        let mut fixture = Fixture::new();
+        let executable = std::env::current_exe().unwrap();
+        let name = fixture.raw["platforms"]["windows-x86_64"]["packages"][0]["file_name"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Signed isolated test harness, NOT an Inno/product installer. It
+        // proves native process/lock wiring only; real Inno is tested separately.
+        let path = fixture.directory.join(name);
+        fs::copy(&executable, &path).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let package = &mut fixture.raw["platforms"]["windows-x86_64"]["packages"][0];
+        package["size_bytes"] = bytes.len().into();
+        package["sha256"] = format!("{:x}", Sha256::digest(&bytes)).into();
+        fixture.save();
+        let asset = fixture.verify().unwrap();
+        let locks = fixture.directory.join("locks");
+        super::super::create_private_directory(&locks).unwrap();
+        let access = WindowsInstallAccess::acquire(&fixture.directory, &locks, true).unwrap();
+        let installation = WindowsInstallation {
+            directory: fixture.directory.clone(),
+            executable: executable.clone(),
+            version: Version::parse(VERSION).unwrap(),
+            desktop_shortcut: false,
+        };
+        let mut previous = Command::new(&executable)
+            .args(["--exact", "update_windows::assets::tests::installer_test_child_waits_for_normal_parent_pipe_close"])
+            .env("STUDIO_INSTALLER_TEST_WAIT", "1")
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        let tracked = TrackedWindowsProcess::bind_child(&previous, &executable).unwrap();
+        let log = locks.join("installer.log");
+        assert!(
+            RunningWindowsInstaller::start(
+                &installation,
+                asset.pin().unwrap(),
+                &access,
+                &tracked,
+                &log
+            )
+            .is_err()
+        );
+        assert!(!log.exists());
+        drop(previous.stdin.take());
+        assert!(tracked.wait_for_exit(Duration::from_secs(5)).unwrap());
+        assert!(previous.wait().unwrap().success());
+        let mut running = RunningWindowsInstaller::start(
+            &installation,
+            asset.pin().unwrap(),
+            &access,
+            &tracked,
+            &log,
+        )
+        .unwrap();
+        assert_ne!(running.process_id(), 0);
+        assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if running.try_wait().unwrap().is_some() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native runner test child did not exit"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(running);
+        // The helper still owns the installation lock after installer exit,
+        // so it can verify health or restore without opening a race.
+        assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
+        drop(access);
+        WindowsInstallAccess::acquire(&fixture.directory, &locks, false).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn installer_lease_denies_writes_and_deletes_until_released() {
         let fixture = Fixture::new();
         let asset = fixture.verify().unwrap();

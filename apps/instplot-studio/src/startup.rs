@@ -262,6 +262,20 @@ fn launch_gui_inner(
     };
     #[cfg(not(target_os = "macos"))]
     let _ = health;
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    let windows_guard = {
+        let executable = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        let target = executable.parent().ok_or_else(|| {
+            eframe::Error::AppCreation(std::io::Error::other("无法确定应用目录。").into())
+        })?;
+        // Every preview GUI holds access, including portable instances in the
+        // same directory. An unlocked preview must not run during replacement.
+        let guard = instplot_studio::update_windows::WindowsInstallAccess::shared(target)
+            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        Ok(guard)
+    };
     let started = Instant::now();
     #[cfg(target_os = "macos")]
     let macos_open_files = crate::macos_open_files::MacOpenFiles::start();
@@ -278,6 +292,8 @@ fn launch_gui_inner(
         options,
         Box::new(move |creation| {
             let mut app = StudioApp::new(creation, started, startup);
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            app.update.set_windows_instance_guard(windows_guard);
             #[cfg(target_os = "macos")]
             {
                 app.update_health = health;

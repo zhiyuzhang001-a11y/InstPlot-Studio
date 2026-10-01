@@ -15,8 +15,8 @@ use windows::Win32::System::Registry::{
     REG_SAM_FLAGS, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW, RegOpenKeyExW,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
-    ShellLink,
+    FOLDERID_Desktop, FOLDERID_LocalAppData, FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT,
+    SHGetKnownFolderPath, ShellLink,
 };
 use windows::core::{GUID, Interface, PCWSTR};
 
@@ -202,6 +202,35 @@ fn verify_shortcut(path: &Path, executable: &Path) -> io::Result<bool> {
 /// registration conflict, missing user record, unknown path or foreign shortcut
 /// blocks automatic replacement. This does not authorize or execute an update.
 pub fn discover_current_installation() -> io::Result<WindowsInstallation> {
+    discover_installation_at(&std::env::current_exe()?, env!("CARGO_PKG_VERSION"))
+}
+
+pub(super) fn updater_private_root() -> io::Result<PathBuf> {
+    let root = known_folder(&FOLDERID_LocalAppData)?.join("InstPlot Studio Updater");
+    if let Err(error) = super::create_private_directory(&root)
+        && super::validate_private_directory(&root).is_err()
+    {
+        return Err(error);
+    }
+    Ok(root)
+}
+
+pub(super) fn revalidate_installation(installation: &WindowsInstallation) -> io::Result<()> {
+    let current = discover_installation_at(
+        installation.executable(),
+        &installation.version().to_string(),
+    )?;
+    if current.directory() != installation.directory()
+        || current.desktop_shortcut() != installation.desktop_shortcut()
+    {
+        return Err(invalid(
+            "installation identity/tasks changed since preparation",
+        ));
+    }
+    Ok(())
+}
+
+fn discover_installation_at(executable: &Path, version: &str) -> io::Result<WindowsInstallation> {
     let _apartment = Apartment::enter()?;
     for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
         if open_key(HKEY_LOCAL_MACHINE, view)?.is_some() {
@@ -213,21 +242,17 @@ pub fn discover_current_installation() -> io::Result<WindowsInstallation> {
     let key = open_key(HKEY_CURRENT_USER, KEY_WOW64_64KEY)?
         .ok_or_else(|| invalid("no current-user Studio installation record"))?;
     let directory = PathBuf::from(string_value(&key, "InstallLocation")?);
-    let version = string_value(&key, "DisplayVersion")?
+    let registered_version = string_value(&key, "DisplayVersion")?
         .into_string()
         .map_err(|_| invalid("invalid registered version encoding"))?;
     let record = WindowsInstallRecord {
         app_id: STUDIO_APP_ID.into(),
         scope: InstallScope::CurrentUser,
         directory,
-        version,
+        version: registered_version,
         desktop_shortcut: false,
     };
-    let mut installation = WindowsInstallation::bind(
-        &record,
-        &std::env::current_exe()?,
-        env!("CARGO_PKG_VERSION"),
-    )?;
+    let mut installation = WindowsInstallation::bind(&record, executable, version)?;
     let desktop = known_folder(&FOLDERID_Desktop)?.join("InstPlot Studio.lnk");
     let menu = known_folder(&FOLDERID_Programs)?.join("InstPlot Studio.lnk");
     installation.desktop_shortcut = verify_shortcut(&desktop, installation.executable())?;
