@@ -73,6 +73,13 @@ enum UpdatePhase {
     ReadyMac(crate::update_macos::PreparedMacUpdate),
     #[cfg(target_os = "macos")]
     LaunchingHelper,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    PreparingWindows {
+        downloaded: u64,
+        total: u64,
+    },
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    PreparedWindows(Arc<instplot_studio::update_windows::PreparedWindowsInstallers>),
 }
 
 enum UpdateEvent {
@@ -84,6 +91,15 @@ enum UpdateEvent {
     PreparedMac(Box<Result<crate::update_macos::PreparedMacUpdate, String>>),
     #[cfg(target_os = "macos")]
     HelperReady(Result<(), String>),
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    WindowsRecoveryProgress {
+        downloaded: u64,
+        total: u64,
+    },
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    PreparedWindows(
+        Box<Result<instplot_studio::update_windows::PreparedWindowsInstallers, String>>,
+    ),
 }
 
 pub(super) struct AppUpdateState {
@@ -134,8 +150,8 @@ impl AppUpdateState {
         &mut self,
         guard: Result<instplot_studio::update_windows::WindowsInstallAccess, String>,
     ) {
-        // Lifetime ownership only. Windows update UI remains disabled until
-        // full installer/health/recovery acceptance is complete.
+        // Lifetime ownership. Preview may prepare packages, but installation
+        // and restart remain disabled pending full helper/health/recovery acceptance.
         self._windows_instance_guard = guard;
     }
 
@@ -179,7 +195,14 @@ impl AppUpdateState {
                 UpdatePhase::PreparingMac | UpdatePhase::ReadyMac(_)
             )
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        {
+            matches!(
+                self.phase,
+                UpdatePhase::PreparingWindows { .. } | UpdatePhase::PreparedWindows(_)
+            )
+        }
+        #[cfg(not(any(target_os = "macos", all(windows, feature = "in-place-update-preview"))))]
         {
             false
         }
@@ -369,6 +392,25 @@ impl AppUpdateState {
                     };
                     keep_receiver = false;
                 }
+                #[cfg(all(windows, feature = "in-place-update-preview"))]
+                UpdateEvent::WindowsRecoveryProgress { downloaded, total } => {
+                    if let UpdatePhase::PreparingWindows {
+                        downloaded: current,
+                        total: expected,
+                    } = &mut self.phase
+                    {
+                        *current = downloaded;
+                        *expected = total;
+                    }
+                }
+                #[cfg(all(windows, feature = "in-place-update-preview"))]
+                UpdateEvent::PreparedWindows(result) => {
+                    self.phase = match *result {
+                        Ok(prepared) => UpdatePhase::PreparedWindows(Arc::new(prepared)),
+                        Err(explanation) => UpdatePhase::Failed { explanation },
+                    };
+                    keep_receiver = false;
+                }
             }
         }
         if keep_receiver {
@@ -542,6 +584,12 @@ impl AppUpdateState {
                 }
                 #[cfg(not(target_os = "macos"))]
                 ui.weak("该安装方式的安全原位升级尚在验证；可显示安装包手动升级。");
+                #[cfg(all(windows, feature = "in-place-update-preview"))]
+                if self._windows_instance_guard.is_ok()
+                    && ui.button("准备可信恢复包（技术验证）").clicked()
+                {
+                    self.start_windows_preparation(ui.ctx(), &path, &update.version);
+                }
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("在文件夹中显示").clicked() && reveal_in_folder(&path).is_err()
                     {
@@ -553,6 +601,42 @@ impl AppUpdateState {
                         self.request_check(ui.ctx());
                     }
                 });
+            }
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            UpdatePhase::PreparingWindows { downloaded, total } => {
+                ui.heading("准备可信旧版恢复包");
+                ui.label("旧应用继续运行；准备失败或取消不会安装、退出或替换。");
+                if total > 0 {
+                    ui.add(
+                        egui::ProgressBar::new(
+                            (downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32
+                        )
+                        .show_percentage()
+                        .text(format!(
+                            "{} / {}",
+                            byte_count(downloaded),
+                            byte_count(total)
+                        )),
+                    );
+                } else {
+                    ui.spinner();
+                }
+                if ui.button("取消准备").clicked() {
+                    self.cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            UpdatePhase::PreparedWindows(prepared) => {
+                ui.heading("新旧安装包已校验并保持只读保护");
+                ui.label(format!(
+                    "{} → {}",
+                    prepared.installation().version(),
+                    prepared.installers().candidate.installer().version()
+                ));
+                ui.weak("仅完成准备组件验证，外置助手与健康恢复尚未验收；不会请求重启或执行安装。");
+                if ui.button("结束准备，保留缓存").clicked() {
+                    self.phase = UpdatePhase::Idle;
+                }
             }
         }
     }
@@ -566,6 +650,45 @@ impl AppUpdateState {
                 ui.ctx()
                     .open_url(egui::OpenUrl::new_tab(GITHUB_RELEASES_ROOT));
             }
+        });
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    fn start_windows_preparation(&mut self, context: &egui::Context, path: &Path, version: &str) {
+        let Some(directory) = path.parent().map(Path::to_path_buf) else {
+            self.explain_blocked("更新缓存位置无效。".into());
+            return;
+        };
+        self.cancel.store(false, Ordering::Relaxed);
+        self.phase = UpdatePhase::PreparingWindows {
+            downloaded: 0,
+            total: 0,
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.receiver = Some(receiver);
+        let cancel = Arc::clone(&self.cancel);
+        let context = context.clone();
+        let version = version.to_owned();
+        std::thread::spawn(move || {
+            let result = instplot_studio::update_windows::prepare_installers(
+                &directory,
+                &version,
+                &cancel,
+                |package, destination| {
+                    download_package(package, destination, &cancel, |downloaded| {
+                        let _ = sender.send(UpdateEvent::WindowsRecoveryProgress {
+                            downloaded,
+                            total: package.size_bytes,
+                        });
+                        context.request_repaint();
+                    })
+                    .map(|_| ())
+                    .map_err(std::io::Error::other)
+                },
+            )
+            .map_err(|error| format!("无法准备可信新旧安装包；旧应用继续运行：{error}"));
+            let _ = sender.send(UpdateEvent::PreparedWindows(Box::new(result)));
+            context.request_repaint();
         });
     }
 
@@ -1224,6 +1347,67 @@ mod tests {
             matches!(&state.phase, UpdatePhase::Failed { explanation } if explanation == "hash mismatch")
         );
         assert!(state.receiver.is_none());
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    #[test]
+    fn recovery_preparation_progress_keeps_editing_and_blocks_another_check() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::PreparingWindows {
+            downloaded: 0,
+            total: 0,
+        };
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender
+            .send(UpdateEvent::WindowsRecoveryProgress {
+                downloaded: 25,
+                total: 100,
+            })
+            .unwrap();
+        let context = egui::Context::default();
+        state.poll(&context);
+        state.request_check(&context);
+        assert!(matches!(
+            state.phase,
+            UpdatePhase::PreparingWindows {
+                downloaded: 25,
+                total: 100
+            }
+        ));
+        assert!(state.is_preparing());
+        assert!(
+            !state.is_launching(),
+            "editing must remain available during preparation"
+        );
+        assert!(!state.take_restart_request());
+        assert!(!state.take_close_request());
+        assert!(state.receiver.is_some());
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    #[test]
+    fn recovery_preparation_failure_never_requests_exit_or_installation() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::PreparingWindows {
+            downloaded: 0,
+            total: 0,
+        };
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender
+            .send(UpdateEvent::PreparedWindows(Box::new(Err(
+                "missing trusted recovery".into(),
+            ))))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(
+            matches!(&state.phase, UpdatePhase::Failed { explanation } if explanation == "missing trusted recovery")
+        );
+        assert!(state.receiver.is_none());
+        assert!(!state.is_launching());
+        assert!(!state.take_restart_request());
+        assert!(!state.take_close_request());
     }
 
     #[test]

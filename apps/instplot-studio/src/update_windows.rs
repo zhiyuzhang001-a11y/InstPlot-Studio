@@ -28,6 +28,12 @@ mod recovery_metadata;
 pub use recovery_metadata::{cached_recovery_manifest, remember_installed_manifest};
 
 #[cfg(windows)]
+#[path = "update_windows/preparation.rs"]
+mod preparation;
+#[cfg(windows)]
+pub use preparation::{PreparedWindowsInstallers, prepare_installers};
+
+#[cfg(windows)]
 #[path = "update_windows/native.rs"]
 mod native;
 #[cfg(windows)]
