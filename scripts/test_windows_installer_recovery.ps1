@@ -71,6 +71,13 @@ function VerifyInstallation([string]$Directory, [string]$Version, [string]$Hash,
         throw 'Uninstall registration did not retain version/path/identity.'
     }
     if (Test-Path $MachineRegistration) { throw 'Installer changed to machine scope.' }
+    # Exercise production read-only native registry/Shell discovery, not a mock.
+    $Discovery = & $Binary --check-update-installation | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $Discovery.product -ne 'instplot-studio' -or
+        $Discovery.version -ne $Version -or $Discovery.scope -ne 'current_user' -or
+        -not $Discovery.running_path_matches -or $Discovery.desktop_shortcut -ne $Desktop) {
+        throw 'Native update discovery failed to bind the actual installed executable.'
+    }
     if ($Desktop) {
         & (Join-Path $RepositoryRoot 'scripts/verify_windows_icon.ps1') -Executable $Binary -Shortcut $DesktopShortcut
     } elseif (Test-Path $DesktopShortcut) { throw 'Disabled desktop task was re-enabled.' }
@@ -84,6 +91,13 @@ function RemoveAddedFile([string]$Directory, [string]$Hash) {
         throw 'New release file changed; refuse automatic deletion.'
     }
     Remove-Item -LiteralPath $Added
+}
+
+function ExpectDiscoveryFailure([string]$Binary, [string]$Case) {
+    $Process = Start-Process -FilePath $Binary -ArgumentList '--check-update-installation' -Wait -PassThru `
+        -RedirectStandardOutput (Join-Path $EvidenceRoot "$Case-discovery.stdout.log") `
+        -RedirectStandardError (Join-Path $EvidenceRoot "$Case-discovery.stderr.log")
+    if ($Process.ExitCode -eq 0) { throw "Unsafe installation discovery succeeded: $Case" }
 }
 
 Push-Location $RepositoryRoot
@@ -137,6 +151,22 @@ try {
         $Name = if ($Desktop) { 'desktop-on' } else { 'desktop-off' }
         $InstallRoot = Join-Path $TaskRoot ("custom path 数据 $Name")
         Install $OldInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-old.log")
+        VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
+        ExpectDiscoveryFailure $OldBinary "$Name-portable-copy"
+        # Only the disposable CI fixture's exact HKCU record is changed/restored.
+        try {
+            Set-ItemProperty -LiteralPath $Registration -Name DisplayVersion -Value '0.0.0'
+            ExpectDiscoveryFailure (Join-Path $InstallRoot 'instplot-studio.exe') "$Name-wrong-version"
+        } finally {
+            Set-ItemProperty -LiteralPath $Registration -Name DisplayVersion -Value $CurrentVersion
+        }
+        $OriginalLocation = (Get-ItemProperty $Registration).InstallLocation
+        try {
+            Set-ItemProperty -LiteralPath $Registration -Name InstallLocation -Value $OldSource
+            ExpectDiscoveryFailure (Join-Path $InstallRoot 'instplot-studio.exe') "$Name-wrong-path"
+        } finally {
+            Set-ItemProperty -LiteralPath $Registration -Name InstallLocation -Value $OriginalLocation
+        }
         VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
         # Negative controls: Unicode handling must not weaken exact target/icon checks.
         $BadShortcut = Join-Path $TaskRoot "$Name-wrong-target.lnk"
@@ -193,6 +223,8 @@ try {
         $Results += @{ case = $Name; versions = @($CurrentVersion, $NextVersion, $CurrentVersion);
             original_path = $true; user_scope = $true; shortcuts_preserved = $true;
             wrong_shortcut_target_and_icon_rejected = $true;
+            native_registry_and_shortcut_discovery = $true;
+            portable_and_conflicting_registry_rejected = $true;
             installer_cancel_kept_old = $true; rollback_identity_and_hash = $true;
             added_file_hash_cleanup = $true; user_data_preserved = $true; uninstall_verified = $true }
     }

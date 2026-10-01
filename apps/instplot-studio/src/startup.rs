@@ -18,6 +18,19 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
             println!("{}", if cfg!(target_os = "macos") { 1 } else { 0 });
             Ok(())
         }
+        #[cfg(windows)]
+        StartupCommand::CheckUpdateInstallation => {
+            let installed = instplot_studio::update_windows::discover_current_installation()?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "product": "instplot-studio", "version": installed.version().to_string(),
+                    "scope": "current_user", "running_path_matches": true,
+                    "desktop_shortcut": installed.desktop_shortcut(),
+                })
+            );
+            Ok(())
+        }
         #[cfg(target_os = "macos")]
         StartupCommand::ApplyUpdate(path) => crate::update_macos::apply(&path).map_err(Into::into),
         #[cfg(target_os = "macos")]
@@ -119,6 +132,8 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
 enum StartupCommand {
     Gui,
     UpdateProtocol,
+    #[cfg(windows)]
+    CheckUpdateInstallation,
     #[cfg(target_os = "macos")]
     ApplyUpdate(PathBuf),
     #[cfg(target_os = "macos")]
@@ -147,6 +162,10 @@ impl StartupCommand {
         match (arguments.next(), arguments.next(), arguments.next()) {
             (None, None, None) => Ok(Self::Gui),
             (Some(flag), None, None) if flag == "--update-protocol" => Ok(Self::UpdateProtocol),
+            #[cfg(windows)]
+            (Some(flag), None, None) if flag == "--check-update-installation" => {
+                Ok(Self::CheckUpdateInstallation)
+            }
             #[cfg(target_os = "macos")]
             (Some(flag), Some(path), None) if flag == "--apply-update" => {
                 Ok(Self::ApplyUpdate(path.into()))

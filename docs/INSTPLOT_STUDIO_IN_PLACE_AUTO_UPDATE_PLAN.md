@@ -148,7 +148,7 @@ Lite 的 `WindowsUpdater` 在非 debug 构建启动时后台检查，校验后�
 
 用户已批准提交测试 PR 并运行 Windows CI，不合并、不发布、不更新 OSS。PR #9 上一提交四项 CI 全通过；新增恢复原型须重新验收。具体助手测试范围与未通过阶段门见 [本地助手验收记录](INSTPLOT_STUDIO_UPDATE_HELPER_ACCEPTANCE.md)。Windows 实机/VM 环境另行确认，不因缺少环境将待验项目标记通过。
 
-下一阶段已建立 `update_windows.rs` 安装契约：绑定固定 AppId、当前用户级记录、实际运行路径及版本，拒绝链接/reparse/network 路径、安装记录冲突及跨通道/非新版；静默安装参数保留原目录和桌面图标任务，禁止强制关闭应用。此模块不执行安装器，原生注册表发现、可信旧恢复资产、进程握手及完整恢复事务尚未接入，不视为 Windows 自动更新完成。
+下一阶段已建立 `update_windows.rs` 安装契约：绑定固定 AppId、当前用户级记录、实际运行路径及版本，拒绝链接/reparse/network 路径、安装记录冲突及跨通道/非新版；静默安装参数保留原目录和桌面图标任务，禁止强制关闭应用。原生 `update_windows/native.rs` 已接入只读 Unicode 注册表发现、机器级冲突拒绝、系统已知目录和 ShellLink 目标/图标验证；新增 `--check-update-installation` 诊断，CI 在真实安装/升级/恢复后验证，并故障注入便携副本、注册路径和版本冲突。原生模块已完成 Windows 交叉类型/Clippy 检查，运行证据待新 CI。此模块不执行安装器，可信旧恢复资产、进程握手及完整恢复事务尚未接入，不视为 Windows 自动更新完成。
 
 ## 7. 必须通过的测试清单
 
