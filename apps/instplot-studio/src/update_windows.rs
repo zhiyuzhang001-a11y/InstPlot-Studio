@@ -188,9 +188,9 @@ impl WindowsInstallation {
             ));
         }
         let mut directory = OsString::from("/DIR=");
-        directory.push(&self.directory);
+        directory.push(installer_path(&self.directory)?);
         let mut log_argument = OsString::from("/LOG=");
-        log_argument.push(log);
+        log_argument.push(installer_path(log)?);
         Ok(vec![
             "/VERYSILENT".into(),
             "/SUPPRESSMSGBOXES".into(),
@@ -208,6 +208,115 @@ impl WindowsInstallation {
             log_argument,
         ])
     }
+}
+
+// Inno validates folder syntax as a DOS path; a Rust canonical \\?\ drive
+// path is rejected as containing '?'. Preserve canonical paths everywhere
+// else, converting ONLY the process arguments and proving the same target.
+#[cfg(windows)]
+fn installer_path(path: &Path) -> io::Result<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::Prefix;
+    if !path.is_absolute() {
+        return Err(invalid("installer requires an absolute local drive path"));
+    }
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Err(invalid("installer requires a local drive prefix"));
+    };
+    if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+        return Err(invalid("network/device installer paths are unsupported"));
+    }
+    for part in components {
+        match part {
+            Component::RootDir => {}
+            Component::Normal(name) => {
+                let wide: Vec<_> = name.encode_wide().collect();
+                let stem = name
+                    .to_string_lossy()
+                    .split('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+                    || stem
+                        .strip_prefix("COM")
+                        .or_else(|| stem.strip_prefix("LPT"))
+                        .is_some_and(|suffix| {
+                            matches!(
+                                suffix,
+                                "1" | "2"
+                                    | "3"
+                                    | "4"
+                                    | "5"
+                                    | "6"
+                                    | "7"
+                                    | "8"
+                                    | "9"
+                                    | "¹"
+                                    | "²"
+                                    | "³"
+                            )
+                        });
+                if reserved
+                    || matches!(wide.last(), Some(32 | 46))
+                    || wide
+                        .iter()
+                        .any(|c| *c < 32 || [34, 42, 47, 58, 60, 62, 63, 92, 124].contains(c))
+                {
+                    return Err(invalid("installer path has DOS-ambiguous characters"));
+                }
+            }
+            _ => return Err(invalid("installer path contains traversal")),
+        }
+    }
+    let wide: Vec<_> = path.as_os_str().encode_wide().collect();
+    let result = if matches!(prefix.kind(), Prefix::VerbatimDisk(_)) {
+        if wide.get(..4) != Some(&[92, 92, 63, 92]) {
+            return Err(invalid("invalid canonical drive prefix"));
+        }
+        PathBuf::from(OsString::from_wide(&wide[4..]))
+    } else {
+        path.to_path_buf()
+    };
+    // A new log need not exist yet; its existing parent must resolve identically.
+    let original = match fs::symlink_metadata(path) {
+        Ok(_) => {
+            reject_redirected_path(path)?;
+            fs::canonicalize(path)?
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let parent = path.parent().ok_or(error)?;
+            reject_redirected_path(parent)?;
+            fs::canonicalize(parent)?.join(
+                path.file_name()
+                    .ok_or_else(|| invalid("missing installer file name"))?,
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    let converted = match fs::symlink_metadata(&result) {
+        Ok(_) => fs::canonicalize(&result)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::canonicalize(result.parent().ok_or(error)?)?.join(
+                result
+                    .file_name()
+                    .ok_or_else(|| invalid("missing converted file name"))?,
+            )
+        }
+        Err(error) => return Err(error),
+    };
+    if original != converted {
+        return Err(invalid(
+            "DOS installer argument resolves to a different target",
+        ));
+    }
+    Ok(result)
+}
+
+#[cfg(not(windows))]
+fn installer_path(path: &Path) -> io::Result<PathBuf> {
+    Ok(path.to_path_buf())
 }
 
 fn reject_redirected_path(path: &Path) -> io::Result<()> {
@@ -320,7 +429,15 @@ mod tests {
                 }
             );
             let mut expected = OsString::from("/DIR=");
+            #[cfg(not(windows))]
             expected.push(&record.directory);
+            #[cfg(windows)]
+            {
+                use std::os::windows::ffi::{OsStrExt, OsStringExt};
+                let wide: Vec<_> = record.directory.as_os_str().encode_wide().collect();
+                assert_eq!(wide.get(..4), Some(&[92, 92, 63, 92][..]));
+                expected.push(OsString::from_wide(&wide[4..]));
+            }
             assert_eq!(args[7], expected);
             assert_eq!(install.executable(), record.directory.join(EXECUTABLE));
         }
@@ -385,6 +502,51 @@ mod tests {
         std::os::unix::fs::symlink(&record.directory, fixture.0.join("redirect")).unwrap();
         record.directory = fixture.0.join("redirect");
         assert!(fixture.bind(&record).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inno_dos_arguments_keep_identity_and_reject_ambiguous_names() {
+        let fixture = Fixture::new();
+        let path = fixture.record().directory;
+        let dos = installer_path(&path).unwrap();
+        assert!(!dos.as_os_str().to_string_lossy().starts_with(r"\\?\"));
+        assert_eq!(fs::canonicalize(&dos).unwrap(), path);
+        let log = fixture.0.join("中文 log.txt");
+        let log_dos = installer_path(&log).unwrap();
+        assert_eq!(log_dos.file_name(), log.file_name());
+        assert_eq!(
+            fs::canonicalize(log_dos.parent().unwrap()).unwrap(),
+            fixture.0
+        );
+        fs::write(&log, b"private log fixture").unwrap();
+        assert_eq!(
+            fs::canonicalize(installer_path(&log).unwrap()).unwrap(),
+            log
+        );
+        for name in [
+            "NUL",
+            "con.txt",
+            "COM1.log",
+            "COM¹.log",
+            "LPT9",
+            "trailing.",
+            "space ",
+            "ads:stream",
+            "question?",
+            "quote\"",
+            "wild*",
+        ] {
+            assert!(installer_path(&fixture.0.join(name)).is_err(), "{name}");
+        }
+        for path in [
+            r"\\server\share\Studio",
+            r"\\?\UNC\server\share\Studio",
+            r"\\.\C:\Studio",
+            "relative.log",
+        ] {
+            assert!(installer_path(Path::new(path)).is_err());
+        }
     }
 
     #[cfg(windows)]

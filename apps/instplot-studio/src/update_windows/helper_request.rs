@@ -70,6 +70,7 @@ struct HelperRequest {
     old_process_id: u32,
     old_process_created: u64,
     previous_binary_sha256: String,
+    previous_license_sha256: String,
     recovery: AssetBinding,
     candidate: AssetBinding,
 }
@@ -85,6 +86,7 @@ impl HelperRequest {
                 .previous_binary_sha256
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || self.previous_license_sha256 != expected_license_sha256()
             || self.recovery.version != self.identity.previous_version
             || self.candidate.version != self.identity.candidate_version
             || self.candidate.package_sha256 != self.identity.candidate_sha256
@@ -138,6 +140,7 @@ impl PreparedWindowsHelper {
         let recovery = prepared.installers().recovery.installer();
         candidate.revalidate()?;
         recovery.revalidate()?;
+        let previous_license_sha256 = verified_license(installed.directory())?;
         let transaction = UpdateTransaction::new(UpdateIdentity {
             product: "instplot-studio".into(),
             platform: "windows-x86_64".into(),
@@ -163,6 +166,7 @@ impl PreparedWindowsHelper {
             old_process_id: std::process::id(),
             old_process_created: super::current_process_created()?,
             previous_binary_sha256,
+            previous_license_sha256,
             recovery: AssetBinding::from_installer(recovery)?,
             candidate: AssetBinding::from_installer(candidate)?,
         };
@@ -190,7 +194,9 @@ impl PreparedWindowsHelper {
     /// ready file alone. Success still does not request or authorize GUI exit.
     pub fn confirm_ready(&self, child: &std::process::Child) -> io::Result<()> {
         confirm_process_ready(&self.directory, &self.request, child)?;
-        super::native::revalidate_installation(&self.request.installation()?)
+        let installation = self.request.installation()?;
+        super::native::revalidate_installation(&installation)?;
+        require_original_files(&installation, &self.request)
     }
 
     /// Call only AFTER the work-protection controller has accepted user restart.
@@ -210,6 +216,7 @@ impl PreparedWindowsHelper {
                 "old application or helper changed since preparation",
             ));
         }
+        require_original_files(&installed, &self.request)?;
         let _installers = self.request.verify_installers()?;
         let store = TransactionStore::lock(&self.directory)?;
         let mut state = store.read(&self.request.identity)?;
@@ -292,6 +299,7 @@ impl WindowsHelperSession {
                 "old application changed before helper acknowledgement",
             ));
         }
+        require_original_files(&installation, &request)?;
         let helper = directory.join(HELPER_NAME);
         let helper_lease = open_read_lease(&helper)?;
         if digest_file(&helper)? != request.previous_binary_sha256 {
@@ -316,6 +324,7 @@ impl WindowsHelperSession {
             return Err(invalid("old GUI exited before helper acknowledgement"));
         }
         super::native::revalidate_installation(&self.installation)?;
+        require_original_files(&self.installation, &self.request)?;
         self.installers.recovery.installer().revalidate()?;
         self.installers.candidate.installer().revalidate()?;
         let state = self.store.read(self.transaction.identity())?;
@@ -346,6 +355,70 @@ impl WindowsHelperSession {
     pub fn old_process(&self) -> &TrackedWindowsProcess {
         &self.old_process
     }
+
+    /// Verify the current fixed release-file contract AFTER a durable successful
+    /// old-installer exit. No GUI launch, deletion, configuration restoration or
+    /// RolledBack transition is performed here.
+    pub fn verify_restored_installation(
+        &self,
+        transaction: &UpdateTransaction,
+        access: &super::WindowsInstallAccess,
+    ) -> io::Result<()> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("old application has not exited normally"));
+        }
+        require_transaction(&self.request, transaction, UpdateStage::Restoring)?;
+        self.installers.recovery.installer().revalidate()?;
+        if super::installer_attempt_status(
+            &self.store,
+            transaction,
+            &self.installation,
+            self.installers.recovery.installer(),
+        )? != (super::InstallerAttemptStatus::Exited { exit_code: 0 })
+        {
+            return Err(invalid("recovery installer has no durable successful exit"));
+        }
+        super::native::revalidate_installation(&self.installation)?;
+        require_original_files(&self.installation, &self.request)
+    }
+}
+
+const RELEASE_LICENSE: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../LICENSE"));
+
+fn expected_license_sha256() -> String {
+    format!("{:x}", Sha256::digest(RELEASE_LICENSE))
+}
+
+fn verified_license(directory: &Path) -> io::Result<String> {
+    let path = directory.join("LICENSE");
+    super::reject_redirected_path(&path)?;
+    let metadata = fs::metadata(&path)?;
+    if !metadata.is_file() || metadata.len() != RELEASE_LICENSE.len() as u64 {
+        return Err(invalid(
+            "installed release LICENSE has unexpected type or size",
+        ));
+    }
+    let actual = digest_file(&path)?;
+    if actual != expected_license_sha256() {
+        return Err(invalid(
+            "installed release LICENSE differs from the running old build",
+        ));
+    }
+    Ok(actual)
+}
+
+fn require_original_files(
+    installed: &WindowsInstallation,
+    request: &HelperRequest,
+) -> io::Result<()> {
+    if digest_file(installed.executable())? != request.previous_binary_sha256
+        || verified_license(installed.directory())? != request.previous_license_sha256
+    {
+        return Err(invalid("original release files are not intact"));
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -520,6 +593,7 @@ mod tests {
             old_process_id: 123,
             old_process_created: 456,
             previous_binary_sha256: "b".repeat(64),
+            previous_license_sha256: expected_license_sha256(),
             recovery: cache("0.1.2-rc.2", "d", 10),
             candidate: cache("0.1.2-rc.3", "a", 20),
         }
@@ -543,6 +617,93 @@ mod tests {
         let mut raw = serde_json::to_value(request).unwrap();
         raw["arbitrary_command"] = "must not run".into();
         assert!(serde_json::from_value::<HelperRequest>(raw).is_err());
+        let mut missing_license = serde_json::to_value(self::request()).unwrap();
+        missing_license
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_license_sha256");
+        assert!(serde_json::from_value::<HelperRequest>(missing_license).is_err());
+        let mut changed_license = self::request();
+        changed_license.previous_license_sha256 = "e".repeat(64);
+        assert!(changed_license.transaction().is_err());
+    }
+
+    #[test]
+    fn fixed_release_files_are_checked_without_touching_user_files() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-release-files 中文-{:032x}",
+            u128::from_le_bytes(random),
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let binary = root.join("instplot-studio.exe");
+        let license = root.join("LICENSE");
+        let user_file = root.join("user-project.instplot");
+        for (path, bytes) in [
+            (
+                &binary,
+                b"fake old binary; hash contract fixture only".as_slice(),
+            ),
+            (&license, RELEASE_LICENSE),
+            (&user_file, b"user project must remain untouched".as_slice()),
+        ] {
+            let mut file = super::super::create_private_file(path).unwrap();
+            file.write_all(bytes).unwrap();
+            file.sync_all().unwrap();
+        }
+        let mut request = request();
+        request.identity.installed_path = root.clone();
+        request.previous_binary_sha256 = digest_file(&binary).unwrap();
+        let installed = request.installation().unwrap();
+        require_original_files(&installed, &request).unwrap();
+        let user_hash = digest_file(&user_file).unwrap();
+        fs::write(&license, b"modified license").unwrap();
+        assert!(verified_license(&root).is_err());
+        assert!(require_original_files(&installed, &request).is_err());
+        assert_eq!(fs::read(&license).unwrap(), b"modified license");
+        let mut same_length = RELEASE_LICENSE.to_vec();
+        same_length[0] ^= 1;
+        fs::write(&license, &same_length).unwrap();
+        assert!(verified_license(&root).is_err());
+        assert_eq!(fs::read(&license).unwrap(), same_length);
+        fs::write(&license, RELEASE_LICENSE).unwrap();
+        fs::write(&binary, b"different restored executable").unwrap();
+        assert!(require_original_files(&installed, &request).is_err());
+        assert_eq!(digest_file(&user_file).unwrap(), user_hash);
+        fs::remove_file(&license).unwrap();
+        assert!(verified_license(&root).is_err());
+        fs::create_dir(&license).unwrap();
+        assert!(verified_license(&root).is_err());
+        assert_eq!(digest_file(&user_file).unwrap(), user_hash);
+        fs::remove_dir_all(root).unwrap(); // Exact disposable fixture only.
+    }
+
+    #[test]
+    fn fixed_release_contract_matches_the_inno_payload() {
+        // A future added published file must extend the recovery contract, not
+        // silently become an unknown file eligible for blanket deletion.
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/windows/InstPlotStudio.iss"
+        ));
+        let mut section = "";
+        let mut files = Vec::new();
+        for line in source.lines().map(str::trim) {
+            if line.starts_with('[') {
+                section = line;
+            } else if section == "[Files]" && !line.is_empty() && !line.starts_with(';') {
+                files.push(line);
+            }
+        }
+        assert_eq!(
+            files,
+            vec![
+                "Source: \"{#SourceDir}\\instplot-studio.exe\"; DestDir: \"{app}\"; Flags: ignoreversion",
+                "Source: \"{#SourceDir}\\LICENSE\"; DestDir: \"{app}\"; Flags: ignoreversion",
+            ]
+        );
     }
 
     #[test]
