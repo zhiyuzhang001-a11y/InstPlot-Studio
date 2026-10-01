@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -38,6 +39,7 @@ class ExtractChangelogTests(unittest.TestCase):
 
 
 class ReleaseDispatchTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Dispatch job runs on Ubuntu with Bash")
     def test_oss_dispatch_identifies_repository_without_checkout(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         command = workflow.split("          gh workflow run publish-oss-update.yml", 1)[1]
@@ -53,6 +55,7 @@ class ReleaseDispatchTests(unittest.TestCase):
                 ["bash", "-eu", "-c", 'gh() { printf "%s\\n" "$@"; }; ' + command],
                 cwd=temporary,
                 env={
+                    **os.environ,
                     "GITHUB_REPOSITORY": "example/studio",
                     "RELEASE_TAG": "v0.1.2-rc.2",
                     "SOURCE_SHA": "frozen-source",
