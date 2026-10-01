@@ -138,6 +138,35 @@ try {
         $InstallRoot = Join-Path $TaskRoot ("custom path 数据 $Name")
         Install $OldInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-old.log")
         VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
+        # Negative controls: Unicode handling must not weaken exact target/icon checks.
+        $BadShortcut = Join-Path $TaskRoot "$Name-wrong-target.lnk"
+        $BadLink = (New-Object -ComObject WScript.Shell).CreateShortcut($BadShortcut)
+        $BadLink.TargetPath = $OldBinary
+        $BadLink.IconLocation = "$OldBinary,0"
+        $BadLink.Save()
+        $Rejected = $false
+        try { [StudioIconResource]::VerifyShortcut($BadShortcut, (Join-Path $InstallRoot 'instplot-studio.exe')) }
+        catch {
+            if ($_.Exception.ToString() -notmatch 'Shortcut targets the wrong executable') { throw }
+            $Rejected = $true
+        }
+        if (-not $Rejected) { throw 'Wrong shortcut target was accepted.' }
+        $Rejected = $false
+        try { [StudioIconResource]::VerifyShortcut($MenuShortcut, $OldBinary) }
+        catch {
+            if ($_.Exception.ToString() -notmatch 'Shortcut targets the wrong executable') { throw }
+            $Rejected = $true
+        }
+        if (-not $Rejected) { throw 'Installed shortcut accepted against a different executable.' }
+        $BadLink.IconLocation = "$NewBinary,0"
+        $BadLink.Save()
+        $Rejected = $false
+        try { [StudioIconResource]::VerifyShortcut($BadShortcut, $OldBinary) }
+        catch {
+            if ($_.Exception.ToString() -notmatch 'Unexpected shortcut icon') { throw }
+            $Rejected = $true
+        }
+        if (-not $Rejected) { throw 'Wrong shortcut icon was accepted.' }
         $UserFile = Join-Path $InstallRoot 'user-project.instplot'
         [IO.File]::WriteAllText($UserFile, 'user data must survive upgrade and recovery')
         $UserHash = (Get-FileHash -Algorithm SHA256 $UserFile).Hash
@@ -163,6 +192,7 @@ try {
         if ((Get-FileHash -Algorithm SHA256 $UserFile).Hash -ne $UserHash) { throw 'Uninstall removed user data.' }
         $Results += @{ case = $Name; versions = @($CurrentVersion, $NextVersion, $CurrentVersion);
             original_path = $true; user_scope = $true; shortcuts_preserved = $true;
+            wrong_shortcut_target_and_icon_rejected = $true;
             installer_cancel_kept_old = $true; rollback_identity_and_hash = $true;
             added_file_hash_cleanup = $true; user_data_preserved = $true; uninstall_verified = $true }
     }

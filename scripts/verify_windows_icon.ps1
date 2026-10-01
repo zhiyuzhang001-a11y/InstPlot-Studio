@@ -7,8 +7,60 @@ $ExecutablePath = (Resolve-Path $Executable).Path
 if (-not ('StudioIconResource' -as [type])) {
     Add-Type @'
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text;
+[ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+class StudioShellLink {}
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IStudioShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int count, IntPtr findData, uint flags);
+    void GetIDList(out IntPtr idList);
+    void SetIDList(IntPtr idList);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int count);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int count);
+    void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string text);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int count);
+    void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string text);
+    void GetHotkey(out short hotkey);
+    void SetHotkey(short hotkey);
+    void GetShowCmd(out int command);
+    void SetShowCmd(int command);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int count, out int index);
+}
 public static class StudioIconResource {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetLongPathName(string path, StringBuilder buffer, uint size);
+    static string CanonicalPath(string path) {
+        if (String.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            throw new Exception("Shortcut path does not identify an existing file: " + path);
+        var buffer = new StringBuilder(32768);
+        uint length = GetLongPathName(Path.GetFullPath(path), buffer, (uint)buffer.Capacity);
+        if (length == 0 || length >= buffer.Capacity)
+            throw new Exception("Cannot normalize shortcut path: " + path);
+        return buffer.ToString();
+    }
+    public static void VerifyShortcut(string shortcut, string executable) {
+        // Read the Unicode Shell interface directly, without WScript path conversion
+        // or Resolve() search/repair. Normalize only existing long/8.3 path aliases.
+        object link = new StudioShellLink();
+        try {
+            ((IPersistFile)link).Load(shortcut, 0);
+            var shell = (IStudioShellLinkW)link;
+            var target = new StringBuilder(32768);
+            var icon = new StringBuilder(32768);
+            shell.GetPath(target, target.Capacity, IntPtr.Zero, 0);
+            int index;
+            shell.GetIconLocation(icon, icon.Capacity, out index);
+            string expected = CanonicalPath(executable);
+            if (!String.Equals(CanonicalPath(target.ToString()), expected, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Shortcut targets the wrong executable: actual=" + target + "; expected=" + executable);
+            if (index != 0 || !String.Equals(CanonicalPath(icon.ToString()), expected, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Unexpected shortcut icon: " + icon + "," + index);
+        } finally { Marshal.FinalReleaseComObject(link); }
+    }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern IntPtr LoadLibraryEx(string path, IntPtr file, uint flags);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -52,8 +104,6 @@ public static class StudioIconResource {
 [StudioIconResource]::Verify($ExecutablePath)
 if ($Shortcut) {
     $ShortcutPath = (Resolve-Path $Shortcut).Path
-    $Link = (New-Object -ComObject WScript.Shell).CreateShortcut($ShortcutPath)
-    if ($Link.TargetPath -ne $ExecutablePath) { throw 'Shortcut targets the wrong executable' }
-    if ($Link.IconLocation -ne "$ExecutablePath,0") { throw "Unexpected shortcut icon: $($Link.IconLocation)" }
+    [StudioIconResource]::VerifyShortcut($ShortcutPath, $ExecutablePath)
 }
 Write-Output 'Windows product icon: PASS'
