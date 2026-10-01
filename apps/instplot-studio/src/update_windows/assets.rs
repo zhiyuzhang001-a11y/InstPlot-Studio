@@ -136,6 +136,11 @@ impl VerifiedWindowsInstaller {
     /// Signature/expiry verification above is a prepare-time requirement; this
     /// method only proves the already accepted file has not changed.
     pub fn revalidate(&self) -> io::Result<()> {
+        self.validate_path()?;
+        self.verify_file(&mut File::open(&self.path)?)
+    }
+
+    fn validate_path(&self) -> io::Result<()> {
         #[cfg(windows)]
         if self.enforce_private_acl {
             super::validate_private_directory(
@@ -146,7 +151,10 @@ impl VerifiedWindowsInstaller {
             super::validate_private_file(&self.path)?;
         }
         reject_redirected_path(&self.path)?;
-        let mut file = File::open(&self.path)?;
+        Ok(())
+    }
+
+    fn verify_file(&self, file: &mut File) -> io::Result<()> {
         let metadata = file.metadata()?;
         if !metadata.is_file()
             || metadata.len() != self.package.size_bytes
@@ -175,6 +183,45 @@ impl VerifiedWindowsInstaller {
             return Err(invalid("installer hash does not match verified manifest"));
         }
         Ok(())
+    }
+
+    /// Hold a read-only Windows sharing lease through installation/recovery.
+    /// Revalidation alone cannot prevent a later write or path replacement.
+    #[cfg(windows)]
+    pub fn pin(&self) -> io::Result<PinnedWindowsInstaller> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        self.validate_path()?;
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0)
+            .open(&self.path)?;
+        // Check again after obtaining the lease; writes/deletes are now denied
+        // for this file, including writers that were already open.
+        self.validate_path()?;
+        self.verify_file(&mut file)?;
+        Ok(PinnedWindowsInstaller {
+            installer: self.clone(),
+            _lease: file,
+        })
+    }
+}
+
+/// Not Clone/Deserialize: the descriptor is usable only while its lease lives.
+/// This prevents installer bytes being changed between verification and use;
+/// it is not an installation lock or protection against the current user.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct PinnedWindowsInstaller {
+    installer: VerifiedWindowsInstaller,
+    _lease: File,
+}
+
+#[cfg(windows)]
+impl PinnedWindowsInstaller {
+    pub fn installer(&self) -> &VerifiedWindowsInstaller {
+        &self.installer
     }
 }
 
@@ -234,6 +281,23 @@ impl WindowsInstallerPair {
         self.recovery.revalidate()?;
         self.candidate.revalidate()
     }
+
+    /// Acquire both leases before asking the application to exit. Failure to
+    /// pin either installer releases the other and leaves the GUI untouched.
+    #[cfg(windows)]
+    pub fn pin(&self) -> io::Result<PinnedWindowsInstallerPair> {
+        Ok(PinnedWindowsInstallerPair {
+            recovery: self.recovery.pin()?,
+            candidate: self.candidate.pin()?,
+        })
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct PinnedWindowsInstallerPair {
+    pub recovery: PinnedWindowsInstaller,
+    pub candidate: PinnedWindowsInstaller,
 }
 
 fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
@@ -399,6 +463,44 @@ mod tests {
         )
         .unwrap();
         assert!(fixture.verify().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_lease_denies_writes_and_deletes_until_released() {
+        let fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        let lease = asset.pin().unwrap();
+        assert_eq!(lease.installer().sha256(), asset.sha256());
+        assert!(File::open(asset.path()).is_ok());
+        let write_error = fs::OpenOptions::new()
+            .write(true)
+            .open(asset.path())
+            .unwrap_err();
+        assert_eq!(write_error.raw_os_error(), Some(32));
+        assert_eq!(
+            fs::remove_file(asset.path()).unwrap_err().raw_os_error(),
+            Some(32)
+        );
+        drop(lease);
+        let mut bytes = fs::read(asset.path()).unwrap();
+        bytes[0] ^= 1;
+        fs::write(asset.path(), bytes).unwrap();
+        assert!(asset.pin().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installer_lease_rejects_an_existing_writer() {
+        let fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        let writer = fs::OpenOptions::new()
+            .write(true)
+            .open(asset.path())
+            .unwrap();
+        assert_eq!(asset.pin().unwrap_err().raw_os_error(), Some(32));
+        drop(writer);
+        asset.pin().unwrap();
     }
 
     #[cfg(windows)]

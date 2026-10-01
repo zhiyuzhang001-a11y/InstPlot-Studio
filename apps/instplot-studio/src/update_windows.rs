@@ -14,6 +14,8 @@ use semver::Version;
 
 #[path = "update_windows/assets.rs"]
 mod assets;
+#[cfg(windows)]
+pub use assets::{PinnedWindowsInstaller, PinnedWindowsInstallerPair};
 pub use assets::{VerifiedWindowsInstaller, WindowsInstallerPair};
 
 #[cfg(windows)]

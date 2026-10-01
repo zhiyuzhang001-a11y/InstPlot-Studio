@@ -55,10 +55,22 @@ function Install([string]$Installer, [string]$Directory, [bool]$Desktop, [string
     $Arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
         '/NOCLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS', $Tasks,
         ('/DIR="' + $Directory + '"'), ('/LOG="' + $Log + '"'))
-    $Process = Start-Process -FilePath $Installer -ArgumentList $Arguments -Wait -PassThru
-    if ($ExpectFailure) {
-        if ($Process.ExitCode -eq 0) { throw 'Fault installer unexpectedly succeeded.' }
-    } elseif ($Process.ExitCode -ne 0) { throw "Installer failed: $($Process.ExitCode)" }
+    # Match the helper's read-only sharing lease. Prove real Inno installers
+    # can execute while writes/deletes are denied for the verified asset.
+    $Lease = [System.IO.File]::Open($Installer, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    try {
+        $BeforeHash = (Get-FileHash -Algorithm SHA256 $Installer).Hash
+        $Process = Start-Process -FilePath $Installer -ArgumentList $Arguments -Wait -PassThru
+        if ((Get-FileHash -Algorithm SHA256 $Installer).Hash -ne $BeforeHash) {
+            throw 'Installer asset changed while its read lease was held.'
+        }
+        if ($ExpectFailure) {
+            if ($Process.ExitCode -eq 0) { throw 'Fault installer unexpectedly succeeded.' }
+        } elseif ($Process.ExitCode -ne 0) { throw "Installer failed: $($Process.ExitCode)" }
+    } finally {
+        $Lease.Dispose()
+    }
 }
 
 function VerifyInstallation([string]$Directory, [string]$Version, [string]$Hash, [bool]$Desktop) {
@@ -303,6 +315,7 @@ end;
             native_registry_and_shortcut_discovery = $true;
             portable_and_conflicting_registry_rejected = $true;
             installer_cancel_kept_old = $true; rollback_identity_and_hash = $true;
+            installer_read_lease_execution = $true;
             interrupted_after_payload_restored = $true;
             failed_recovery_kept_assets_and_user_data = $true;
             modified_added_file_cleanup_rejected = $true;
