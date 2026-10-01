@@ -4,9 +4,12 @@
 //! must never cause an application to exit or imply that installation succeeded.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io;
+#[cfg(not(windows))]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(windows))]
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -260,6 +263,8 @@ impl TransactionStore {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(invalid("transaction directory must be a real directory"));
         }
+        #[cfg(windows)]
+        crate::update_windows::validate_private_directory(directory)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -269,6 +274,10 @@ impl TransactionStore {
         }
         let lock_path = directory.join("transaction.lock");
         reject_link(&lock_path)?;
+        #[cfg(windows)]
+        if lock_path.exists() {
+            crate::update_windows::validate_private_file(&lock_path)?;
+        }
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -276,7 +285,16 @@ impl TransactionStore {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let lock = options.open(lock_path)?;
+        #[cfg(not(windows))]
+        let lock = options.open(&lock_path)?;
+        #[cfg(windows)]
+        let lock = if lock_path.exists() {
+            options.open(&lock_path)?
+        } else {
+            crate::update_windows::create_private_file(&lock_path)?
+        };
+        #[cfg(windows)]
+        crate::update_windows::validate_private_file(&lock_path)?;
         lock.try_lock()
             .map_err(|error| io::Error::other(error.to_string()))?;
         Ok(Self {
@@ -287,23 +305,40 @@ impl TransactionStore {
 
     pub fn write(&self, transaction: &UpdateTransaction) -> io::Result<()> {
         transaction.validate()?;
+        #[cfg(windows)]
+        crate::update_windows::validate_private_directory(&self.directory)?;
         let path = self.directory.join("transaction.json");
         reject_link(&path)?;
+        #[cfg(windows)]
+        if path.exists() {
+            crate::update_windows::validate_private_file(&path)?;
+        }
         let raw = serde_json::to_vec(transaction).map_err(invalid)?;
         if raw.len() as u64 > MAX_STATE_BYTES {
             return Err(invalid("transaction state is too large"));
         }
-        AtomicFile::new(&path, AllowOverwrite)
-            .write(|file| {
-                file.write_all(&raw)?;
-                file.sync_all()
-            })
-            .map_err(io::Error::other)
+        #[cfg(windows)]
+        {
+            crate::update_windows::write_private_atomic(&path, &raw)
+        }
+        #[cfg(not(windows))]
+        {
+            AtomicFile::new(&path, AllowOverwrite)
+                .write(|file| {
+                    file.write_all(&raw)?;
+                    file.sync_all()
+                })
+                .map_err(io::Error::other)
+        }
     }
 
     pub fn read(&self, identity: &UpdateIdentity) -> io::Result<UpdateTransaction> {
+        #[cfg(windows)]
+        crate::update_windows::validate_private_directory(&self.directory)?;
         let path = self.directory.join("transaction.json");
         reject_link(&path)?;
+        #[cfg(windows)]
+        crate::update_windows::validate_private_file(&path)?;
         if fs::metadata(&path)?.len() > MAX_STATE_BYTES {
             return Err(invalid("transaction state is too large"));
         }
@@ -438,7 +473,10 @@ mod tests {
     fn durable_store_is_exclusive_and_fails_closed() {
         let path =
             std::env::temp_dir().join(format!("instplot-update-state-{}", std::process::id()));
+        #[cfg(not(windows))]
         fs::create_dir(&path).unwrap();
+        #[cfg(windows)]
+        crate::update_windows::create_private_directory(&path).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

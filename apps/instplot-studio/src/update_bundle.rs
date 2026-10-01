@@ -346,7 +346,10 @@ mod tests {
             let root = fs::canonicalize(root).unwrap();
             let target = root.join("InstPlot Studio.app");
             let staging = root.join("transaction");
+            #[cfg(not(windows))]
             fs::create_dir(&staging).unwrap();
+            #[cfg(windows)]
+            crate::update_windows::create_private_directory(&staging).unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;

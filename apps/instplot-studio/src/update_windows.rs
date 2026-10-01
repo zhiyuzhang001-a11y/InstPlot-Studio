@@ -28,6 +28,15 @@ mod process;
 #[cfg(windows)]
 pub use process::{TrackedWindowsProcess, current_process_created};
 
+#[cfg(windows)]
+#[path = "update_windows/cache.rs"]
+mod cache;
+#[cfg(windows)]
+pub use cache::{
+    create_private_directory, create_private_file, validate_private_directory,
+    validate_private_file, write_private_atomic,
+};
+
 pub const STUDIO_APP_ID: &str = "{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1";
 const EXECUTABLE: &str = "instplot-studio.exe";
 

@@ -29,13 +29,24 @@ pub struct VerifiedWindowsInstaller {
 impl VerifiedWindowsInstaller {
     /// Production trust is compiled in; callers cannot inject their own keys.
     pub fn from_cache(directory: &Path, expected_version: &str) -> io::Result<Self> {
-        Self::verify_at(
+        #[cfg(windows)]
+        super::validate_private_directory(directory)?;
+        let installer = Self::verify_at(
             directory,
             expected_version,
             &PRODUCTION_TRUSTED_KEYS,
             &AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).map_err(invalid)?,
             OffsetDateTime::now_utc(),
-        )
+        )?;
+        #[cfg(windows)]
+        for evidence in [
+            directory.join("manifest.json"),
+            directory.join("manifest.json.sig"),
+            installer.path.clone(),
+        ] {
+            super::validate_private_file(&evidence)?;
+        }
+        Ok(installer)
     }
 
     fn verify_at(
