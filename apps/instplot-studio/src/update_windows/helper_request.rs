@@ -653,6 +653,7 @@ fn require_no_execution(store: &TransactionStore) -> io::Result<()> {
         "apply-installer.json",
         "restore-installer.json",
         "candidate-launch.json",
+        "recovery-launch.json",
     ] {
         match fs::symlink_metadata(store.directory().join(name)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -973,6 +974,7 @@ mod tests {
             "apply-installer.json",
             "restore-installer.json",
             "candidate-launch.json",
+            "recovery-launch.json",
         ] {
             let path = root.join(name);
             write_new_json(&path, &"partial intent").unwrap();
@@ -1097,6 +1099,7 @@ mod tests {
             "apply-installer.json",
             "restore-installer.json",
             "candidate-launch.json",
+            "recovery-launch.json",
         ] {
             let path = root.join(name);
             write_new_json(&path, &"partial execution evidence").unwrap();

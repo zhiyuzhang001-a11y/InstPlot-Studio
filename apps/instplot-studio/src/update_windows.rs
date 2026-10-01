@@ -40,6 +40,12 @@ mod helper_request;
 pub use helper_request::{PreparedWindowsHelper, WindowsHelperSession};
 
 #[cfg(windows)]
+#[path = "update_windows/controller.rs"]
+mod controller;
+#[cfg(windows)]
+pub use controller::{WindowsControllerPhase, WindowsUpdateController};
+
+#[cfg(windows)]
 #[path = "update_windows/resume_project.rs"]
 mod resume_project;
 #[cfg(windows)]
