@@ -23,6 +23,14 @@ enum InstallerAccess<'a> {
     Owned(WindowsInstallAccess),
 }
 
+struct InstallerLaunch<'a, 'b> {
+    installation: &'b WindowsInstallation,
+    previous_process: &'b TrackedWindowsProcess,
+    log: &'b Path,
+    store: &'a TransactionStore,
+    transaction: &'b UpdateTransaction,
+}
+
 impl InstallerAccess<'_> {
     fn guard(&self) -> &WindowsInstallAccess {
         match self {
@@ -88,6 +96,75 @@ impl<'a> RunningWindowsInstaller<'a> {
         store: &'a TransactionStore,
         transaction: &UpdateTransaction,
     ) -> io::Result<Self> {
+        Self::start_with_spawn(
+            installer,
+            access,
+            InstallerLaunch {
+                installation,
+                previous_process,
+                log,
+                store,
+                transaction,
+            },
+            |path, arguments| {
+                Command::new(path)
+                    .args(arguments)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            },
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn start_owned_failure_fixture(
+        installation: &WindowsInstallation,
+        installer: PinnedWindowsInstaller,
+        access: WindowsInstallAccess,
+        previous_process: &TrackedWindowsProcess,
+        log: &Path,
+        store: &'a TransactionStore,
+        transaction: &UpdateTransaction,
+    ) -> io::Result<Self> {
+        Self::start_with_spawn(
+            installer,
+            InstallerAccess::Owned(access),
+            InstallerLaunch {
+                installation,
+                previous_process,
+                log,
+                store,
+                transaction,
+            },
+            |path, _| {
+                Command::new(path)
+                    .args([
+                        "--exact",
+                        "update_windows::assets::tests::installer_failure_test_child",
+                    ])
+                    .env("STUDIO_INSTALLER_FAILURE_FIXTURE", "1")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            },
+        )
+    }
+
+    fn start_with_spawn(
+        installer: PinnedWindowsInstaller,
+        access: InstallerAccess<'a>,
+        launch: InstallerLaunch<'a, '_>,
+        spawn: impl FnOnce(&Path, Vec<std::ffi::OsString>) -> io::Result<Child>,
+    ) -> io::Result<Self> {
+        let InstallerLaunch {
+            installation,
+            previous_process,
+            log,
+            store,
+            transaction,
+        } = launch;
         access.guard().require_exclusive(installation.directory())?;
         previous_process.require_executable(installation.executable())?;
         if !previous_process.wait_for_exit(std::time::Duration::ZERO)? {
@@ -120,13 +197,7 @@ impl<'a> RunningWindowsInstaller<'a> {
             let _ = journal.not_started();
             return Err(error);
         }
-        let child = match Command::new(installer.installer().path())
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+        let child = match spawn(installer.installer().path(), arguments) {
             Ok(child) => child,
             Err(error) => {
                 let _ = journal.not_started();

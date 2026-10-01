@@ -315,3 +315,9 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 本机本批完整 `cargo test --locked -p instplot-studio --all-targets --all-features` 退出码 0：库 218 通过/1 原有忽略、二进制 114 通过、集成契约 8 通过，共 340 通过/1 忽略；工作区及实际 Windows 库/测试交叉 Clippy 通过。这不包含 Windows 专属策略/原生运行，也不是用户界面点击完成更新的验收。当前 GitHub head `5392542` 三项通过、Windows Quality 运行中；后续本地三项提交单独等待推送验收，不借旧证据。
 
 `5392542` 四项 CI 后续全部通过。Windows Quality job `110624371219` 日志明确显示候选精确持久健康/丢失确认测试、独立恢复角色/旧健康提交测试、owned 原生安装器锁测试以及恢复健康 CLI 参数测试通过；Studio 库 255 通过/2 忽略、二进制 113 通过。真实 Inno 两次运行通过；附件 `11199607448` 已下载至 ignored target/windows-recovery-5392542.ySghua，桌面 on/off 原生 JSON 均 applied/restored/user_data_preserved=true，results.json 两例无 false 断言、生产版本未改。仍仅安装器恢复原型，不是实机 GUI 自动更新；后续控制器/非零失败恢复/退出等待提交需新一轮 CI。
+
+## 0757b18 原生失败夹具修正
+
+Windows Quality job `110632039722` 单项失败于 assets.rs 的非零退出证明：原测试假定 Rust test harness 收到 Inno 参数后返回非零，但实际 Windows 返回 0。生产验证正确拒绝零退出，因此不能把该测试计为失败恢复通过。库 259 通过/1 失败/2 忽略，该轮在真实 Inno 步骤之前停止，未生成恢复附件；不能借前轮附件覆盖此次提交。
+
+修正为 cfg(test) 专属 spawn 适配器选择精确 `installer_failure_test_child`，只向该 Child 设置夹具环境，实际调用 process::exit(23)，持久记录另断言退出码精确 23。包验证、旧进程观察、写前意图、真实 Child 身份、检查点故障、租约及 owned 锁流程共用原实现。生产适配器仍固定 Inno 参数，无夹具环境/命令入口；共用参数用私有结构封装，不放宽验证。Windows 全库/测试交叉 Clippy 通过，修复后的 Windows 原生运行待 CI，不称本机已运行 Windows 测试。

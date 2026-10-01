@@ -635,6 +635,16 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn installer_failure_test_child() {
+        if std::env::var_os("STUDIO_INSTALLER_FAILURE_FIXTURE").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+        {
+            std::process::exit(23);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn native_runner_requires_normal_exit_and_retains_exclusive_access() {
         use super::super::{RunningWindowsInstaller, TrackedWindowsProcess, WindowsInstallAccess};
         use crate::update_transaction::{
@@ -737,7 +747,7 @@ mod tests {
         );
         assert!(!locks.join("foreign-transaction.log").exists());
         assert!(!locks.join("restore-installer.json").exists());
-        let mut running = RunningWindowsInstaller::start_owned(
+        let mut running = RunningWindowsInstaller::start_owned_failure_fixture(
             &installation,
             asset.pin().unwrap(),
             access,
@@ -804,11 +814,16 @@ mod tests {
         assert!(running.take_owned_access_after_exit().is_err());
         assert!(running.try_wait().is_err());
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
-        // The fixture executable is a Rust test harness receiving Inno flags,
-        // so its real nonzero exit is installation failure, not success/health.
+        // A test-only spawn adapter selects a child that exits with code 23.
+        // Native handles, checkpoints, leases and lock transfer remain real;
+        // production keeps the fixed Inno invocation without this adapter.
         running
             .require_owned_failed_exit(&store, &transaction, &installation, &asset)
             .unwrap();
+        assert_eq!(
+            installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
+            InstallerAttemptStatus::Exited { exit_code: 23 }
+        );
         let original = fs::read(locks.join("restore-installer.json")).unwrap();
         let mut tampered: serde_json::Value = serde_json::from_slice(&original).unwrap();
         tampered["process"][0] = (running.process_id() + 1).into();
