@@ -737,10 +737,10 @@ mod tests {
         );
         assert!(!locks.join("foreign-transaction.log").exists());
         assert!(!locks.join("restore-installer.json").exists());
-        let mut running = RunningWindowsInstaller::start(
+        let mut running = RunningWindowsInstaller::start_owned(
             &installation,
             asset.pin().unwrap(),
-            &access,
+            access,
             &tracked,
             &log,
             &store,
@@ -783,6 +783,7 @@ mod tests {
                 .is_err()
         );
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
+        assert!(running.take_owned_access_after_exit().is_err());
         drop(blocked_checkpoint);
         loop {
             if running.try_wait().unwrap().is_some() {
@@ -794,6 +795,10 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let access = running.take_owned_access_after_exit().unwrap();
+        assert!(running.take_owned_access_after_exit().is_err());
+        assert!(running.try_wait().is_err());
+        assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         drop(running);
         assert!(matches!(
             installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),

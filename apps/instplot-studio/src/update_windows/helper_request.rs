@@ -457,6 +457,26 @@ impl WindowsHelperSession {
         })
     }
 
+    /// External controller only, after work/configuration protection and
+    /// protocol compatibility gates. On post-spawn errors the returned runner
+    /// retains its actual child, exclusion and package lease.
+    pub fn start_candidate_installer(
+        &self,
+        access: super::WindowsInstallAccess,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        let candidate = self.installers.candidate.installer().pin()?;
+        let applying = self.enter_applying(&access)?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            candidate,
+            access,
+            &self.old_process,
+            &self.directory.join("apply.log"),
+            &self.store,
+            &applying,
+        )
+    }
+
     /// A bounded wait/permission failure BEFORE installation may safely end
     /// the transaction only after proving the exact old installation intact.
     /// Never use this to disguise an ambiguous or started installer as canceled.
@@ -514,6 +534,25 @@ impl WindowsHelperSession {
         state.transition(UpdateStage::Restoring)?;
         self.store.write(&state)?;
         Ok(state)
+    }
+
+    pub fn start_recovery_installer_after_candidate(
+        &self,
+        candidate: &mut super::WindowsCandidateProcess<'_>,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        let recovery = self.installers.recovery.installer().pin()?;
+        let restoring = self.enter_restoring_after_candidate(candidate, &access, reason)?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            recovery,
+            access,
+            &self.old_process,
+            &self.directory.join("restore.log"),
+            &self.store,
+            &restoring,
+        )
     }
 
     /// Verify the current fixed release-file contract AFTER a durable successful

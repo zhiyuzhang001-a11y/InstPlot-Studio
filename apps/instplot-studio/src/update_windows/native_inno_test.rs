@@ -116,7 +116,11 @@ fn installed(directory: &Path, version: &str, desktop: bool) -> WindowsInstallat
     installation
 }
 
-fn wait_installer(mut running: RunningWindowsInstaller<'_>, log: &Path, evidence: &Path) {
+fn wait_installer(
+    mut running: RunningWindowsInstaller<'_>,
+    log: &Path,
+    evidence: &Path,
+) -> WindowsInstallAccess {
     // Keep the running object and its leases/lock even on checkpoint errors.
     // The workflow's disposable runner timeout remains the external test bound.
     let mut last_checkpoint_error = None;
@@ -139,6 +143,10 @@ fn wait_installer(mut running: RunningWindowsInstaller<'_>, log: &Path, evidence
         status.success(),
         "real native Inno execution failed: {status}"
     );
+    let access = running.take_owned_access_after_exit().unwrap();
+    assert!(running.take_owned_access_after_exit().is_err());
+    assert!(running.try_wait().is_err());
+    access
 }
 
 #[test]
@@ -221,17 +229,17 @@ fn real_inno_native_runner_updates_and_restores() {
     transaction.transition(UpdateStage::Applying).unwrap();
     store.write(&transaction).unwrap();
     let apply_log = transaction_directory.join("apply.log");
-    let running = RunningWindowsInstaller::start(
+    let running = RunningWindowsInstaller::start_owned(
         &original,
         pins.candidate,
-        &access,
+        access,
         &tracked,
         &apply_log,
         &store,
         &transaction,
     )
     .unwrap();
-    wait_installer(
+    let access = wait_installer(
         running,
         &apply_log,
         &evidence_directory.join(format!("{name}-native-apply.log")),
@@ -246,17 +254,17 @@ fn real_inno_native_runner_updates_and_restores() {
     transaction.transition(UpdateStage::Restoring).unwrap();
     store.write(&transaction).unwrap();
     let restore_log = transaction_directory.join("restore.log");
-    let running = RunningWindowsInstaller::start(
+    let running = RunningWindowsInstaller::start_owned(
         &original,
         pins.recovery,
-        &access,
+        access,
         &tracked,
         &restore_log,
         &store,
         &transaction,
     )
     .unwrap();
-    wait_installer(
+    let access = wait_installer(
         running,
         &restore_log,
         &evidence_directory.join(format!("{name}-native-restore.log")),

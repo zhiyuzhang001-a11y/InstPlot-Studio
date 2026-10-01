@@ -13,9 +13,23 @@ use crate::update_transaction::{TransactionStore, UpdateTransaction};
 pub struct RunningWindowsInstaller<'a> {
     child: Child,
     _installer: PinnedWindowsInstaller,
-    _access: &'a WindowsInstallAccess,
+    access: Option<InstallerAccess<'a>>,
     journal: super::journal::InstallerJournal<'a>,
     checkpoint_error: Option<String>,
+}
+
+enum InstallerAccess<'a> {
+    Borrowed(&'a WindowsInstallAccess),
+    Owned(WindowsInstallAccess),
+}
+
+impl InstallerAccess<'_> {
+    fn guard(&self) -> &WindowsInstallAccess {
+        match self {
+            Self::Borrowed(access) => access,
+            Self::Owned(access) => access,
+        }
+    }
 }
 
 impl<'a> RunningWindowsInstaller<'a> {
@@ -32,7 +46,49 @@ impl<'a> RunningWindowsInstaller<'a> {
         store: &'a TransactionStore,
         transaction: &UpdateTransaction,
     ) -> io::Result<Self> {
-        access.require_exclusive(installation.directory())?;
+        Self::start_with_access(
+            installation,
+            installer,
+            InstallerAccess::Borrowed(access),
+            previous_process,
+            log,
+            store,
+            transaction,
+        )
+    }
+
+    /// Owned exclusion avoids self-referential helper state. The live installer
+    /// retains it; transfer is possible only after a durable native exit.
+    pub fn start_owned(
+        installation: &WindowsInstallation,
+        installer: PinnedWindowsInstaller,
+        access: WindowsInstallAccess,
+        previous_process: &TrackedWindowsProcess,
+        log: &Path,
+        store: &'a TransactionStore,
+        transaction: &UpdateTransaction,
+    ) -> io::Result<Self> {
+        Self::start_with_access(
+            installation,
+            installer,
+            InstallerAccess::Owned(access),
+            previous_process,
+            log,
+            store,
+            transaction,
+        )
+    }
+
+    fn start_with_access(
+        installation: &WindowsInstallation,
+        installer: PinnedWindowsInstaller,
+        access: InstallerAccess<'a>,
+        previous_process: &TrackedWindowsProcess,
+        log: &Path,
+        store: &'a TransactionStore,
+        transaction: &UpdateTransaction,
+    ) -> io::Result<Self> {
+        access.guard().require_exclusive(installation.directory())?;
         previous_process.require_executable(installation.executable())?;
         if !previous_process.wait_for_exit(std::time::Duration::ZERO)? {
             return Err(invalid("bound old application has not exited normally"));
@@ -87,7 +143,7 @@ impl<'a> RunningWindowsInstaller<'a> {
         Ok(Self {
             child,
             _installer: installer,
-            _access: access,
+            access: Some(access),
             journal,
             checkpoint_error,
         })
@@ -99,6 +155,9 @@ impl<'a> RunningWindowsInstaller<'a> {
     /// installer or drop locks. Exit is returned only after its durable record,
     /// and does not by itself mean installation or GUI health succeeded.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if self.access.is_none() {
+            return Err(invalid("installer exclusion was already transferred"));
+        }
         let Some(status) = self.child.try_wait()? else {
             return match &self.checkpoint_error {
                 Some(error) => Err(io::Error::other(error.clone())),
@@ -119,5 +178,20 @@ impl<'a> RunningWindowsInstaller<'a> {
 
     pub fn process_id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// No drop-on-error ownership transfer. A live child or checkpoint error
+    /// leaves this object holding its guard and package lease for inspection.
+    pub fn take_owned_access_after_exit(&mut self) -> io::Result<WindowsInstallAccess> {
+        if !matches!(self.access, Some(InstallerAccess::Owned(_))) {
+            return Err(invalid("installer has no owned exclusion to transfer"));
+        }
+        if self.try_wait()?.is_none() {
+            return Err(invalid("installer is still running"));
+        }
+        match self.access.take() {
+            Some(InstallerAccess::Owned(access)) => Ok(access),
+            _ => unreachable!("owned exclusion checked without intervening mutation"),
+        }
     }
 }
