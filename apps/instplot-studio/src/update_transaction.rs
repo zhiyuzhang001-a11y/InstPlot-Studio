@@ -5,6 +5,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::io::Read;
 #[cfg(not(windows))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -173,6 +174,13 @@ impl UpdateTransaction {
         &self.nonce
     }
 
+    #[cfg(windows)]
+    pub(crate) fn candidate_process(&self) -> Option<(u32, &str)> {
+        self.candidate_process
+            .as_ref()
+            .map(|(pid, start)| (*pid, start.as_str()))
+    }
+
     pub fn transition(&mut self, next: UpdateStage) -> io::Result<()> {
         if !self.stage.permits(next) || next == UpdateStage::Completed {
             return Err(invalid(
@@ -338,22 +346,38 @@ impl TransactionStore {
     }
 
     pub fn read(&self, identity: &UpdateIdentity) -> io::Result<UpdateTransaction> {
-        #[cfg(windows)]
-        crate::update_windows::validate_private_directory(&self.directory)?;
-        let path = self.directory.join("transaction.json");
-        reject_link(&path)?;
-        #[cfg(windows)]
-        crate::update_windows::validate_private_file(&path)?;
-        if fs::metadata(&path)?.len() > MAX_STATE_BYTES {
-            return Err(invalid("transaction state is too large"));
-        }
-        let state: UpdateTransaction = serde_json::from_slice(&fs::read(path)?).map_err(invalid)?;
-        state.validate()?;
-        if state.identity != *identity {
-            return Err(invalid("transaction belongs to a different installation"));
-        }
-        Ok(state)
+        read_snapshot(&self.directory, identity)
     }
+}
+
+/// Read the helper's atomic snapshot without taking its writer lock. Identity
+/// and schema validation remain identical to the locked store's read path.
+pub(crate) fn read_snapshot(
+    directory: &Path,
+    identity: &UpdateIdentity,
+) -> io::Result<UpdateTransaction> {
+    #[cfg(windows)]
+    crate::update_windows::validate_private_directory(directory)?;
+    let path = directory.join("transaction.json");
+    reject_link(&path)?;
+    #[cfg(windows)]
+    crate::update_windows::validate_private_file(&path)?;
+    if fs::metadata(&path)?.len() > MAX_STATE_BYTES {
+        return Err(invalid("transaction state is too large"));
+    }
+    let mut raw = Vec::new();
+    File::open(path)?
+        .take(MAX_STATE_BYTES + 1)
+        .read_to_end(&mut raw)?;
+    if raw.len() as u64 > MAX_STATE_BYTES {
+        return Err(invalid("transaction state is too large"));
+    }
+    let state: UpdateTransaction = serde_json::from_slice(&raw).map_err(invalid)?;
+    state.validate()?;
+    if state.identity != *identity {
+        return Err(invalid("transaction belongs to a different installation"));
+    }
+    Ok(state)
 }
 
 fn reject_link(path: &Path) -> io::Result<()> {
@@ -491,6 +515,11 @@ mod tests {
         assert!(TransactionStore::lock(&path).is_err());
         let state = transaction();
         store.write(&state).unwrap();
+        // Candidate reads must work while the helper retains the writer lock.
+        let snapshot = read_snapshot(&path, &identity()).unwrap();
+        assert_eq!(snapshot.id(), state.id());
+        assert_eq!(snapshot.health_nonce(), state.health_nonce());
+        assert_eq!(snapshot.stage(), state.stage());
         assert_eq!(
             store.read(&identity()).unwrap().stage(),
             UpdateStage::Prepared
@@ -498,6 +527,13 @@ mod tests {
         let mut other = identity();
         other.installed_path = std::env::temp_dir().join("other.app");
         assert!(store.read(&other).is_err());
+        assert!(read_snapshot(&path, &other).is_err());
+        fs::write(
+            path.join("transaction.json"),
+            vec![b' '; (MAX_STATE_BYTES + 1) as usize],
+        )
+        .unwrap();
+        assert!(read_snapshot(&path, &identity()).is_err());
         fs::write(path.join("transaction.json"), b"truncated").unwrap();
         assert!(store.read(&identity()).is_err());
         drop(store);

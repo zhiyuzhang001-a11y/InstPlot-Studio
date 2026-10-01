@@ -391,7 +391,7 @@ fn expected_license_sha256() -> String {
     format!("{:x}", Sha256::digest(RELEASE_LICENSE))
 }
 
-fn verified_license(directory: &Path) -> io::Result<String> {
+pub(super) fn verified_license(directory: &Path) -> io::Result<String> {
     let path = directory.join("LICENSE");
     super::reject_redirected_path(&path)?;
     let metadata = fs::metadata(&path)?;
@@ -480,7 +480,7 @@ fn require_transaction(
     Ok(())
 }
 
-fn transaction_root() -> io::Result<PathBuf> {
+pub(super) fn transaction_root() -> io::Result<PathBuf> {
     let root = super::native::updater_private_root()?.join("transactions");
     if let Err(error) = super::create_private_directory(&root)
         && super::validate_private_directory(&root).is_err()
