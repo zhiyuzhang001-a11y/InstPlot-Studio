@@ -18,6 +18,10 @@ use crate::{
 
 const MAX_INSTALLER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+#[cfg(all(windows, test))]
+#[path = "native_inno_test.rs"]
+mod native_inno_test;
+
 /// A signed Windows installer description, not a downloaded installer.
 /// Keeping metadata does not make automatic apply or offline recovery ready.
 #[derive(Clone, Debug)]

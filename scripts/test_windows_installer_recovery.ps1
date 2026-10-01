@@ -121,6 +121,38 @@ function RegistrationSnapshot {
         ConvertTo-Json -Compress)
 }
 
+function NativeRunnerPrototype([string]$Directory, [bool]$Desktop, [string]$Name) {
+    $Variables = @{
+        INSTPLOT_NATIVE_INNO_PROTOTYPE = '1'
+        INSTPLOT_NATIVE_INNO_DIRECTORY = $Directory
+        INSTPLOT_NATIVE_INNO_OLD = $OldInstaller
+        INSTPLOT_NATIVE_INNO_NEW = $NewInstaller
+        INSTPLOT_NATIVE_INNO_NEXT_VERSION = $NextVersion
+        INSTPLOT_NATIVE_INNO_DESKTOP = $Desktop.ToString().ToLowerInvariant()
+    }
+    $PreviousEnvironment = @{}
+    try {
+        foreach ($Key in $Variables.Keys) {
+            $PreviousEnvironment[$Key] = [Environment]::GetEnvironmentVariable($Key, 'Process')
+            [Environment]::SetEnvironmentVariable($Key, $Variables[$Key], 'Process')
+        }
+        Checked 'cargo' @('test', '--locked', '--package', 'instplot-studio', '--lib',
+            'update_windows::assets::native_inno_test::real_inno_native_runner_updates_and_restores',
+            '--', '--exact', '--ignored', '--nocapture')
+        $Receipt = Join-Path $EvidenceRoot "$Name-native-runner.json"
+        if (-not (Test-Path $Receipt)) { throw 'Native test did not produce its own evidence.' }
+        $Proof = Get-Content -Raw -LiteralPath $Receipt | ConvertFrom-Json
+        if ($Proof.product -ne 'instplot-studio' -or $Proof.scope -ne 'real-native-runner-inno-not-GUI-updater' -or
+            -not $Proof.applied -or -not $Proof.restored -or -not $Proof.user_data_preserved -or
+            $Proof.previous_version -ne $CurrentVersion -or $Proof.candidate_version -ne $NextVersion -or
+            $Proof.desktop_shortcut -ne $Desktop) { throw 'Native Inno evidence is incomplete or mismatched.' }
+    } finally {
+        foreach ($Key in $PreviousEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($Key, $PreviousEnvironment[$Key], 'Process')
+        }
+    }
+}
+
 Push-Location $RepositoryRoot
 try {
     # Two real Studio builds; candidate version exists ONLY in a disposable snapshot.
@@ -250,6 +282,9 @@ end;
         $UserFile = Join-Path $InstallRoot 'user-project.instplot'
         [IO.File]::WriteAllText($UserFile, 'user data must survive upgrade and recovery')
         $UserHash = (Get-FileHash -Algorithm SHA256 $UserFile).Hash
+        NativeRunnerPrototype $InstallRoot $Desktop $Name
+        VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
+        RemoveAddedFile $InstallRoot $AddedHash
         Install $FaultInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-cancel.log") $true
         VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
         # Abrupt exit AFTER real new payload copy, before the remaining install
@@ -316,6 +351,7 @@ end;
             portable_and_conflicting_registry_rejected = $true;
             installer_cancel_kept_old = $true; rollback_identity_and_hash = $true;
             installer_read_lease_execution = $true;
+            rust_native_inno_apply_and_restore = $true;
             interrupted_after_payload_restored = $true;
             failed_recovery_kept_assets_and_user_data = $true;
             modified_added_file_cleanup_rejected = $true;
