@@ -267,3 +267,13 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 `57227cb` 的 Windows audit 运行 `36932270906` 已通过；下载 artifact `11196987874`，读取 validation/summary.json 确认 formal-workspace-tests（workspace/locked/all-targets）为 pass。附件未包含单项测试日志，因此不把摘要说成已逐项读取所有断言；不覆盖后续本地提交的 Windows 运行状态。Windows Quality 和真实 Inno 附件仍按其最终结果独立核验。
 
 本批本机 `cargo test --locked -p instplot-studio --all-targets --all-features` 完整通过：库 218 通过/1 原有忽略，二进制 114 通过，集成契约 8 通过，共 340 通过/1 忽略。包含既有数据、绘图、轴、文字、持久化和导出回归；不是实际 GUI 更新操作。Windows 专属测试不计入本机数量，未解锁或绕过锁屏，未替换用户应用。安装前与恢复状态门的本地提交等待本轮 Windows Quality 最终证据后合批推送，避免取消仍在工作的验证。
+
+## 四项 CI 重验与恢复角色预览接入
+
+`57227cb` 四项 CI 全部通过。已读取 Windows job `110604256701` 日志，保存项目范围拒绝、实际启动失败、真实测试 Child 提前退出三项测试通过。下载真实恢复 artifact `11197267579`：desktop-on/off-native-runner.json 均 applied/restored/user_data_preserved=true；results.json 两例的快捷方式、取消、原路径、原生发现、卸载身份、故障恢复等断言均 true，生产版本未改。范围仍为原生 Rust/Inno 安装器原型，不是 GUI 更新。随后普通推送本地合批至 `76d7aaf`，新 CI 待验，不借旧提交结论。
+
+新本地预览实现增加 LaunchPurpose Candidate/Recovery，复用原有 owned Child、健康窗口及编辑保护，不另建 GUI 流程。恢复预留公开接口先要求原版恢复安装器持久成功、旧注册/固定 release 文件验证及排他锁，再记录旧 exe/项目只读绑定；内部 `--update-recovery-health` 仅 Windows preview 可用，严格验证恢复角色和运行旧版本。恢复 launch/health/stop/exit/未启动证据均用独立文件，新版遗留停止请求或健康回执不得影响旧版。已有缺 purpose 的候选记录按 Candidate 解释，不把旧记录解释为 Recovery。
+
+旧 GUI 首画布实际重开主项目后写自己的健康回执，助手必须保持精确原生存活句柄，核验旧版本及回执，持久提交 RolledBack；GUI 等到提交后才放行编辑。恢复进程无绑定超过 5 秒、助手未提交超过 75 秒、记录/角色改变、已有外来回执均拒绝或正常关闭，不强杀、不再次安装。恢复失败的进程不能进入“候选失败后重新恢复”状态门，保留证据人工处理。
+
+新增 Windows 组件测试覆盖独立角色/文件、新版回执隔离、错误恢复版本、提交写盘失败保持 Restoring、提交前编辑门状态 Pending、合法原生句柄健康提交与重复/角色变化拒绝；用的是当前测试进程，不是实际 Studio GUI。恢复 CLI 增加精确单路径参数测试。实际 Windows 全库/测试交叉 Clippy、工作区全目标全特性 Clippy、本机既有 startup 两项通过；Windows GUI 二进制及新专属用例待 CI。没有开放协议 1、重启按钮或 apply CLI，发布旧包尚不支持此内部恢复命令，兼容迁移要求不能省略。完整助手执行/真实更新恢复、配置保护审计及 macOS 下载按钮链继续未完成。

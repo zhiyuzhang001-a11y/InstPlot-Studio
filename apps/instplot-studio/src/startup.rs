@@ -38,6 +38,11 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
             let health = HealthStartup::load(&path)?;
             launch_gui_with_health(health).map_err(Into::into)
         }
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        StartupCommand::UpdateRecoveryHealth(path) => {
+            let health = HealthStartup::load_recovery(&path)?;
+            launch_gui_with_health(health).map_err(Into::into)
+        }
         StartupCommand::ProductInfo => {
             println!("{}", product_info());
             Ok(())
@@ -138,6 +143,8 @@ enum StartupCommand {
     ApplyUpdate(PathBuf),
     #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
     UpdateHealth(PathBuf),
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    UpdateRecoveryHealth(PathBuf),
     ProductInfo,
     ExportFixedPdf(PathBuf),
     ExportFixedPng(PathBuf),
@@ -173,6 +180,10 @@ impl StartupCommand {
             #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
             (Some(flag), Some(path), None) if flag == "--update-health" => {
                 Ok(Self::UpdateHealth(path.into()))
+            }
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            (Some(flag), Some(path), None) if flag == "--update-recovery-health" => {
+                Ok(Self::UpdateRecoveryHealth(path.into()))
             }
             (Some(flag), None, None) if flag == "--product-info" => Ok(Self::ProductInfo),
             (Some(flag), Some(path), None) if flag == "--export-fixed-pdf" => {
@@ -352,6 +363,28 @@ mod tests {
                 OsString::from("--update-health"),
                 OsString::from("transaction"),
                 OsString::from("another-project.instplot"),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    fn recovery_health_startup_has_a_separate_exact_path_command() {
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--update-recovery-health"),
+                OsString::from("恢复 中文 路径"),
+            ])
+            .unwrap(),
+            StartupCommand::UpdateRecoveryHealth(PathBuf::from("恢复 中文 路径")),
+        );
+        assert!(StartupCommand::parse([OsString::from("--update-recovery-health")]).is_err());
+        assert!(
+            StartupCommand::parse([
+                OsString::from("--update-recovery-health"),
+                OsString::from("transaction"),
+                OsString::from("extra"),
             ])
             .is_err()
         );

@@ -24,6 +24,8 @@ use crate::update_transaction::{
 #[serde(deny_unknown_fields)]
 struct LaunchRecord {
     schema: u32,
+    #[serde(default)]
+    purpose: LaunchPurpose,
     transaction_id: String,
     nonce: String,
     identity: UpdateIdentity,
@@ -33,6 +35,71 @@ struct LaunchRecord {
     // None is deliberately ambiguous: crash before/after CreateProcess cannot
     // be distinguished. It never authorizes another launch or restoration.
     process: Option<(u32, u64)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LaunchPurpose {
+    #[default]
+    Candidate,
+    Recovery,
+}
+
+impl LaunchPurpose {
+    fn launch_file(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate-launch.json",
+            Self::Recovery => "recovery-launch.json",
+        }
+    }
+    fn health_file(self) -> &'static str {
+        match self {
+            Self::Candidate => "health.json",
+            Self::Recovery => "recovery-health.json",
+        }
+    }
+    fn stop_file(self) -> &'static str {
+        match self {
+            Self::Candidate => "stop-requested.json",
+            Self::Recovery => "recovery-stop-requested.json",
+        }
+    }
+    fn exit_file(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate-owned-exit.json",
+            Self::Recovery => "recovery-owned-exit.json",
+        }
+    }
+    fn non_start_file(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate-not-started.json",
+            Self::Recovery => "recovery-not-started.json",
+        }
+    }
+    fn startup_flag(self) -> &'static str {
+        match self {
+            Self::Candidate => "--update-health",
+            Self::Recovery => "--update-recovery-health",
+        }
+    }
+    fn startup_stage(self) -> UpdateStage {
+        match self {
+            Self::Candidate => UpdateStage::Applying,
+            Self::Recovery => UpdateStage::Restoring,
+        }
+    }
+    fn committed_stage(self) -> UpdateStage {
+        match self {
+            Self::Candidate => UpdateStage::Completed,
+            Self::Recovery => UpdateStage::RolledBack,
+        }
+    }
+    fn version(self, identity: &UpdateIdentity) -> &str {
+        match self {
+            Self::Candidate => &identity.candidate_version,
+            Self::Recovery => &identity.previous_version,
+        }
+    }
 }
 
 impl LaunchRecord {
@@ -48,6 +115,7 @@ impl LaunchRecord {
         }
         Ok(Self {
             schema: 1,
+            purpose: LaunchPurpose::Candidate,
             transaction_id: transaction.id().into(),
             nonce: transaction.health_nonce().into(),
             identity: transaction.identity().clone(),
@@ -99,7 +167,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
         access.require_exclusive(&self.record.identity.installed_path)?;
         let state = self.store.read(&self.record.identity)?;
         self.require_record(&state)?;
-        if state.stage() != UpdateStage::Applying
+        if state.stage() != self.record.purpose.startup_stage()
             || self.record.process.is_some()
             || self.process.is_some()
         {
@@ -108,13 +176,16 @@ impl<'a> WindowsCandidateLaunch<'a> {
             ));
         }
         let log =
-            super::create_private_file(&self.store.directory().join("candidate-startup.log"))?;
+            super::create_private_file(&self.store.directory().join(match self.record.purpose {
+                LaunchPurpose::Candidate => "candidate-startup.log",
+                LaunchPurpose::Recovery => "recovery-startup.log",
+            }))?;
         let stdout = log.try_clone()?;
         // The candidate needs shared access. Do not hold installation exclusion
         // across its GUI startup, and never let the installer start it as well.
         drop(access);
         let result = Command::new(&self.record.executable)
-            .arg("--update-health")
+            .arg(self.record.purpose.startup_flag())
             .arg(self.store.directory())
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
@@ -191,20 +262,72 @@ impl<'a> WindowsCandidateLaunch<'a> {
         executable: PathBuf,
         resume_project: Option<&super::WindowsResumeProject>,
     ) -> io::Result<Self> {
+        Self::begin_with_purpose(
+            store,
+            transaction,
+            executable,
+            resume_project,
+            LaunchPurpose::Candidate,
+        )
+    }
+
+    /// Only after the old installer and original release files were verified.
+    /// The recovery launch has independent one-shot intent and health receipt.
+    pub fn reserve_recovery(
+        helper: &'a super::WindowsHelperSession,
+        transaction: &UpdateTransaction,
+        access: &WindowsInstallAccess,
+    ) -> io::Result<Self> {
+        helper.verify_restored_installation(transaction, access)?;
+        let mut launch = Self::begin_with_purpose(
+            helper.store(),
+            transaction,
+            helper.installation().executable().into(),
+            helper.resume_project(),
+            LaunchPurpose::Recovery,
+        )?;
+        launch._candidate_lease = Some(&helper.installers().recovery);
+        Ok(launch)
+    }
+
+    fn begin_with_purpose(
+        store: &'a TransactionStore,
+        transaction: &UpdateTransaction,
+        executable: PathBuf,
+        resume_project: Option<&super::WindowsResumeProject>,
+        purpose: LaunchPurpose,
+    ) -> io::Result<Self> {
         let persisted = store.read(transaction.identity())?;
-        require_same(transaction, &persisted, UpdateStage::Applying)?;
+        require_same(transaction, &persisted, purpose.startup_stage())?;
         let (binary_lease, binary_sha256) = pin_binary(&executable)?;
         let resume_lease = resume_project
             .map(|project| project.pin(&transaction.identity().installed_path))
             .transpose()?;
-        let mut record = LaunchRecord::expected(transaction, executable, binary_sha256)?;
+        if transaction.identity().platform != "windows-x86_64" {
+            return Err(invalid("launch requires Windows installation identity"));
+        }
+        let mut record = match purpose {
+            LaunchPurpose::Candidate => {
+                LaunchRecord::expected(transaction, executable, binary_sha256)?
+            }
+            LaunchPurpose::Recovery => LaunchRecord {
+                schema: 1,
+                purpose,
+                transaction_id: transaction.id().into(),
+                nonce: transaction.health_nonce().into(),
+                identity: transaction.identity().clone(),
+                executable,
+                binary_sha256,
+                resume_project: None,
+                process: None,
+            },
+        };
         record.resume_project = resume_project.cloned();
         let bytes = serde_json::to_vec(&record).map_err(invalid)?;
         if bytes.len() > 64 * 1024 {
             return Err(invalid("oversized candidate launch intent"));
         }
-        let mut file =
-            super::create_private_file(&store.directory().join("candidate-launch.json"))?;
+        let mut file = super::create_private_file(&store.directory().join(purpose.launch_file()))?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         Ok(Self {
@@ -230,7 +353,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
         }
         let state = self.store.read(&self.record.identity)?;
         self.require_record(&state)?;
-        if state.stage() != UpdateStage::Applying {
+        if state.stage() != self.record.purpose.startup_stage() {
             return Err(invalid("candidate launch stage changed"));
         }
         // Retain the native witness even if either durable write fails. An
@@ -238,11 +361,16 @@ impl<'a> WindowsCandidateLaunch<'a> {
         self.process = Some(process);
         self.record.process = Some((child.id(), created));
         super::write_private_atomic(
-            &self.store.directory().join("candidate-launch.json"),
+            &self
+                .store
+                .directory()
+                .join(self.record.purpose.launch_file()),
             &serde_json::to_vec(&self.record).map_err(invalid)?,
         )?;
         let mut waiting = state;
-        waiting.await_health(child.id(), created.to_string())?;
+        if self.record.purpose == LaunchPurpose::Candidate {
+            waiting.await_health(child.id(), created.to_string())?;
+        }
         self.store.write(&waiting)?;
         Ok(waiting)
     }
@@ -255,7 +383,10 @@ impl<'a> WindowsCandidateLaunch<'a> {
             return Err(invalid("candidate launch transaction mismatch"));
         }
         let actual: LaunchRecord = read_private_json(
-            &self.store.directory().join("candidate-launch.json"),
+            &self
+                .store
+                .directory()
+                .join(self.record.purpose.launch_file()),
             64 * 1024,
         )?;
         if actual != self.record {
@@ -286,14 +417,24 @@ impl<'a> WindowsCandidateLaunch<'a> {
             .record
             .process
             .ok_or_else(|| invalid("candidate identity missing"))?;
-        let receipt: HealthReceipt =
-            read_private_json(&self.store.directory().join("health.json"), 16 * 1024)?;
+        let receipt: HealthReceipt = read_private_json(
+            &self
+                .store
+                .directory()
+                .join(self.record.purpose.health_file()),
+            16 * 1024,
+        )?;
         if receipt.process_id != pid || receipt.process_started != created.to_string() {
             return Err(invalid("health receipt does not match native candidate"));
         }
         let mut state = self.store.read(&self.record.identity)?;
         self.require_record(&state)?;
-        state.accept_health(&receipt)?;
+        match self.record.purpose {
+            LaunchPurpose::Candidate => state.accept_health(&receipt)?,
+            LaunchPurpose::Recovery => {
+                state.accept_recovery_health(&receipt, (pid, &created.to_string()))?
+            }
+        }
         // Recheck immediately before committing; no launch/exit signal alone
         // can substitute for the initialized first-window receipt.
         if process.wait_for_exit(Duration::ZERO)? {
@@ -379,7 +520,11 @@ impl WindowsCandidateProcess<'_> {
                 "unbound candidate must retain its native witness for inspection",
             ));
         }
-        let path = self.launch.store.directory().join("stop-requested.json");
+        let path = self
+            .launch
+            .store
+            .directory()
+            .join(self.launch.record.purpose.stop_file());
         if path.try_exists()? {
             if !read_private_json::<bool>(&path, 16)? {
                 return Err(invalid("invalid stop request"));
@@ -417,7 +562,7 @@ impl WindowsCandidateProcess<'_> {
                     .launch
                     .store
                     .directory()
-                    .join("candidate-owned-exit.json"),
+                    .join(self.launch.record.purpose.exit_file()),
             )?;
             file.write_all(&serde_json::to_vec(&evidence).map_err(invalid)?)?;
             file.sync_all()?;
@@ -433,7 +578,7 @@ impl WindowsCandidateProcess<'_> {
             .launch
             .store
             .directory()
-            .join("candidate-not-started.json");
+            .join(self.launch.record.purpose.non_start_file());
         let mut file = super::create_private_file(&path)?;
         file.write_all(&serde_json::to_vec(&self.launch.record).map_err(invalid)?)?;
         file.sync_all()?;
@@ -452,10 +597,12 @@ impl WindowsCandidateProcess<'_> {
         let persisted = store.read(&self.launch.record.identity)?;
         require_same(state, &persisted, state.stage())?;
         self.launch.require_record(state)?;
-        if !matches!(
-            state.stage(),
-            UpdateStage::Applying | UpdateStage::AwaitingHealth | UpdateStage::RecoveryRequired
-        ) || self.launch._binary_lease.is_some()
+        if self.launch.record.purpose != LaunchPurpose::Candidate
+            || !matches!(
+                state.stage(),
+                UpdateStage::Applying | UpdateStage::AwaitingHealth | UpdateStage::RecoveryRequired
+            )
+            || self.launch._binary_lease.is_some()
             || !self.owned_process_exited()?
         {
             return Err(invalid("candidate is not safely released for recovery"));
@@ -557,12 +704,20 @@ pub struct WindowsHealthStartup {
 
 impl WindowsHealthStartup {
     pub fn load(directory: &std::path::Path) -> io::Result<Self> {
+        Self::load_for(directory, LaunchPurpose::Candidate)
+    }
+
+    pub fn load_recovery(directory: &std::path::Path) -> io::Result<Self> {
+        Self::load_for(directory, LaunchPurpose::Recovery)
+    }
+
+    fn load_for(directory: &std::path::Path, purpose: LaunchPurpose) -> io::Result<Self> {
         super::reject_redirected_path(directory)?;
         super::validate_private_directory(directory)?;
         let directory = std::fs::canonicalize(directory)?;
         let root = std::fs::canonicalize(super::helper_request::transaction_root()?)?;
         let record: LaunchRecord =
-            read_private_json(&directory.join("candidate-launch.json"), 64 * 1024)?;
+            read_private_json(&directory.join(purpose.launch_file()), 64 * 1024)?;
         if directory.parent() != Some(root.as_path())
             || directory.file_name() != Some(std::ffi::OsStr::new(&record.transaction_id))
         {
@@ -577,8 +732,9 @@ impl WindowsHealthStartup {
         )?;
         let installed = super::discover_current_installation()?;
         if record.schema != 1
+            || record.purpose != purpose
             || record.identity.platform != "windows-x86_64"
-            || record.identity.candidate_version != env!("CARGO_PKG_VERSION")
+            || purpose.version(&record.identity) != env!("CARGO_PKG_VERSION")
             || installed.directory() != record.identity.installed_path
             || installed.executable() != record.executable
         {
@@ -622,10 +778,16 @@ impl WindowsHealthStartup {
         if state.id() != self.record.transaction_id
             || state.health_nonce() != self.record.nonce
             || state.identity() != &self.record.identity
-            || !matches!(
-                state.stage(),
-                UpdateStage::Applying | UpdateStage::AwaitingHealth | UpdateStage::Completed
-            )
+            || !match self.record.purpose {
+                LaunchPurpose::Candidate => matches!(
+                    state.stage(),
+                    UpdateStage::Applying | UpdateStage::AwaitingHealth | UpdateStage::Completed
+                ),
+                LaunchPurpose::Recovery => matches!(
+                    state.stage(),
+                    UpdateStage::Restoring | UpdateStage::RolledBack
+                ),
+            }
         {
             return Err(invalid("candidate health transaction mismatch"));
         }
@@ -633,8 +795,10 @@ impl WindowsHealthStartup {
     }
 
     pub fn first_canvas_ready(&mut self) -> io::Result<WindowsHealthFrame> {
-        let latest: LaunchRecord =
-            read_private_json(&self.directory.join("candidate-launch.json"), 64 * 1024)?;
+        let latest: LaunchRecord = read_private_json(
+            &self.directory.join(self.record.purpose.launch_file()),
+            64 * 1024,
+        )?;
         let mut expected = self.record.clone();
         expected.process = latest.process;
         if expected != latest
@@ -647,7 +811,7 @@ impl WindowsHealthStartup {
         let state =
             crate::update_transaction::read_snapshot(&self.directory, &self.record.identity)?;
         self.require_state(&state)?;
-        let stop = self.directory.join("stop-requested.json");
+        let stop = self.directory.join(self.record.purpose.stop_file());
         if stop.exists() {
             if !read_private_json::<bool>(&stop, 16)? {
                 return Err(invalid("invalid candidate stop request"));
@@ -663,10 +827,12 @@ impl WindowsHealthStartup {
             return Ok(WindowsHealthFrame::Pending);
         }
         let started = self.process.1.to_string();
-        if state.candidate_process() != Some((self.process.0, started.as_str())) {
+        if self.record.purpose == LaunchPurpose::Candidate
+            && state.candidate_process() != Some((self.process.0, started.as_str()))
+        {
             return Err(invalid("candidate transaction is bound to another process"));
         }
-        if state.stage() == UpdateStage::Completed {
+        if state.stage() == self.record.purpose.committed_stage() {
             if !self.receipt_written {
                 return Err(invalid(
                     "candidate completed before its own first-canvas receipt",
@@ -690,7 +856,9 @@ impl WindowsHealthStartup {
                 initialized: true,
                 window_ready: true,
             };
-            let mut file = super::create_private_file(&self.directory.join("health.json"))?;
+            let mut file = super::create_private_file(
+                &self.directory.join(self.record.purpose.health_file()),
+            )?;
             file.write_all(&serde_json::to_vec(&receipt).map_err(invalid)?)?;
             file.sync_all()?;
             self.receipt_written = true;
@@ -1167,6 +1335,117 @@ mod tests {
                 .require_exit_for_recovery(&store, &restoring)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn recovered_health_uses_independent_role_and_waits_for_durable_helper_commit() {
+        let fixture = Fixture::new();
+        let store = TransactionStore::lock(&fixture.0).unwrap();
+        let initial = fixture.transaction();
+        let mut identity = initial.identity().clone();
+        identity.previous_version = env!("CARGO_PKG_VERSION").into();
+        let mut candidate = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        candidate.patch += 1;
+        identity.candidate_version = candidate.to_string();
+        let mut state = UpdateTransaction::prepared(
+            initial.id().into(),
+            initial.health_nonce().into(),
+            identity,
+        )
+        .unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        state.transition(UpdateStage::Applying).unwrap();
+        state.transition(UpdateStage::RecoveryRequired).unwrap();
+        state.transition(UpdateStage::Restoring).unwrap();
+        store.write(&state).unwrap();
+        let exe = executable();
+        let mut launch = WindowsCandidateLaunch::begin_with_purpose(
+            &store,
+            &state,
+            exe.clone(),
+            None,
+            LaunchPurpose::Recovery,
+        )
+        .unwrap();
+        assert!(WindowsCandidateLaunch::begin(&store, &state, exe.clone()).is_err());
+        assert!(!fixture.0.join("candidate-launch.json").exists());
+        let process = (
+            std::process::id(),
+            super::super::current_process_created().unwrap(),
+        );
+        launch.record.process = Some(process);
+        launch.process = Some(TrackedWindowsProcess::bind(process.0, process.1, &exe).unwrap());
+        super::super::write_private_atomic(
+            &fixture.0.join("recovery-launch.json"),
+            &serde_json::to_vec(&launch.record).unwrap(),
+        )
+        .unwrap();
+        let (lease, _) = pin_binary(&exe).unwrap();
+        let mut startup = WindowsHealthStartup {
+            directory: fixture.0.clone(),
+            record: launch.record.clone(),
+            process,
+            waiting_since: Instant::now(),
+            receipt_written: false,
+            _binary_lease: lease,
+            _resume_lease: None,
+        };
+        // A failed candidate receipt must never be read as recovery health.
+        write_receipt(&fixture.0.join("health.json"), &receipt(&state, &launch));
+        assert!(launch.accept_health().is_err());
+        assert_eq!(
+            startup.first_canvas_ready().unwrap(),
+            WindowsHealthFrame::Pending
+        );
+        let receipt_path = fixture.0.join("recovery-health.json");
+        let recovery: HealthReceipt = read_private_json(&receipt_path, 16 * 1024).unwrap();
+        assert_eq!(recovery.version, state.identity().previous_version);
+        let mut wrong = recovery.clone();
+        wrong.version = state.identity().candidate_version.clone();
+        write_receipt(&receipt_path, &wrong);
+        assert!(launch.accept_health().is_err());
+        write_receipt(&receipt_path, &recovery);
+        assert!(
+            launch
+                .commit_health(|_| Err(invalid("injected recovery commit failure")))
+                .is_err()
+        );
+        assert_eq!(
+            store.read(state.identity()).unwrap().stage(),
+            UpdateStage::Restoring
+        );
+        assert_eq!(
+            startup.first_canvas_ready().unwrap(),
+            WindowsHealthFrame::Pending
+        );
+        launch.accept_health().unwrap();
+        assert_eq!(
+            store.read(state.identity()).unwrap().stage(),
+            UpdateStage::RolledBack
+        );
+        assert_eq!(
+            startup.first_canvas_ready().unwrap(),
+            WindowsHealthFrame::Committed
+        );
+        assert!(launch.accept_health().is_err());
+        assert!(
+            WindowsCandidateLaunch::begin_with_purpose(
+                &store,
+                &state,
+                exe,
+                None,
+                LaunchPurpose::Recovery,
+            )
+            .is_err()
+        );
+        let mut foreign = launch.record.clone();
+        foreign.purpose = LaunchPurpose::Candidate;
+        super::super::write_private_atomic(
+            &fixture.0.join("recovery-launch.json"),
+            &serde_json::to_vec(&foreign).unwrap(),
+        )
+        .unwrap();
+        assert!(startup.first_canvas_ready().is_err());
     }
 
     #[test]
