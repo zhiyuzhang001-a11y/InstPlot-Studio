@@ -17,7 +17,15 @@ use semver::Version;
 mod assets;
 #[cfg(windows)]
 pub use assets::{PinnedWindowsInstaller, PinnedWindowsInstallerPair};
-pub use assets::{VerifiedWindowsInstaller, WindowsInstallerPair};
+pub use assets::{
+    VerifiedWindowsInstaller, VerifiedWindowsInstallerManifest, WindowsInstallerPair,
+};
+
+#[cfg(windows)]
+#[path = "update_windows/recovery_metadata.rs"]
+mod recovery_metadata;
+#[cfg(windows)]
+pub use recovery_metadata::{cached_recovery_manifest, remember_installed_manifest};
 
 #[cfg(windows)]
 #[path = "update_windows/native.rs"]

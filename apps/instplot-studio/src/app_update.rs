@@ -637,6 +637,9 @@ fn check_for_update() -> Result<CheckOutcome, String> {
         return Err("服务器返回了旧版本，已拒绝降级。".to_owned());
     }
     if remote == current {
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        instplot_studio::update_windows::remember_installed_manifest(&raw, &signature)
+            .map_err(|_| "当前版本已是最新，但无法保留可信恢复信息；原位更新暂不可用。请确认用户级安装及缓存权限。".to_owned())?;
         return Ok(CheckOutcome::UpToDate {
             version: current.to_string(),
         });

@@ -18,6 +18,102 @@ use crate::{
 
 const MAX_INSTALLER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// A signed Windows installer description, not a downloaded installer.
+/// Keeping metadata does not make automatic apply or offline recovery ready.
+#[derive(Clone, Debug)]
+pub struct VerifiedWindowsInstallerManifest {
+    raw: Vec<u8>,
+    signature: Vec<u8>,
+    version: Version,
+    package: UpdatePackage,
+    sequence: u64,
+}
+
+impl VerifiedWindowsInstallerManifest {
+    pub fn from_raw(raw: &[u8], signature: &[u8], expected_version: &str) -> io::Result<Self> {
+        Self::verify_at(
+            raw,
+            signature,
+            expected_version,
+            &PRODUCTION_TRUSTED_KEYS,
+            &AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).map_err(invalid)?,
+            OffsetDateTime::now_utc(),
+        )
+    }
+
+    fn verify_at(
+        raw: &[u8],
+        signature: &[u8],
+        expected_version: &str,
+        keys: &[TrustedUpdateKey],
+        root: &AllowedUpdateRoot,
+        now: OffsetDateTime,
+    ) -> io::Result<Self> {
+        if raw.len() > 256 * 1024 || signature.len() != 64 {
+            return Err(invalid("invalid Windows installer metadata size"));
+        }
+        let version = Version::parse(expected_version).map_err(invalid)?;
+        let manifest = verify_signed_manifest_at(
+            raw,
+            signature,
+            keys,
+            root,
+            UpdateChannel::for_version(&version),
+            now,
+        )
+        .map_err(invalid)?;
+        if manifest.version != expected_version {
+            return Err(invalid(
+                "installer manifest does not match the exact required version",
+            ));
+        }
+        let platform = manifest
+            .platforms
+            .get("windows-x86_64")
+            .ok_or_else(|| invalid("no Windows x64 installer in verified manifest"))?;
+        let package = platform
+            .packages
+            .iter()
+            .find(|p| p.id == platform.preferred)
+            .ok_or_else(|| invalid("preferred Windows installer is missing"))?
+            .clone();
+        if package.id != "inno-setup"
+            || package.package_type != "inno-setup"
+            || package.file_name
+                != format!("InstPlot-Studio-{expected_version}-windows-x86_64-setup.exe")
+            || package.size_bytes > MAX_INSTALLER_BYTES
+        {
+            return Err(invalid("wrong Windows installer type/name/size"));
+        }
+        Ok(Self {
+            raw: raw.to_vec(),
+            signature: signature.to_vec(),
+            version,
+            package,
+            sequence: manifest.release_sequence,
+        })
+    }
+
+    pub fn raw(&self) -> &[u8] {
+        &self.raw
+    }
+    pub fn signature(&self) -> &[u8] {
+        &self.signature
+    }
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
+    pub fn package(&self) -> &UpdatePackage {
+        &self.package
+    }
+    pub fn release_sequence(&self) -> u64 {
+        self.sequence
+    }
+    pub fn sha256(&self) -> String {
+        format!("{:x}", Sha256::digest(&self.raw))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VerifiedWindowsInstaller {
     path: PathBuf,
@@ -69,45 +165,20 @@ impl VerifiedWindowsInstaller {
             return Err(invalid("installer cache is not a directory"));
         }
         let directory = fs::canonicalize(directory)?;
-        let version = Version::parse(expected_version).map_err(invalid)?;
         let raw = read_bounded(&directory.join("manifest.json"), 256 * 1024)?;
         let signature = read_bounded(&directory.join("manifest.json.sig"), 64)?;
-        let manifest = verify_signed_manifest_at(
+        let metadata = VerifiedWindowsInstallerManifest::verify_at(
             &raw,
             &signature,
+            expected_version,
             keys,
             root,
-            UpdateChannel::for_version(&version),
             now,
-        )
-        .map_err(invalid)?;
-        if manifest.version != expected_version {
-            return Err(invalid(
-                "installer manifest does not match the exact required version",
-            ));
-        }
-        let platform = manifest
-            .platforms
-            .get("windows-x86_64")
-            .ok_or_else(|| invalid("no Windows x64 installer in verified manifest"))?;
-        let package = platform
-            .packages
-            .iter()
-            .find(|p| p.id == platform.preferred)
-            .ok_or_else(|| invalid("preferred Windows installer is missing"))?
-            .clone();
-        let expected_name = format!("InstPlot-Studio-{expected_version}-windows-x86_64-setup.exe");
-        if package.id != "inno-setup"
-            || package.package_type != "inno-setup"
-            || package.file_name != expected_name
-            || package.size_bytes > MAX_INSTALLER_BYTES
-        {
-            return Err(invalid("wrong Windows installer type/name/size"));
-        }
+        )?;
         let installer = Self {
-            path: directory.join(&package.file_name),
-            version,
-            package,
+            path: directory.join(&metadata.package.file_name),
+            version: metadata.version,
+            package: metadata.package,
             manifest_sha256: format!("{:x}", Sha256::digest(&raw)),
             #[cfg(windows)]
             enforce_private_acl: false,
@@ -314,13 +385,39 @@ fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(all(windows, test))]
+pub(super) fn metadata_fixture(sequence: u64) -> VerifiedWindowsInstallerManifest {
+    tests::metadata_fixture(sequence)
+}
+
+#[cfg(all(windows, test))]
+pub(super) fn verify_fixture_manifest(
+    raw: &[u8],
+    signature: &[u8],
+    version: &str,
+    now: OffsetDateTime,
+) -> io::Result<VerifiedWindowsInstallerManifest> {
+    use ed25519_dalek::SigningKey;
+    VerifiedWindowsInstallerManifest::verify_at(
+        raw,
+        signature,
+        version,
+        &[TrustedUpdateKey {
+            id: "fixture",
+            bytes: SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes(),
+        }],
+        &AllowedUpdateRoot::parse(tests::ROOT).unwrap(),
+        now,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use time::format_description::well_known::Rfc3339;
 
-    const ROOT: &str = "https://downloads.example.test/instplot-studio";
+    pub(super) const ROOT: &str = "https://downloads.example.test/instplot-studio";
     const VERSION: &str = "0.1.2-rc.2";
     struct Fixture {
         directory: PathBuf,
@@ -386,6 +483,64 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn metadata_fixture(sequence: u64) -> VerifiedWindowsInstallerManifest {
+        let mut fixture = Fixture::new();
+        fixture.raw["release_sequence"] = sequence.into();
+        fixture.raw["signature_url"] =
+            format!("{ROOT}/releases/{VERSION}/metadata/{sequence}/manifest.json.sig").into();
+        fixture.save();
+        super::verify_fixture_manifest(
+            &fs::read(fixture.directory.join("manifest.json")).unwrap(),
+            &fs::read(fixture.directory.join("manifest.json.sig")).unwrap(),
+            VERSION,
+            OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn signed_metadata_without_package_is_not_a_verified_installer() {
+        let fixture = Fixture::new();
+        let raw = fs::read(fixture.directory.join("manifest.json")).unwrap();
+        let signature = fs::read(fixture.directory.join("manifest.json.sig")).unwrap();
+        let proof = VerifiedWindowsInstallerManifest::verify_at(
+            &raw,
+            &signature,
+            VERSION,
+            &[TrustedUpdateKey {
+                id: "fixture",
+                bytes: fixture.signing.verifying_key().to_bytes(),
+            }],
+            &AllowedUpdateRoot::parse(ROOT).unwrap(),
+            OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(proof.version().to_string(), VERSION);
+        assert_eq!(proof.release_sequence(), 2);
+        assert_eq!(proof.raw(), raw);
+        assert_eq!(proof.signature(), signature);
+        fs::remove_file(fixture.directory.join(&proof.package().file_name)).unwrap();
+        assert!(fixture.verify().is_err());
+        assert_eq!(proof.package().package_type, "inno-setup");
+        let mut bad_signature = signature.clone();
+        bad_signature[0] ^= 1;
+        assert!(
+            VerifiedWindowsInstallerManifest::verify_at(
+                &raw,
+                &bad_signature,
+                VERSION,
+                &[TrustedUpdateKey {
+                    id: "fixture",
+                    bytes: fixture.signing.verifying_key().to_bytes()
+                }],
+                &AllowedUpdateRoot::parse(ROOT).unwrap(),
+                OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
