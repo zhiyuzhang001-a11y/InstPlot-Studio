@@ -29,6 +29,7 @@ struct LaunchRecord {
     identity: UpdateIdentity,
     executable: PathBuf,
     binary_sha256: String,
+    resume_project: Option<super::WindowsResumeProject>,
     // None is deliberately ambiguous: crash before/after CreateProcess cannot
     // be distinguished. It never authorizes another launch or restoration.
     process: Option<(u32, u64)>,
@@ -52,6 +53,7 @@ impl LaunchRecord {
             identity: transaction.identity().clone(),
             executable,
             binary_sha256,
+            resume_project: None,
             process: None,
         })
     }
@@ -63,6 +65,7 @@ pub struct WindowsCandidateLaunch<'a> {
     process: Option<TrackedWindowsProcess>,
     _candidate_lease: Option<&'a PinnedWindowsInstaller>,
     _binary_lease: Option<File>,
+    _resume_lease: Option<File>,
 }
 
 impl<'a> WindowsCandidateLaunch<'a> {
@@ -75,6 +78,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
         previous: &WindowsInstallation,
         candidate_lease: &'a PinnedWindowsInstaller,
         access: &WindowsInstallAccess,
+        resume_project: Option<&super::WindowsResumeProject>,
     ) -> io::Result<Self> {
         access.require_exclusive(previous.directory())?;
         let candidate = candidate_lease.installer();
@@ -98,20 +102,39 @@ impl<'a> WindowsCandidateLaunch<'a> {
             &candidate.version().to_string(),
         )?;
         super::native::revalidate_installation(&installed)?;
-        let mut launch = Self::begin(store, transaction, installed.executable().into())?;
+        let mut launch = Self::begin_with_resume(
+            store,
+            transaction,
+            installed.executable().into(),
+            resume_project,
+        )?;
         launch._candidate_lease = Some(candidate_lease);
         Ok(launch)
     }
 
+    #[cfg(test)]
     fn begin(
         store: &'a TransactionStore,
         transaction: &UpdateTransaction,
         executable: PathBuf,
     ) -> io::Result<Self> {
+        Self::begin_with_resume(store, transaction, executable, None)
+    }
+
+    fn begin_with_resume(
+        store: &'a TransactionStore,
+        transaction: &UpdateTransaction,
+        executable: PathBuf,
+        resume_project: Option<&super::WindowsResumeProject>,
+    ) -> io::Result<Self> {
         let persisted = store.read(transaction.identity())?;
         require_same(transaction, &persisted, UpdateStage::Applying)?;
         let (binary_lease, binary_sha256) = pin_binary(&executable)?;
-        let record = LaunchRecord::expected(transaction, executable, binary_sha256)?;
+        let resume_lease = resume_project
+            .map(|project| project.pin(&transaction.identity().installed_path))
+            .transpose()?;
+        let mut record = LaunchRecord::expected(transaction, executable, binary_sha256)?;
+        record.resume_project = resume_project.cloned();
         let bytes = serde_json::to_vec(&record).map_err(invalid)?;
         if bytes.len() > 64 * 1024 {
             return Err(invalid("oversized candidate launch intent"));
@@ -126,6 +149,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
             process: None,
             _candidate_lease: None,
             _binary_lease: Some(binary_lease),
+            _resume_lease: resume_lease,
         })
     }
 
@@ -293,6 +317,7 @@ pub struct WindowsHealthStartup {
     waiting_since: Instant,
     receipt_written: bool,
     _binary_lease: File,
+    _resume_lease: Option<File>,
 }
 
 impl WindowsHealthStartup {
@@ -329,6 +354,11 @@ impl WindowsHealthStartup {
             return Err(invalid("candidate binary differs from launch reservation"));
         }
         super::helper_request::verified_license(installed.directory())?;
+        let resume_lease = record
+            .resume_project
+            .as_ref()
+            .map(|project| project.pin(installed.directory()))
+            .transpose()?;
         let startup = Self {
             directory,
             record,
@@ -336,11 +366,21 @@ impl WindowsHealthStartup {
             waiting_since: Instant::now(),
             receipt_written: false,
             _binary_lease: binary_lease,
+            _resume_lease: resume_lease,
         };
         let state =
             crate::update_transaction::read_snapshot(&startup.directory, &startup.record.identity)?;
         startup.require_state(&state)?;
         Ok(startup)
+    }
+
+    /// The GUI must open this exact primary project before first_canvas_ready.
+    /// The candidate-side lease protects it until helper commitment or exit.
+    pub fn project(&self) -> Option<PathBuf> {
+        self.record
+            .resume_project
+            .as_ref()
+            .map(|project| project.path().to_path_buf())
     }
 
     fn require_state(&self, state: &UpdateTransaction) -> io::Result<()> {
@@ -670,6 +710,7 @@ mod tests {
             waiting_since: Instant::now(),
             receipt_written: false,
             _binary_lease: lease,
+            _resume_lease: None,
         };
         assert_eq!(
             startup.first_canvas_ready().unwrap(),
@@ -736,6 +777,34 @@ mod tests {
     }
 
     #[test]
+    fn saved_project_is_bound_into_the_single_launch_record() {
+        let fixture = Fixture::new();
+        let store = TransactionStore::lock(&fixture.0).unwrap();
+        let state = fixture.transaction();
+        store.write(&state).unwrap();
+        let project = fixture.0.join("待恢复 项目.instplot");
+        crate::FigureDocument::showcase().save(&project).unwrap();
+        let (resume, original_lease) =
+            super::super::WindowsResumeProject::capture(&project, &state.identity().installed_path)
+                .unwrap();
+        let launch =
+            WindowsCandidateLaunch::begin_with_resume(&store, &state, executable(), Some(&resume))
+                .unwrap();
+        assert_eq!(launch.record.resume_project.as_ref(), Some(&resume));
+        assert!(launch._resume_lease.is_some());
+        drop(original_lease);
+        assert!(std::fs::write(&project, b"changed during launch").is_err());
+        let mut changed = launch.record.clone();
+        changed.resume_project = None;
+        super::super::write_private_atomic(
+            &fixture.0.join("candidate-launch.json"),
+            &serde_json::to_vec(&changed).unwrap(),
+        )
+        .unwrap();
+        assert!(launch.require_record(&state).is_err());
+    }
+
+    #[test]
     fn candidate_checkpoint_timeout_never_writes_health() {
         let fixture = Fixture::new();
         let store = TransactionStore::lock(&fixture.0).unwrap();
@@ -759,6 +828,7 @@ mod tests {
             waiting_since: Instant::now() - Duration::from_secs(6),
             receipt_written: false,
             _binary_lease: lease,
+            _resume_lease: None,
         };
         assert!(startup.first_canvas_ready().is_err());
         assert!(!fixture.0.join("health.json").exists());

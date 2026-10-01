@@ -40,6 +40,12 @@ mod helper_request;
 pub use helper_request::{PreparedWindowsHelper, WindowsHelperSession};
 
 #[cfg(windows)]
+#[path = "update_windows/resume_project.rs"]
+mod resume_project;
+#[cfg(windows)]
+pub use resume_project::WindowsResumeProject;
+
+#[cfg(windows)]
 #[path = "update_windows/native.rs"]
 mod native;
 #[cfg(windows)]

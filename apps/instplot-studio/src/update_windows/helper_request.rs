@@ -19,7 +19,7 @@ use super::{
 
 const HELPER_NAME: &str = "instplot-update-helper.exe";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AssetBinding {
     cache: PathBuf,
@@ -59,7 +59,7 @@ impl AssetBinding {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelperRequest {
     schema: u32,
@@ -71,6 +71,7 @@ struct HelperRequest {
     old_process_created: u64,
     previous_binary_sha256: String,
     previous_license_sha256: String,
+    resume_project: Option<super::WindowsResumeProject>,
     recovery: AssetBinding,
     candidate: AssetBinding,
 }
@@ -123,6 +124,7 @@ pub struct PreparedWindowsHelper {
     request: HelperRequest,
     _helper_lease: File,
     _installers: PinnedWindowsInstallerPair,
+    _resume_lease: Option<File>,
 }
 
 impl PreparedWindowsHelper {
@@ -167,6 +169,7 @@ impl PreparedWindowsHelper {
             old_process_created: super::current_process_created()?,
             previous_binary_sha256,
             previous_license_sha256,
+            resume_project: None,
             recovery: AssetBinding::from_installer(recovery)?,
             candidate: AssetBinding::from_installer(candidate)?,
         };
@@ -180,6 +183,7 @@ impl PreparedWindowsHelper {
             request,
             _helper_lease: helper_lease,
             _installers: installers,
+            _resume_lease: None,
         })
     }
 
@@ -188,6 +192,34 @@ impl PreparedWindowsHelper {
     }
     pub fn helper_executable(&self) -> PathBuf {
         self.directory.join(HELPER_NAME)
+    }
+
+    /// Only after saving/discarding drafts and freezing the old editor. This
+    /// binds an existing saved primary file; it does not save user work itself.
+    pub fn set_resume_project(&mut self, project: Option<&Path>) -> io::Result<()> {
+        let store = TransactionStore::lock(&self.directory)?;
+        let state = store.read(&self.request.identity)?;
+        require_transaction(&self.request, &state, UpdateStage::Prepared)?;
+        let (binding, lease) = match project {
+            Some(path) => {
+                let (binding, lease) = super::WindowsResumeProject::capture(
+                    path,
+                    &self.request.identity.installed_path,
+                )?;
+                (Some(binding), Some(lease))
+            }
+            None => (None, None),
+        };
+        let mut request = self.request.clone();
+        request.resume_project = binding;
+        let bytes = serde_json::to_vec(&request).map_err(invalid)?;
+        if bytes.len() > 64 * 1024 {
+            return Err(invalid("oversized helper project handoff"));
+        }
+        super::write_private_atomic(&self.directory.join("request.json"), &bytes)?;
+        self.request = request;
+        self._resume_lease = lease;
+        Ok(())
     }
 
     /// Parent verifies an actual owned Child handle, not a supplied PID or a
@@ -217,6 +249,12 @@ impl PreparedWindowsHelper {
             ));
         }
         require_original_files(&installed, &self.request)?;
+        let _resume = self
+            .request
+            .resume_project
+            .as_ref()
+            .map(|project| project.pin(installed.directory()))
+            .transpose()?;
         let _installers = self.request.verify_installers()?;
         let store = TransactionStore::lock(&self.directory)?;
         let mut state = store.read(&self.request.identity)?;
@@ -261,6 +299,7 @@ pub struct WindowsHelperSession {
     installers: PinnedWindowsInstallerPair,
     old_process: TrackedWindowsProcess,
     _helper_lease: File,
+    _resume_lease: Option<File>,
 }
 
 impl WindowsHelperSession {
@@ -306,6 +345,11 @@ impl WindowsHelperSession {
             return Err(invalid("helper copy does not match original binary"));
         }
         let installers = request.verify_installers()?;
+        let resume_lease = request
+            .resume_project
+            .as_ref()
+            .map(|project| project.pin(installation.directory()))
+            .transpose()?;
         Ok(Self {
             directory,
             request,
@@ -315,6 +359,7 @@ impl WindowsHelperSession {
             installers,
             old_process,
             _helper_lease: helper_lease,
+            _resume_lease: resume_lease,
         })
     }
 
@@ -354,6 +399,9 @@ impl WindowsHelperSession {
     }
     pub fn old_process(&self) -> &TrackedWindowsProcess {
         &self.old_process
+    }
+    pub fn resume_project(&self) -> Option<&super::WindowsResumeProject> {
+        self.request.resume_project.as_ref()
     }
 
     /// Verify the current fixed release-file contract AFTER a durable successful
@@ -594,6 +642,7 @@ mod tests {
             old_process_created: 456,
             previous_binary_sha256: "b".repeat(64),
             previous_license_sha256: expected_license_sha256(),
+            resume_project: None,
             recovery: cache("0.1.2-rc.2", "d", 10),
             candidate: cache("0.1.2-rc.3", "a", 20),
         }
