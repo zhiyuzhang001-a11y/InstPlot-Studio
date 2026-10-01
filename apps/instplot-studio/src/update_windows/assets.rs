@@ -24,6 +24,8 @@ pub struct VerifiedWindowsInstaller {
     version: Version,
     package: UpdatePackage,
     manifest_sha256: String,
+    #[cfg(windows)]
+    enforce_private_acl: bool,
 }
 
 impl VerifiedWindowsInstaller {
@@ -39,13 +41,19 @@ impl VerifiedWindowsInstaller {
             OffsetDateTime::now_utc(),
         )?;
         #[cfg(windows)]
-        for evidence in [
-            directory.join("manifest.json"),
-            directory.join("manifest.json.sig"),
-            installer.path.clone(),
-        ] {
-            super::validate_private_file(&evidence)?;
-        }
+        let installer = {
+            for evidence in [
+                directory.join("manifest.json"),
+                directory.join("manifest.json.sig"),
+                installer.path.clone(),
+            ] {
+                super::validate_private_file(&evidence)?;
+            }
+            Self {
+                enforce_private_acl: true,
+                ..installer
+            }
+        };
         Ok(installer)
     }
 
@@ -101,6 +109,8 @@ impl VerifiedWindowsInstaller {
             version,
             package,
             manifest_sha256: format!("{:x}", Sha256::digest(&raw)),
+            #[cfg(windows)]
+            enforce_private_acl: false,
         };
         installer.revalidate()?;
         Ok(installer)
@@ -126,6 +136,15 @@ impl VerifiedWindowsInstaller {
     /// Signature/expiry verification above is a prepare-time requirement; this
     /// method only proves the already accepted file has not changed.
     pub fn revalidate(&self) -> io::Result<()> {
+        #[cfg(windows)]
+        if self.enforce_private_acl {
+            super::validate_private_directory(
+                self.path
+                    .parent()
+                    .ok_or_else(|| invalid("installer has no cache parent"))?,
+            )?;
+            super::validate_private_file(&self.path)?;
+        }
         reject_redirected_path(&self.path)?;
         let mut file = File::open(&self.path)?;
         let metadata = file.metadata()?;
@@ -380,6 +399,18 @@ mod tests {
         )
         .unwrap();
         assert!(fixture.verify().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn production_private_acl_requirement_is_retained_by_clones() {
+        let fixture = Fixture::new();
+        let mut asset = fixture.verify().unwrap();
+        // This fixture deliberately uses a default temp directory. Once the
+        // production ACL policy is enabled, a clone cannot drop that policy.
+        asset.enforce_private_acl = true;
+        assert!(asset.revalidate().is_err());
+        assert!(asset.clone().revalidate().is_err());
     }
 
     #[test]
