@@ -22,6 +22,12 @@ mod native;
 #[cfg(windows)]
 pub use native::discover_current_installation;
 
+#[cfg(windows)]
+#[path = "update_windows/process.rs"]
+mod process;
+#[cfg(windows)]
+pub use process::{TrackedWindowsProcess, current_process_created};
+
 pub const STUDIO_APP_ID: &str = "{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1";
 const EXECUTABLE: &str = "instplot-studio.exe";
 
