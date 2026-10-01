@@ -17,6 +17,7 @@ mod text_edit;
 mod update;
 pub mod update_bundle;
 pub mod update_transaction;
+pub mod update_windows;
 
 pub use data::{
     DATA_FORMAT_CAPABILITIES, DataDiagnostic, DataFormatCapability, DataImporter, ErrorStatistic,
