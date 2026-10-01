@@ -293,11 +293,12 @@ mod tests {
                 .installer_arguments(Path::new("relative.log"))
                 .is_err()
         );
-        assert!(
-            install
-                .installer_arguments(&fixture.0.join("../escape.log"))
-                .is_err()
-        );
+        // PathBuf::join normalizes '..' on Windows verbatim canonical paths.
+        // Preserve raw input so the rejection test actually supplies traversal.
+        let mut traversal = fixture.0.as_os_str().to_os_string();
+        let separator = std::path::MAIN_SEPARATOR_STR;
+        traversal.push(format!("{separator}..{separator}escape.log"));
+        assert!(install.installer_arguments(Path::new(&traversal)).is_err());
     }
 
     #[cfg(unix)]
