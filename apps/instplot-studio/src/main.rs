@@ -16,6 +16,8 @@ mod startup;
 mod text_input;
 mod ui_chrome;
 mod ui_text;
+#[cfg(target_os = "macos")]
+mod update_macos;
 mod workspace;
 
 use app_state::*;

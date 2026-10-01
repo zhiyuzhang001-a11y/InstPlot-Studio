@@ -203,10 +203,12 @@ jobs:
           $installer = "target/packages/windows/InstPlot-Studio-$version-windows-x86_64-setup.exe"
           $installRoot = Join-Path $env:RUNNER_TEMP "instplot-studio-release"
           $installProcess = Start-Process -FilePath $installer -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot"
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=$installRoot"
           ) -Wait -PassThru
           if ($installProcess.ExitCode -ne 0) { throw "Installer failed with $($installProcess.ExitCode)" }
           $binary = Join-Path $installRoot "instplot-studio.exe"
+          $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
+          ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
           $actual = & $binary --product-info
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$version") { throw "Unexpected identity: $actual" }
           & $binary --export-fixed-png target/windows-installed.png

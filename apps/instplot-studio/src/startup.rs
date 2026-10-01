@@ -14,6 +14,17 @@ use super::StudioApp;
 
 pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), Box<dyn Error>> {
     match StartupCommand::parse(arguments)? {
+        StartupCommand::UpdateProtocol => {
+            println!("{}", if cfg!(target_os = "macos") { 1 } else { 0 });
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        StartupCommand::ApplyUpdate(path) => crate::update_macos::apply(&path).map_err(Into::into),
+        #[cfg(target_os = "macos")]
+        StartupCommand::UpdateHealth(path) => {
+            let health = crate::update_macos::HealthStartup::load(&path)?;
+            launch_gui_with_health(health).map_err(Into::into)
+        }
         StartupCommand::ProductInfo => {
             println!("{}", product_info());
             Ok(())
@@ -107,14 +118,25 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StartupCommand {
     Gui,
+    UpdateProtocol,
+    #[cfg(target_os = "macos")]
+    ApplyUpdate(PathBuf),
+    #[cfg(target_os = "macos")]
+    UpdateHealth(PathBuf),
     ProductInfo,
     ExportFixedPdf(PathBuf),
     ExportFixedPng(PathBuf),
     CreateProject(PathBuf),
     CheckProject(PathBuf),
     PublicationCheck(PathBuf),
-    CreateHandoff { source: PathBuf, output: PathBuf },
-    ImportHandoff { source: PathBuf, project: PathBuf },
+    CreateHandoff {
+        source: PathBuf,
+        output: PathBuf,
+    },
+    ImportHandoff {
+        source: PathBuf,
+        project: PathBuf,
+    },
     OpenHandoff(PathBuf),
     OpenProject(PathBuf),
 }
@@ -124,6 +146,15 @@ impl StartupCommand {
         let mut arguments = arguments.into_iter();
         match (arguments.next(), arguments.next(), arguments.next()) {
             (None, None, None) => Ok(Self::Gui),
+            (Some(flag), None, None) if flag == "--update-protocol" => Ok(Self::UpdateProtocol),
+            #[cfg(target_os = "macos")]
+            (Some(flag), Some(path), None) if flag == "--apply-update" => {
+                Ok(Self::ApplyUpdate(path.into()))
+            }
+            #[cfg(target_os = "macos")]
+            (Some(flag), Some(path), None) if flag == "--update-health" => {
+                Ok(Self::UpdateHealth(path.into()))
+            }
             (Some(flag), None, None) if flag == "--product-info" => Ok(Self::ProductInfo),
             (Some(flag), Some(path), None) if flag == "--export-fixed-pdf" => {
                 Ok(Self::ExportFixedPdf(path.into()))
@@ -171,6 +202,47 @@ impl StartupCommand {
 }
 
 fn launch_gui(startup: Option<HandoffImport>, project_path: Option<PathBuf>) -> eframe::Result {
+    launch_gui_inner(startup, project_path, None)
+}
+
+#[cfg(target_os = "macos")]
+fn launch_gui_with_health(health: crate::update_macos::HealthStartup) -> eframe::Result {
+    launch_gui_inner(None, health.project(), Some(health))
+}
+
+#[cfg(not(target_os = "macos"))]
+type HealthStartup = ();
+#[cfg(target_os = "macos")]
+use crate::update_macos::HealthStartup;
+
+fn launch_gui_inner(
+    startup: Option<HandoffImport>,
+    project_path: Option<PathBuf>,
+    health: Option<HealthStartup>,
+) -> eframe::Result {
+    #[cfg(target_os = "macos")]
+    let guard = match crate::update_macos::current_bundle() {
+        Ok(target) => {
+            if health.is_none() && crate::update_macos::has_unfinished_apply(&target) {
+                return Err(eframe::Error::AppCreation(
+                    std::io::Error::other("原位更新或恢复尚未结束，请查看该事务的更新日志。")
+                        .into(),
+                ));
+            }
+            match instplot_studio::update_bundle::BundleAccess::shared(&target) {
+                Ok(guard) => Ok(guard),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock || health.is_some() =>
+                {
+                    return Err(eframe::Error::AppCreation(error.into()));
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    #[cfg(not(target_os = "macos"))]
+    let _ = health;
     let started = Instant::now();
     #[cfg(target_os = "macos")]
     let macos_open_files = crate::macos_open_files::MacOpenFiles::start();
@@ -187,6 +259,11 @@ fn launch_gui(startup: Option<HandoffImport>, project_path: Option<PathBuf>) -> 
         options,
         Box::new(move |creation| {
             let mut app = StudioApp::new(creation, started, startup);
+            #[cfg(target_os = "macos")]
+            {
+                app.update_health = health;
+                app.update.set_instance_guard(guard);
+            }
             #[cfg(target_os = "macos")]
             {
                 macos_open_files.finish_install(creation.egui_ctx.clone());

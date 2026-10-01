@@ -97,6 +97,15 @@ impl StudioApp {
             PendingAction::Exit => {
                 // The close command is issued by the confirmation dialog, which has the context.
             }
+            PendingAction::RestartForUpdate => {
+                let drafts = self.pending_update_drafts();
+                if drafts.is_empty() {
+                    self.update
+                        .launch_helper(self.workspace.project_path().map(Path::to_path_buf));
+                } else {
+                    self.update.explain_blocked(drafts.join("\n"));
+                }
+            }
         }
     }
 

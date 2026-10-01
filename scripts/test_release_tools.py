@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +74,24 @@ class ReleaseDispatchTests(unittest.TestCase):
 
 
 class ReleaseAssetSpecTests(unittest.TestCase):
+    def test_windows_icon_contains_all_required_png_resolutions(self) -> None:
+        data = (ROOT / "apps/instplot-studio/assets/InstPlotStudio.ico").read_bytes()
+        self.assertEqual(struct.unpack_from("<HHH", data), (0, 1, 7))
+        expected_offset = 6 + 16 * 7
+        for index, size in enumerate((16, 24, 32, 48, 64, 128, 256)):
+            width, height, colors, reserved, planes, depth, length, offset = struct.unpack_from(
+                "<BBBBHHII", data, 6 + 16 * index
+            )
+            self.assertEqual((width or 256, height or 256), (size, size))
+            self.assertEqual((colors, reserved, planes, depth), (0, 0, 1, 32))
+            self.assertEqual(offset, expected_offset)
+            image = data[offset:offset + length]
+            self.assertEqual(len(image), length)
+            self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack_from(">II", image, 16), (size, size))
+            expected_offset += length
+        self.assertEqual(expected_offset, len(data))
+
     def test_requires_and_classifies_the_exact_first_release_set(self) -> None:
         import tempfile
 

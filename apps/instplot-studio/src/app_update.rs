@@ -33,12 +33,14 @@ pub(super) struct AvailableUpdate {
     pub(super) version: String,
     pub(super) notes_url: String,
     pub(super) package: UpdatePackage,
+    pub(super) signed_manifest: Vec<u8>,
+    pub(super) manifest_signature: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
 enum CheckOutcome {
     UpToDate { version: String },
-    Available(AvailableUpdate),
+    Available(Box<AvailableUpdate>),
     Unsupported { explanation: String },
 }
 
@@ -63,13 +65,25 @@ enum UpdatePhase {
     },
     Downloaded {
         path: PathBuf,
+        update: AvailableUpdate,
     },
+    #[cfg(target_os = "macos")]
+    PreparingMac,
+    #[cfg(target_os = "macos")]
+    ReadyMac(crate::update_macos::PreparedMacUpdate),
+    #[cfg(target_os = "macos")]
+    LaunchingHelper,
 }
 
 enum UpdateEvent {
+    BackgroundSkipped,
     Checked(Result<CheckOutcome, String>),
     Progress(u64),
-    Downloaded(Result<PathBuf, String>),
+    Downloaded(Result<(AvailableUpdate, PathBuf), String>),
+    #[cfg(target_os = "macos")]
+    PreparedMac(Result<crate::update_macos::PreparedMacUpdate, String>),
+    #[cfg(target_os = "macos")]
+    HelperReady(Result<(), String>),
 }
 
 pub(super) struct AppUpdateState {
@@ -78,6 +92,12 @@ pub(super) struct AppUpdateState {
     phase: UpdatePhase,
     receiver: Option<mpsc::Receiver<UpdateEvent>>,
     cancel: Arc<AtomicBool>,
+    background_started: bool,
+    background_check: bool,
+    restart_requested: bool,
+    close_requested: bool,
+    #[cfg(target_os = "macos")]
+    instance_guard: Result<instplot_studio::update_bundle::BundleAccess, String>,
 }
 
 impl Default for AppUpdateState {
@@ -88,6 +108,12 @@ impl Default for AppUpdateState {
             phase: UpdatePhase::Idle,
             receiver: None,
             cancel: Arc::new(AtomicBool::new(false)),
+            background_started: false,
+            background_check: false,
+            restart_requested: false,
+            close_requested: false,
+            #[cfg(target_os = "macos")]
+            instance_guard: Err("尚未初始化安装进程锁。".into()),
         }
     }
 }
@@ -99,15 +125,114 @@ impl Drop for AppUpdateState {
 }
 
 impl AppUpdateState {
+    #[cfg(target_os = "macos")]
+    pub(super) fn set_instance_guard(
+        &mut self,
+        guard: Result<instplot_studio::update_bundle::BundleAccess, String>,
+    ) {
+        self.instance_guard = guard;
+        if let Some(explanation) = crate::update_macos::failure_notice() {
+            self.explain_blocked(explanation);
+        }
+    }
+    pub(super) fn needs_work_inventory(&self) -> bool {
+        if !self.open {
+            return false;
+        }
+        match self.phase {
+            UpdatePhase::Downloaded { .. } => true,
+            #[cfg(target_os = "macos")]
+            UpdatePhase::ReadyMac(_) => true,
+            _ => false,
+        }
+    }
+
+    pub(super) fn is_launching(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            matches!(self.phase, UpdatePhase::LaunchingHelper)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+    fn is_preparing(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            matches!(
+                self.phase,
+                UpdatePhase::PreparingMac | UpdatePhase::ReadyMac(_)
+            )
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+    pub(super) fn take_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.restart_requested)
+    }
+    pub(super) fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.close_requested)
+    }
+    pub(super) fn explain_blocked(&mut self, explanation: String) {
+        self.open = true;
+        self.phase = UpdatePhase::Failed { explanation };
+    }
+
+    pub(super) fn launch_helper(&mut self, project: Option<PathBuf>) {
+        #[cfg(target_os = "macos")]
+        {
+            let UpdatePhase::ReadyMac(prepared) = self.phase.clone() else {
+                return;
+            };
+            match self
+                .instance_guard
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|guard| guard.other_instances().map_err(|e| e.to_string()))
+            {
+                Ok(false) => {}
+                Ok(true) => {
+                    self.explain_blocked("请先正常关闭同一安装的其他实例。".into());
+                    return;
+                }
+                Err(error) => {
+                    self.explain_blocked(error);
+                    return;
+                }
+            }
+            self.phase = UpdatePhase::LaunchingHelper;
+            let (sender, receiver) = mpsc::channel();
+            self.receiver = Some(receiver);
+            std::thread::spawn(move || {
+                let _ = sender.send(UpdateEvent::HelperReady(prepared.launch(project)));
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = project;
+            self.explain_blocked("该安装方式的安全原位升级尚未通过平台验证。".into());
+        }
+    }
+
     pub(super) fn request_check(&mut self, context: &egui::Context) {
         self.open = true;
         self.focus = true;
         if matches!(
             self.phase,
             UpdatePhase::Checking | UpdatePhase::Downloading { .. }
-        ) {
+        ) || self.is_launching()
+            || self.is_preparing()
+        {
             return;
         }
+        self.background_check = false;
+        self.begin_check(context);
+    }
+
+    fn begin_check(&mut self, context: &egui::Context) {
         self.cancel.store(false, Ordering::Relaxed);
         self.phase = UpdatePhase::Checking;
         let (sender, receiver) = mpsc::channel();
@@ -116,6 +241,37 @@ impl AppUpdateState {
         std::thread::spawn(move || {
             let result = check_for_update();
             let _ = sender.send(UpdateEvent::Checked(result));
+            context.request_repaint();
+        });
+    }
+
+    fn start_background_check(&mut self, context: &egui::Context) {
+        if self.background_started {
+            return;
+        }
+        self.background_started = true;
+        if cfg!(debug_assertions) || !matches!(self.phase, UpdatePhase::Idle) {
+            return;
+        }
+        self.background_check = true;
+        self.phase = UpdatePhase::Checking;
+        let (sender, receiver) = mpsc::channel();
+        self.receiver = Some(receiver);
+        let context = context.clone();
+        std::thread::spawn(move || {
+            let result = reserve_background_check().and_then(|due| {
+                if due {
+                    check_for_update().map(Some)
+                } else {
+                    Ok(None)
+                }
+            });
+            let event = match result {
+                Ok(Some(outcome)) => UpdateEvent::Checked(Ok(outcome)),
+                Ok(None) => UpdateEvent::BackgroundSkipped,
+                Err(error) => UpdateEvent::Checked(Err(error)),
+            };
+            let _ = sender.send(event);
             context.request_repaint();
         });
     }
@@ -140,12 +296,34 @@ impl AppUpdateState {
                 }
             };
             match event {
+                #[cfg(target_os = "macos")]
+                UpdateEvent::PreparedMac(result) => {
+                    self.phase = match result {
+                        Ok(prepared) => UpdatePhase::ReadyMac(prepared),
+                        Err(explanation) => UpdatePhase::Failed { explanation },
+                    };
+                    keep_receiver = false;
+                }
+                #[cfg(target_os = "macos")]
+                UpdateEvent::HelperReady(result) => {
+                    match result {
+                        Ok(()) => self.close_requested = true,
+                        Err(explanation) => self.phase = UpdatePhase::Failed { explanation },
+                    }
+                    keep_receiver = false;
+                }
+                UpdateEvent::BackgroundSkipped => {
+                    self.phase = UpdatePhase::Idle;
+                    keep_receiver = false;
+                }
                 UpdateEvent::Checked(Ok(CheckOutcome::UpToDate { version })) => {
                     self.phase = UpdatePhase::UpToDate { version };
                     keep_receiver = false;
                 }
                 UpdateEvent::Checked(Ok(CheckOutcome::Available(update))) => {
-                    self.phase = UpdatePhase::Available(update);
+                    self.phase = UpdatePhase::Available(*update);
+                    self.open = true;
+                    self.focus = true;
                     keep_receiver = false;
                 }
                 UpdateEvent::Checked(Ok(CheckOutcome::Unsupported { explanation })) => {
@@ -153,7 +331,11 @@ impl AppUpdateState {
                     keep_receiver = false;
                 }
                 UpdateEvent::Checked(Err(explanation)) => {
-                    self.phase = UpdatePhase::Failed { explanation };
+                    self.phase = if self.background_check {
+                        UpdatePhase::Idle
+                    } else {
+                        UpdatePhase::Failed { explanation }
+                    };
                     keep_receiver = false;
                 }
                 UpdateEvent::Progress(downloaded) => {
@@ -166,8 +348,8 @@ impl AppUpdateState {
                     }
                     context.request_repaint();
                 }
-                UpdateEvent::Downloaded(Ok(path)) => {
-                    self.phase = UpdatePhase::Downloaded { path };
+                UpdateEvent::Downloaded(Ok((update, path))) => {
+                    self.phase = UpdatePhase::Downloaded { path, update };
                     keep_receiver = false;
                 }
                 UpdateEvent::Downloaded(Err(explanation)) => {
@@ -181,8 +363,12 @@ impl AppUpdateState {
         }
     }
 
-    pub(super) fn window(&mut self, context: &egui::Context) {
+    pub(super) fn window(&mut self, context: &egui::Context, pending_drafts: &[String]) {
+        self.start_background_check(context);
         self.poll(context);
+        if self.receiver.is_some() {
+            context.request_repaint_after(Duration::from_millis(100));
+        }
         if !self.open {
             return;
         }
@@ -197,7 +383,7 @@ impl AppUpdateState {
             spec.embedded("检查更新", embedded_id)
                 .open(&mut open)
                 .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
-                .show(context, |ui| self.fields(ui));
+                .show(context, |ui| self.fields(ui, pending_drafts));
             self.open = open;
         } else {
             let builder = spec.viewport("检查更新");
@@ -210,7 +396,7 @@ impl AppUpdateState {
                             .fill(studio_surface(child_context.theme() == egui::Theme::Dark))
                             .inner_margin(egui::Margin::same(16)),
                     )
-                    .show(ui, |ui| self.fields(ui));
+                    .show(ui, |ui| self.fields(ui, pending_drafts));
                 close_requested
             });
             if close_requested {
@@ -219,10 +405,34 @@ impl AppUpdateState {
         }
     }
 
-    fn fields(&mut self, ui: &mut egui::Ui) {
+    fn fields(&mut self, ui: &mut egui::Ui, pending_drafts: &[String]) {
         match self.phase.clone() {
+            #[cfg(target_os = "macos")]
+            UpdatePhase::LaunchingHelper => {
+                ui.spinner();
+                ui.label("更新助手准备中；确认就绪后将正常退出当前应用。请勿关闭电源。");
+            }
+            #[cfg(target_os = "macos")]
+            UpdatePhase::PreparingMac => {
+                ui.spinner();
+                ui.label("正在验证原安装与候选应用；当前工作不会关闭。");
+            }
+            #[cfg(target_os = "macos")]
+            UpdatePhase::ReadyMac(_) => {
+                ui.heading("可以重启并更新");
+                ui.label("将更新当前安装位置，保留设置和数据。未保存项目将在退出前确认。");
+                for draft in pending_drafts {
+                    ui.label(draft);
+                }
+                if ui
+                    .add_enabled(pending_drafts.is_empty(), egui::Button::new("重启并更新"))
+                    .clicked()
+                {
+                    self.restart_requested = true;
+                }
+            }
             UpdatePhase::Idle => {
-                ui.label("仅在你主动操作时联网；不会自动安装或收集遥测。");
+                ui.label("后台检查新版；下载和重启需确认，不收集遥测。");
                 if ui.button("检查更新").clicked() {
                     self.request_check(ui.ctx());
                 }
@@ -246,13 +456,11 @@ impl AppUpdateState {
                 }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("下载并验证…").clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .set_title("保存 InstPlot Studio 更新包")
-                            .set_file_name(&update.package.file_name)
-                            .save_file()
-                    {
-                        self.start_download(ui.ctx(), update.clone(), path);
+                    if ui.button("下载并验证").clicked() {
+                        match update_cache_destination(&update.package.file_name) {
+                            Ok(path) => self.start_download(ui.ctx(), update.clone(), path),
+                            Err(explanation) => self.phase = UpdatePhase::Failed { explanation },
+                        }
                     }
                     if ui.button("查看发布说明").clicked() {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(update.notes_url));
@@ -261,7 +469,7 @@ impl AppUpdateState {
                         self.request_check(ui.ctx());
                     }
                 });
-                ui.weak("下载完成后仍需由你手动运行安装包。软件不会自动覆盖或重启。");
+                ui.weak("安装包保存于应用私有缓存；下载不会关闭当前工作。");
             }
             UpdatePhase::Unsupported { explanation } => {
                 ui.heading("当前平台暂无更新包");
@@ -295,10 +503,32 @@ impl AppUpdateState {
                     self.cancel.store(true, Ordering::Relaxed);
                 }
             }
-            UpdatePhase::Downloaded { path } => {
+            UpdatePhase::Downloaded { path, update } => {
                 ui.heading("下载和校验已完成");
                 ui.label(path.display().to_string());
-                ui.weak("请手动运行安装包完成升级。下载文件已经通过大小和 SHA-256 校验。");
+                ui.label(format!("已验证版本 {}", update.version));
+                for draft in pending_drafts {
+                    ui.label(draft);
+                }
+                #[cfg(target_os = "macos")]
+                if cfg!(feature = "in-place-update-preview") && self.instance_guard.is_ok() {
+                    if ui.button("准备原位升级").clicked() {
+                        self.phase = UpdatePhase::PreparingMac;
+                        let (sender, receiver) = mpsc::channel();
+                        self.receiver = Some(receiver);
+                        let context = ui.ctx().clone();
+                        let path = path.clone();
+                        std::thread::spawn(move || {
+                            let result = crate::update_macos::prepare(&path, &update.version);
+                            let _ = sender.send(UpdateEvent::PreparedMac(result));
+                            context.request_repaint();
+                        });
+                    }
+                } else {
+                    ui.weak("原位升级仍在平台验证中，当前保留已校验安装包，不会自动退出或覆盖。");
+                }
+                #[cfg(not(target_os = "macos"))]
+                ui.weak("该安装方式的安全原位升级尚在验证；可显示安装包手动升级。");
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("在文件夹中显示").clicked() && reveal_in_folder(&path).is_err()
                     {
@@ -353,6 +583,13 @@ impl AppUpdateState {
             let result = download_package(&update.package, &destination, &cancel, |downloaded| {
                 let _ = progress_sender.send(UpdateEvent::Progress(downloaded));
                 context.request_repaint();
+            });
+            let result = result.and_then(|path| {
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| "更新缓存位置无效。".to_owned())?;
+                write_cache_evidence(parent, &update)?;
+                Ok((update, path))
             });
             let _ = sender.send(UpdateEvent::Downloaded(result));
             context.request_repaint();
@@ -410,11 +647,149 @@ fn check_for_update() -> Result<CheckOutcome, String> {
     if package.size_bytes > MAX_PACKAGE_BYTES {
         return Err("更新包超过允许的最大大小。".to_owned());
     }
-    Ok(CheckOutcome::Available(AvailableUpdate {
+    Ok(CheckOutcome::Available(Box::new(AvailableUpdate {
         version: manifest.version,
         notes_url: manifest.notes_url,
         package,
-    }))
+        signed_manifest: raw,
+        manifest_signature: signature,
+    })))
+}
+
+fn private_update_cache() -> Result<PathBuf, String> {
+    let project = ProjectDirs::from("com", "InstPlot", "InstPlot Studio")
+        .ok_or_else(|| "无法确定用户更新缓存目录。".to_owned())?;
+    let root = project.cache_dir().join("updates");
+    fs::create_dir_all(&root).map_err(|_| "无法创建更新缓存目录。".to_owned())?;
+    if fs::symlink_metadata(&root)
+        .map_err(|_| "无法读取更新缓存。".to_owned())?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("更新缓存不能是符号链接。".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "无法保护更新缓存权限。".to_owned())?;
+    }
+    Ok(root)
+}
+
+fn update_cache_destination(file_name: &str) -> Result<PathBuf, String> {
+    update_cache_destination_at(&private_update_cache()?, file_name)
+}
+
+fn update_cache_destination_at(root: &Path, file_name: &str) -> Result<PathBuf, String> {
+    if file_name.is_empty()
+        || file_name.contains(['/', '\\'])
+        || file_name == "."
+        || file_name == ".."
+        || matches!(
+            file_name,
+            "manifest.json" | "manifest.json.sig" | "transaction.json"
+        )
+        || file_name
+            .chars()
+            .any(|c| c.is_control() || "<>:\"|?*".contains(c))
+    {
+        return Err("更新安装包文件名无效。".to_owned());
+    }
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random).map_err(|_| "无法生成更新缓存标识。".to_owned())?;
+    let id = random
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    let directory = root.join(id);
+    fs::create_dir(&directory).map_err(|_| "无法创建私有更新目录。".to_owned())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "无法保护更新缓存权限。".to_owned())?;
+    }
+    Ok(directory.join(file_name))
+}
+
+fn write_cache_evidence(directory: &Path, update: &AvailableUpdate) -> Result<(), String> {
+    for (name, bytes) in [
+        ("manifest.json", update.signed_manifest.as_slice()),
+        ("manifest.json.sig", update.manifest_signature.as_slice()),
+    ] {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(directory.join(name))
+            .map_err(|_| "无法保留签名更新证据。".to_owned())?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| "无法保存签名更新证据。".to_owned())?;
+    }
+    Ok(())
+}
+
+fn reserve_background_check() -> Result<bool, String> {
+    let root = private_update_cache()?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let path = root.join("background-check.lock");
+    if fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+        return Err("后台检查状态路径无效。".to_owned());
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| "无法锁定后台检查。".to_owned())?;
+    file.try_lock()
+        .map_err(|_| "其他实例正在检查更新。".to_owned())?;
+    let state = root.join("background-check.json");
+    if fs::symlink_metadata(&state).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+        return Err("后台检查状态路径无效。".to_owned());
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "系统时间无效。".to_owned())?
+        .as_secs();
+    let previous: Option<u64> = if state.exists() {
+        if fs::metadata(&state)
+            .map_err(|_| "无法读取检查时间。".to_owned())?
+            .len()
+            > 64
+        {
+            return Err("后台检查记录损坏。".to_owned());
+        }
+        Some(
+            serde_json::from_slice(&fs::read(&state).map_err(|_| "无法读取检查时间。".to_owned())?)
+                .map_err(|_| "后台检查记录损坏。".to_owned())?,
+        )
+    } else {
+        None
+    };
+    if !background_check_due(previous, now) {
+        return Ok(false);
+    }
+    AtomicFile::new(state, AllowOverwrite)
+        .write(|f| {
+            f.write_all(now.to_string().as_bytes())?;
+            f.sync_all()
+        })
+        .map_err(|_| "无法保存后台检查时间。".to_owned())?;
+    Ok(true)
+}
+
+fn background_check_due(previous: Option<u64>, now: u64) -> bool {
+    previous.is_none_or(|last| now >= last && now - last >= 24 * 60 * 60)
 }
 
 #[derive(Clone, Copy)]
@@ -787,6 +1162,73 @@ fn byte_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_schedule_is_throttled_and_clock_reversal_is_safe() {
+        assert!(background_check_due(None, 10));
+        assert!(!background_check_due(Some(100), 50));
+        assert!(!background_check_due(Some(100), 100));
+        assert!(!background_check_due(Some(100), 100 + 86_399));
+        assert!(background_check_due(Some(100), 100 + 86_400));
+    }
+
+    #[test]
+    fn skipped_check_is_not_reported_as_up_to_date() {
+        let mut state = AppUpdateState::default();
+        state.background_started = true;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        state.phase = UpdatePhase::Checking;
+        sender.send(UpdateEvent::BackgroundSkipped).unwrap();
+        state.poll(&egui::Context::default());
+        assert!(matches!(state.phase, UpdatePhase::Idle));
+        assert!(!state.open);
+    }
+
+    #[test]
+    fn background_failure_is_quiet_but_manual_failure_is_visible() {
+        for background in [true, false] {
+            let mut state = AppUpdateState::default();
+            state.background_check = background;
+            let (sender, receiver) = mpsc::channel();
+            state.receiver = Some(receiver);
+            sender
+                .send(UpdateEvent::Checked(Err("offline".into())))
+                .unwrap();
+            state.poll(&egui::Context::default());
+            assert_eq!(
+                matches!(state.phase, UpdatePhase::Failed { .. }),
+                !background
+            );
+        }
+    }
+
+    #[test]
+    fn cache_allocations_are_unique_and_reject_unsafe_names() {
+        let root =
+            std::env::temp_dir().join(format!("instplot-update-cache-test-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        for name in ["", "..", "../escape", "a/b", "a\\b", "x:y", "manifest.json"] {
+            assert!(update_cache_destination_at(&root, name).is_err());
+        }
+        let first = update_cache_destination_at(&root, "update.dmg").unwrap();
+        let second = update_cache_destination_at(&root, "update.dmg").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(first.file_name().unwrap(), "update.dmg");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(first.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o077,
+                0
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn production_trust_root_and_keys_are_fixed() {

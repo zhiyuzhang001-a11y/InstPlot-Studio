@@ -107,6 +107,8 @@ impl StudioApp {
             language,
             update: AppUpdateState::default(),
             #[cfg(target_os = "macos")]
+            update_health: None,
+            #[cfg(target_os = "macos")]
             macos_open_files: None,
             first_frame: true,
             started,

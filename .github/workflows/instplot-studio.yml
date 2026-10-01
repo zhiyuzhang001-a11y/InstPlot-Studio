@@ -90,6 +90,11 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked --package instplot-studio
 
+      - name: Verify embedded Windows product icon
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify_windows_icon.ps1 -Executable target/release/instplot-studio.exe
+
       - name: Read product version
         shell: bash
         run: echo "INSTPLOT_VERSION=$(python3 scripts/read_version.py)" >> "${GITHUB_ENV}"
@@ -189,10 +194,12 @@ jobs:
           $installer = "target/packages/windows/InstPlot-Studio-$env:INSTPLOT_VERSION-windows-x86_64-setup.exe"
           $installRoot = Join-Path $env:RUNNER_TEMP "instplot-studio-ci"
           $installProcess = Start-Process -FilePath $installer -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot"
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=$installRoot"
           ) -Wait -PassThru
           if ($installProcess.ExitCode -ne 0) { throw "Installer failed with $($installProcess.ExitCode)" }
           $binary = Join-Path $installRoot "instplot-studio.exe"
+          $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
+          ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
           $actual = & $binary --product-info
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION") { throw "Unexpected installed identity: $actual" }
           $uninstallProcess = Start-Process -FilePath (Join-Path $installRoot "unins000.exe") -ArgumentList @(

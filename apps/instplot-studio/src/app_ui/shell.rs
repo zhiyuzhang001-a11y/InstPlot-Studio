@@ -3,6 +3,37 @@ use super::*;
 impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
+        if self.update.is_launching() {
+            if context.input(|input| input.viewport().close_requested()) {
+                context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            }
+            ui.spinner();
+            ui.label("更新助手准备中，当前工作已锁定；失败时会返回原窗口。");
+            self.update.window(&context, &[]);
+            if self.update.take_close_request() {
+                self.allow_close = true;
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if self.update_health.is_some() {
+            // Do not consume shortcuts, file drops, native open-file events or
+            // editor input until the updater confirms initialization succeeded.
+            ui.disable();
+            self.show_canvas(ui, &context);
+            match self.update_health.as_mut().unwrap().frame_ready(&context) {
+                Ok(true) => {
+                    self.update_health = None;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("Update initialization failed: {error}");
+                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            return;
+        }
         let dropped_paths = context.input(|input| {
             input
                 .raw
@@ -521,7 +552,24 @@ impl eframe::App for StudioApp {
         self.reference_draft_window(&context);
         self.context_editor(&context);
         self.manual_data_window(&context);
-        self.update.window(&context);
+        let update_drafts = if self.update.needs_work_inventory() {
+            self.pending_update_drafts()
+        } else {
+            Vec::new()
+        };
+        self.update.window(&context, &update_drafts);
+        if self.update.take_restart_request() {
+            let drafts = self.pending_update_drafts();
+            if drafts.is_empty() {
+                self.request_replacement(PendingAction::RestartForUpdate);
+            } else {
+                self.update.explain_blocked(drafts.join("\n"));
+            }
+        }
+        if self.update.take_close_request() {
+            self.allow_close = true;
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
 
         if self.first_frame {
             self.first_frame = false;

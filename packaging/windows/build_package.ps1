@@ -21,6 +21,7 @@ $VersionInfoVersion = $VersionComponents -join '.'
 
 & cargo build --release --locked --package instplot-studio --bin instplot-studio
 if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
+& ./scripts/verify_windows_icon.ps1 -Executable target/release/instplot-studio.exe
 
 $OutputRoot = Join-Path $RepositoryRoot $OutputDirectory
 $SourceRoot = Join-Path $OutputRoot "source"
@@ -28,6 +29,7 @@ if (Test-Path $OutputRoot) { Remove-Item -Recurse -Force $OutputRoot }
 New-Item -ItemType Directory -Force -Path $SourceRoot | Out-Null
 Copy-Item target/release/instplot-studio.exe $SourceRoot
 Copy-Item LICENSE $SourceRoot
+Copy-Item apps/instplot-studio/assets/InstPlotStudio.ico $SourceRoot
 
 $Iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 if (-not $Iscc) {

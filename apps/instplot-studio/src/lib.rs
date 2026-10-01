@@ -15,6 +15,8 @@ mod semantic;
 mod session;
 mod text_edit;
 mod update;
+pub mod update_bundle;
+pub mod update_transaction;
 
 pub use data::{
     DATA_FORMAT_CAPABILITIES, DataDiagnostic, DataFormatCapability, DataImporter, ErrorStatistic,
