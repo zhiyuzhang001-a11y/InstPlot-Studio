@@ -33,9 +33,9 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
         }
         #[cfg(target_os = "macos")]
         StartupCommand::ApplyUpdate(path) => crate::update_macos::apply(&path).map_err(Into::into),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
         StartupCommand::UpdateHealth(path) => {
-            let health = crate::update_macos::HealthStartup::load(&path)?;
+            let health = HealthStartup::load(&path)?;
             launch_gui_with_health(health).map_err(Into::into)
         }
         StartupCommand::ProductInfo => {
@@ -136,7 +136,7 @@ enum StartupCommand {
     CheckUpdateInstallation,
     #[cfg(target_os = "macos")]
     ApplyUpdate(PathBuf),
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
     UpdateHealth(PathBuf),
     ProductInfo,
     ExportFixedPdf(PathBuf),
@@ -170,7 +170,7 @@ impl StartupCommand {
             (Some(flag), Some(path), None) if flag == "--apply-update" => {
                 Ok(Self::ApplyUpdate(path.into()))
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
             (Some(flag), Some(path), None) if flag == "--update-health" => {
                 Ok(Self::UpdateHealth(path.into()))
             }
@@ -224,15 +224,17 @@ fn launch_gui(startup: Option<HandoffImport>, project_path: Option<PathBuf>) -> 
     launch_gui_inner(startup, project_path, None)
 }
 
-#[cfg(target_os = "macos")]
-fn launch_gui_with_health(health: crate::update_macos::HealthStartup) -> eframe::Result {
+#[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
+fn launch_gui_with_health(health: HealthStartup) -> eframe::Result {
     launch_gui_inner(None, health.project(), Some(health))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", all(windows, feature = "in-place-update-preview"))))]
 type HealthStartup = ();
 #[cfg(target_os = "macos")]
 use crate::update_macos::HealthStartup;
+#[cfg(all(windows, feature = "in-place-update-preview"))]
+use instplot_studio::update_windows::WindowsHealthStartup as HealthStartup;
 
 fn launch_gui_inner(
     startup: Option<HandoffImport>,
@@ -260,7 +262,7 @@ fn launch_gui_inner(
         }
         Err(error) => Err(error),
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", all(windows, feature = "in-place-update-preview"))))]
     let _ = health;
     #[cfg(all(windows, feature = "in-place-update-preview"))]
     let windows_guard = {
@@ -274,9 +276,11 @@ fn launch_gui_inner(
         // same directory. An unlocked preview must not run during replacement.
         let guard = instplot_studio::update_windows::WindowsInstallAccess::shared(target)
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
-        guard
-            .require_idle_startup()
-            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        if health.is_none() {
+            guard
+                .require_idle_startup()
+                .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        }
         Ok(guard)
     };
     let started = Instant::now();
@@ -296,7 +300,10 @@ fn launch_gui_inner(
         Box::new(move |creation| {
             let mut app = StudioApp::new(creation, started, startup);
             #[cfg(all(windows, feature = "in-place-update-preview"))]
-            app.update.set_windows_instance_guard(windows_guard);
+            {
+                app.update.set_windows_instance_guard(windows_guard);
+                app.update_health = health;
+            }
             #[cfg(target_os = "macos")]
             {
                 app.update_health = health;
@@ -308,7 +315,16 @@ fn launch_gui_inner(
                 app.macos_open_files = Some(macos_open_files);
             }
             if let Some(path) = project_path {
-                app.open_project_path(path);
+                app.open_project_path(path.clone());
+                #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
+                if app.update_health.is_some()
+                    && app.workspace.project_path() != Some(path.as_path())
+                {
+                    return Err(std::io::Error::other(
+                        "更新启动未能重开指定主项目，不能确认健康。",
+                    )
+                    .into());
+                }
             }
             Ok(Box::new(app))
         }),
@@ -318,6 +334,28 @@ fn launch_gui_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
+    #[test]
+    fn health_startup_accepts_one_exact_transaction_path_only() {
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--update-health"),
+                OsString::from("事务 中文 路径"),
+            ])
+            .unwrap(),
+            StartupCommand::UpdateHealth(PathBuf::from("事务 中文 路径")),
+        );
+        assert!(StartupCommand::parse([OsString::from("--update-health")]).is_err());
+        assert!(
+            StartupCommand::parse([
+                OsString::from("--update-health"),
+                OsString::from("transaction"),
+                OsString::from("another-project.instplot"),
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn startup_commands_keep_headless_work_before_gui_creation() {

@@ -34,6 +34,28 @@ impl eframe::App for StudioApp {
             }
             return;
         }
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        if self.update_health.is_some() {
+            use instplot_studio::update_windows::WindowsHealthFrame;
+            // Same first-canvas gate as macOS: no shortcuts, file drops or
+            // editor/configuration changes until durable helper commitment.
+            ui.disable();
+            self.show_canvas(ui, &context);
+            match self.update_health.as_mut().unwrap().first_canvas_ready() {
+                Ok(WindowsHealthFrame::Committed) => self.update_health = None,
+                Ok(WindowsHealthFrame::Pending) => {
+                    context.request_repaint_after(std::time::Duration::from_millis(100));
+                }
+                Ok(WindowsHealthFrame::StopRequested) => {
+                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(error) => {
+                    eprintln!("Update initialization failed: {error}");
+                    context.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            return;
+        }
         let dropped_paths = context.input(|input| {
             input
                 .raw

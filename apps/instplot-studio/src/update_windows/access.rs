@@ -72,6 +72,7 @@ impl WindowsInstallAccess {
                     crate::update_transaction::UpdateStage::Prepared
                         | crate::update_transaction::UpdateStage::Completed
                         | crate::update_transaction::UpdateStage::RolledBack
+                        | crate::update_transaction::UpdateStage::FailedBeforeApply
                 )
             {
                 return Err(invalid("in-place update or recovery is unfinished"));
@@ -198,6 +199,7 @@ mod tests {
         let store = TransactionStore::lock(&directory).unwrap();
         store.write(&state).unwrap();
         guard.require_idle_in(&root).unwrap();
+        let prepared = state.clone();
         for stage in [
             UpdateStage::WaitingForExit,
             UpdateStage::Applying,
@@ -221,6 +223,10 @@ mod tests {
         }
         state.transition(UpdateStage::RolledBack).unwrap();
         store.write(&state).unwrap();
+        guard.require_idle_in(&root).unwrap();
+        let mut aborted = prepared;
+        aborted.transition(UpdateStage::FailedBeforeApply).unwrap();
+        store.write(&aborted).unwrap();
         guard.require_idle_in(&root).unwrap();
         std::fs::write(directory.join("transaction.json"), b"corrupt").unwrap();
         assert!(guard.require_idle_in(&root).is_err());

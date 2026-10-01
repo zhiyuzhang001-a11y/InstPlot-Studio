@@ -75,6 +75,8 @@ pub(super) struct StudioApp {
     pub(super) update: AppUpdateState,
     #[cfg(target_os = "macos")]
     pub(super) update_health: Option<crate::update_macos::HealthStartup>,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    pub(super) update_health: Option<instplot_studio::update_windows::WindowsHealthStartup>,
     #[cfg(target_os = "macos")]
     pub(super) macos_open_files: Option<crate::macos_open_files::MacOpenFiles>,
     pub(super) first_frame: bool,

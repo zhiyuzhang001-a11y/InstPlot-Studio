@@ -404,6 +404,16 @@ impl WindowsHelperSession {
         self.request.resume_project.as_ref()
     }
 
+    /// A bounded wait/permission failure BEFORE installation may safely end
+    /// the transaction only after proving the exact old installation intact.
+    /// Never use this to disguise an ambiguous or started installer as canceled.
+    pub fn abort_before_apply(&self, reason: &str) -> io::Result<UpdateTransaction> {
+        abort_waiting(&self.store, &self.request, reason, || {
+            super::native::revalidate_installation(&self.installation)?;
+            require_original_files(&self.installation, &self.request)
+        })
+    }
+
     /// Verify the current fixed release-file contract AFTER a durable successful
     /// old-installer exit. No GUI launch, deletion, configuration restoration or
     /// RolledBack transition is performed here.
@@ -430,6 +440,32 @@ impl WindowsHelperSession {
         super::native::revalidate_installation(&self.installation)?;
         require_original_files(&self.installation, &self.request)
     }
+}
+
+fn abort_waiting(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    reason: &str,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    for name in [
+        "apply-installer.json",
+        "restore-installer.json",
+        "candidate-launch.json",
+    ] {
+        match fs::symlink_metadata(store.directory().join(name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => return Err(invalid("execution evidence forbids pre-apply cancellation")),
+        }
+    }
+    verify_original()?;
+    state.record_error(reason);
+    state.transition(UpdateStage::FailedBeforeApply)?;
+    store.write(&state)?;
+    Ok(state)
 }
 
 const RELEASE_LICENSE: &[u8] =
@@ -675,6 +711,67 @@ mod tests {
         let mut changed_license = self::request();
         changed_license.previous_license_sha256 = "e".repeat(64);
         assert!(changed_license.transaction().is_err());
+    }
+
+    #[test]
+    fn cancellation_requires_no_execution_and_verified_original_files() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir()
+            .join(format!("studio-abort-{:032x}", u128::from_le_bytes(random),));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let mut waiting = request.transaction().unwrap();
+        waiting.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&waiting).unwrap();
+        assert!(
+            abort_waiting(&store, &request, "wait failed", || Err(invalid(
+                "original installation could not be verified"
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        // Even partial/unresolved intent is not proof that installation never ran.
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial execution evidence").unwrap();
+            assert!(
+                abort_waiting(&store, &request, "cancel", || panic!(
+                    "must refuse before calling original-file verifier"
+                ))
+                .is_err()
+            );
+            assert!(path.exists());
+            fs::remove_file(path).unwrap();
+        }
+        let failed = abort_waiting(&store, &request, request.nonce.as_str(), || Ok(())).unwrap();
+        assert_eq!(failed.stage(), UpdateStage::FailedBeforeApply);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::FailedBeforeApply
+        );
+        let raw = fs::read_to_string(root.join("transaction.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["last_error"], "[redacted]");
+        assert!(abort_waiting(&store, &request, "again", || Ok(())).is_err());
+        let mut applying = waiting;
+        applying.transition(UpdateStage::Applying).unwrap();
+        store.write(&applying).unwrap();
+        assert!(abort_waiting(&store, &request, "not a safe cancellation", || Ok(())).is_err());
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
