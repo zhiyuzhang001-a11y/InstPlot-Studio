@@ -24,6 +24,62 @@ impl WindowsInstallAccess {
         Self::acquire(target, &Self::locks_root()?, true)
     }
 
+    /// Ordinary preview GUIs must not enter while an update has released its
+    /// exclusive lock only to let the authenticated candidate initialize.
+    /// Retain the shared guard during this check: an installer cannot race it.
+    pub fn require_idle_startup(&self) -> io::Result<()> {
+        self.require_idle_in(&super::native::updater_private_root()?.join("transactions"))
+    }
+
+    fn require_idle_in(&self, root: &Path) -> io::Result<()> {
+        if self.exclusive {
+            return Err(invalid(
+                "ordinary startup requires shared installation access",
+            ));
+        }
+        match std::fs::symlink_metadata(root) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+            Ok(_) => validate_private_directory(root)?,
+        }
+        // Never follow an untrusted journal or silently skip a corrupt entry.
+        // A bounded scan preserves old evidence without requiring its deletion.
+        for (index, entry) in std::fs::read_dir(root)?.enumerate() {
+            if index >= 4096 {
+                return Err(invalid(
+                    "too many update transactions; manual review required",
+                ));
+            }
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name
+                .to_str()
+                .ok_or_else(|| invalid("invalid transaction name"))?;
+            if name.len() != 32
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(invalid("unexpected update transaction entry"));
+            }
+            let state = crate::update_transaction::read_validated_snapshot(&entry.path())?;
+            if state.id() != name || state.identity().platform != "windows-x86_64" {
+                return Err(invalid("update journal directory identity mismatch"));
+            }
+            if state.identity().installed_path == self.target
+                && !matches!(
+                    state.stage(),
+                    crate::update_transaction::UpdateStage::Prepared
+                        | crate::update_transaction::UpdateStage::Completed
+                        | crate::update_transaction::UpdateStage::RolledBack
+                )
+            {
+                return Err(invalid("in-place update or recovery is unfinished"));
+            }
+        }
+        Ok(())
+    }
+
     fn locks_root() -> io::Result<PathBuf> {
         let root = super::native::updater_private_root()?.join("installation-locks");
         if let Err(error) = create_private_directory(&root)
@@ -103,6 +159,77 @@ impl WindowsInstallAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_startup_rejects_unfinished_or_corrupt_journals() {
+        use crate::update_transaction::{
+            TransactionStore, UpdateIdentity, UpdateStage, UpdateTransaction,
+        };
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let fixture = std::env::temp_dir().join(format!(
+            "studio-startup-gate-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        std::fs::create_dir(&fixture).unwrap();
+        let target = fixture.join("安装 路径");
+        let other = fixture.join("other");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let locks = fixture.join("locks");
+        create_private_directory(&locks).unwrap();
+        let guard = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        let independent = WindowsInstallAccess::acquire(&other, &locks, false).unwrap();
+        let root = fixture.join("transactions");
+        guard.require_idle_in(&root).unwrap();
+        create_private_directory(&root).unwrap();
+        let mut state = UpdateTransaction::new(UpdateIdentity {
+            product: "instplot-studio".into(),
+            platform: "windows-x86_64".into(),
+            installed_path: std::fs::canonicalize(&target).unwrap(),
+            previous_version: "0.1.2-rc.2".into(),
+            candidate_version: "0.1.2-rc.3".into(),
+            candidate_sha256: "a".repeat(64),
+            candidate_size: 20,
+        })
+        .unwrap();
+        let directory = root.join(state.id());
+        create_private_directory(&directory).unwrap();
+        let store = TransactionStore::lock(&directory).unwrap();
+        store.write(&state).unwrap();
+        guard.require_idle_in(&root).unwrap();
+        for stage in [
+            UpdateStage::WaitingForExit,
+            UpdateStage::Applying,
+            UpdateStage::RecoveryRequired,
+            UpdateStage::Restoring,
+        ] {
+            state.transition(stage).unwrap();
+            store.write(&state).unwrap();
+            assert!(guard.require_idle_in(&root).is_err());
+            independent.require_idle_in(&root).unwrap();
+            if stage == UpdateStage::Applying {
+                let mut awaiting = state.clone();
+                awaiting
+                    .await_health(1, "native-process-creation".into())
+                    .unwrap();
+                store.write(&awaiting).unwrap();
+                assert!(guard.require_idle_in(&root).is_err());
+                independent.require_idle_in(&root).unwrap();
+                store.write(&state).unwrap();
+            }
+        }
+        state.transition(UpdateStage::RolledBack).unwrap();
+        store.write(&state).unwrap();
+        guard.require_idle_in(&root).unwrap();
+        std::fs::write(directory.join("transaction.json"), b"corrupt").unwrap();
+        assert!(guard.require_idle_in(&root).is_err());
+        assert!(independent.require_idle_in(&root).is_err());
+        drop(store);
+        drop(guard);
+        drop(independent);
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
 
     #[test]
     fn all_instances_must_release_shared_access_before_installation() {

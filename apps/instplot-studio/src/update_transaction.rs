@@ -356,6 +356,14 @@ pub(crate) fn read_snapshot(
     directory: &Path,
     identity: &UpdateIdentity,
 ) -> io::Result<UpdateTransaction> {
+    let state = read_validated_snapshot(directory)?;
+    if state.identity != *identity {
+        return Err(invalid("transaction belongs to a different installation"));
+    }
+    Ok(state)
+}
+
+pub(crate) fn read_validated_snapshot(directory: &Path) -> io::Result<UpdateTransaction> {
     #[cfg(windows)]
     crate::update_windows::validate_private_directory(directory)?;
     let path = directory.join("transaction.json");
@@ -374,9 +382,6 @@ pub(crate) fn read_snapshot(
     }
     let state: UpdateTransaction = serde_json::from_slice(&raw).map_err(invalid)?;
     state.validate()?;
-    if state.identity != *identity {
-        return Err(invalid("transaction belongs to a different installation"));
-    }
     Ok(state)
 }
 

@@ -274,6 +274,9 @@ fn launch_gui_inner(
         // same directory. An unlocked preview must not run during replacement.
         let guard = instplot_studio::update_windows::WindowsInstallAccess::shared(target)
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        guard
+            .require_idle_startup()
+            .map_err(|error| eframe::Error::AppCreation(error.into()))?;
         Ok(guard)
     };
     let started = Instant::now();

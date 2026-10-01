@@ -212,3 +212,8 @@ macOS 下载/DMG/用户重启完整链路的独立测试环境已构建：仅忽
 本批本地 Studio 全特性库回归 217 通过、1 忽略；共用事务 4 项通过；工作区全目标全特性 Clippy 与 Windows 实际模块/测试交叉 Clippy 通过。Windows 专属测试未在本机运行，待 CI。
 
 本批没有接入 Windows GUI/CLI 健康启动或完整助手控制器，Windows 更新协议仍为 0，默认入口保持关闭。实际配置写入保护、单次 GUI 启动、项目恢复及失败恢复端到端验收仍未完成；上述接口不构成完整自动更新验收。
+# 真实 Rust/Inno 重验与普通窗口启动保护
+
+修复提交 `eba96fb` 四项 CI 通过。已核验运行 `36923218593` 的 Windows 恢复附件（artifact `11193502818`）：`desktop-on-native-runner.json`、`desktop-off-native-runner.json` 均记录真实 Rust 执行器升级及恢复成功、用户数据不变；`results.json` 两例均包含 `rust_native_inno_apply_and_restore=true`，其他恢复/快捷方式/卸载断言为 true，生产版本未改。附件范围明确为安装器恢复原型，不是 GUI 自动更新；新健康握手提交 `d4223b5` 尚需独立 CI 证据。
+
+Windows 预览普通 GUI 在持有目标共享锁后检查固定私有事务根：该目标处于 WaitingForExit、Applying、AwaitingHealth、RecoveryRequired 或 Restoring 时拒绝普通启动；Prepared 和严格终态不阻止启动，其他安装目标的有效记录不互相阻挡。目录身份、私有权限、完整事务校验失败不静默略过；最多检查 4096 条保留记录，超限要求人工复核，不删除恢复证据。共享锁继续阻止安装器与普通启动竞态。新增 Windows 测试覆盖等待/应用/健康等待/恢复、无记录、Prepared、RolledBack、另一目标及损坏记录；实际运行待 CI，未接候选专用 GUI 入口。以后候选入口必须严格加载事务并独立获得共享锁，不能普遍绕过此保护。
