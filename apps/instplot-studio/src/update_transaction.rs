@@ -219,6 +219,35 @@ impl UpdateTransaction {
         Ok(())
     }
 
+    /// Platform caller MUST retain and validate the still-live recovered GUI's
+    /// native handle and its immutable launch record before supplying this
+    /// identity. An installer exit, cached receipt or original old PID is not
+    /// that witness. This common check never launches a GUI or writes the store.
+    pub fn accept_recovery_health(
+        &mut self,
+        receipt: &HealthReceipt,
+        recovered_process: (u32, &str),
+    ) -> io::Result<()> {
+        if self.stage != UpdateStage::Restoring
+            || recovered_process.0 == 0
+            || recovered_process.1.is_empty()
+            || receipt.transaction_id != self.id
+            || receipt.nonce != self.nonce
+            || receipt.product != self.identity.product
+            || receipt.platform != self.identity.platform
+            || receipt.version != self.identity.previous_version
+            || receipt.installed_path != self.identity.installed_path
+            || receipt.process_id != recovered_process.0
+            || receipt.process_started != recovered_process.1
+            || !receipt.initialized
+            || !receipt.window_ready
+        {
+            return Err(invalid("unmatched or incomplete recovery health receipt"));
+        }
+        self.stage = UpdateStage::RolledBack;
+        Ok(())
+    }
+
     pub fn record_error(&mut self, message: &str) {
         // Error logs must not persist unbounded output or the health nonce.
         self.last_error = Some(
@@ -486,6 +515,57 @@ mod tests {
         state.transition(UpdateStage::Restoring).unwrap();
         state.transition(UpdateStage::RolledBack).unwrap();
         assert!(state.transition(UpdateStage::Applying).is_err());
+    }
+
+    #[test]
+    fn recovery_health_requires_old_version_and_exact_new_recovery_process() {
+        let mut state = transaction();
+        let mut valid = receipt();
+        valid.version = state.identity.previous_version.clone();
+        valid.process_id = 68;
+        valid.process_started = "recovered-native-start".into();
+        let witness = (68, "recovered-native-start");
+        assert!(state.accept_recovery_health(&valid, witness).is_err());
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        state.transition(UpdateStage::Applying).unwrap();
+        state
+            .await_health(24, "failed-candidate-start".into())
+            .unwrap();
+        assert!(state.accept_recovery_health(&valid, witness).is_err());
+        state.transition(UpdateStage::RecoveryRequired).unwrap();
+        assert!(state.accept_recovery_health(&valid, witness).is_err());
+        state.transition(UpdateStage::Restoring).unwrap();
+        for mutate in [
+            |r: &mut HealthReceipt| r.process_id = 24,
+            |r: &mut HealthReceipt| r.process_started = "reused-pid".into(),
+            |r: &mut HealthReceipt| r.platform = "windows-x86_64".into(),
+            |r: &mut HealthReceipt| r.product = "instplot-lite".into(),
+            |r: &mut HealthReceipt| r.installed_path = std::env::temp_dir().join("wrong.app"),
+            |r: &mut HealthReceipt| r.version = "0.1.3-rc.2".into(),
+            |r: &mut HealthReceipt| r.transaction_id = "d".repeat(32),
+            |r: &mut HealthReceipt| r.nonce = "d".repeat(64),
+            |r: &mut HealthReceipt| r.initialized = false,
+            |r: &mut HealthReceipt| r.window_ready = false,
+        ] {
+            let mut bad = valid.clone();
+            mutate(&mut bad);
+            assert!(state.accept_recovery_health(&bad, witness).is_err());
+            assert_eq!(state.stage(), UpdateStage::Restoring);
+        }
+        assert!(
+            state
+                .accept_recovery_health(&valid, (0, witness.1))
+                .is_err()
+        );
+        assert!(
+            state
+                .accept_recovery_health(&valid, (witness.0, ""))
+                .is_err()
+        );
+        state.accept_recovery_health(&valid, witness).unwrap();
+        assert_eq!(state.stage(), UpdateStage::RolledBack);
+        assert!(state.accept_recovery_health(&valid, witness).is_err());
+        assert!(state.accept_health(&valid).is_err());
     }
 
     #[test]

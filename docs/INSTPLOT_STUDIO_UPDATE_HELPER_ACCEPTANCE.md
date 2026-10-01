@@ -257,3 +257,13 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 随后还必须持有目标排他锁、原版进程确证退出、新版安装器持久退出码 0、旧恢复包仍符合原请求与信任/有效性要求，且没有既有 restore-installer/recovery-launch 意图，才持久写 RecoveryRequired 再写 Restoring；第一次写成功、第二次失败不伪装为终态。该方法不安装旧包、不重开 GUI、不标 RolledBack，也不授权从磁盘重建丢失的句柄。
 
 扩展真实测试 Child 的组件测试覆盖释放前拒绝、已知未启动与退出证据篡改拒绝、其他事务目录拒绝、未持久阶段拒绝、恢复执行阶段拒绝；进程仍是测试程序，不是 Studio GUI。实际 Windows 库/测试交叉 Clippy 和工作区全目标全特性 Clippy 通过，Windows 原生运行待下一批 CI；完整控制器、原版 GUI 健康及恢复项目可用性仍未完成。入口保持关闭，不发布或清理恢复证据。
+
+## 恢复健康回执共用规则（接口完成，平台调用链待衔接）
+
+新增 `UpdateTransaction::accept_recovery_health`：只在 Restoring 接受旧版本、精确产品/平台/目录/事务 ID/nonce、恢复进程 PID/创建身份及初始化/画布就绪一致的回执，再在内存进入 RolledBack。调用方须先以保留的原生存活句柄和独立恢复启动记录验证真实恢复 GUI，并负责持久写盘；接口不执行系统进程校验、不启动旧 GUI、不保存项目，不能单独作真实恢复证据。既有通用 transition API 和 macOS 调用路径保持不变，Windows 完整控制器必须使用上述严格接口，不能靠直接 transition 代替恢复健康确认。
+
+新增共用用例覆盖错误阶段、失败候选 PID/版本、外来产品/平台/路径/事务/nonce、初始化或画布缺失、空/零原生身份、合法恢复及拒绝重复提交；本机五项事务测试通过，工作区及实际 Windows 库/测试交叉 Clippy 通过。Windows 专用恢复启动记录、原版 GUI 首画布回执和完整助手调用链仍待实现/验收。
+
+`57227cb` 的 Windows audit 运行 `36932270906` 已通过；下载 artifact `11196987874`，读取 validation/summary.json 确认 formal-workspace-tests（workspace/locked/all-targets）为 pass。附件未包含单项测试日志，因此不把摘要说成已逐项读取所有断言；不覆盖后续本地提交的 Windows 运行状态。Windows Quality 和真实 Inno 附件仍按其最终结果独立核验。
+
+本批本机 `cargo test --locked -p instplot-studio --all-targets --all-features` 完整通过：库 218 通过/1 原有忽略，二进制 114 通过，集成契约 8 通过，共 340 通过/1 忽略。包含既有数据、绘图、轴、文字、持久化和导出回归；不是实际 GUI 更新操作。Windows 专属测试不计入本机数量，未解锁或绕过锁屏，未替换用户应用。安装前与恢复状态门的本地提交等待本轮 Windows Quality 最终证据后合批推送，避免取消仍在工作的验证。
