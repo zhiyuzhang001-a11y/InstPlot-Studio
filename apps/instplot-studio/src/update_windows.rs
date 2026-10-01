@@ -44,6 +44,12 @@ mod runner;
 pub use runner::RunningWindowsInstaller;
 
 #[cfg(windows)]
+#[path = "update_windows/journal.rs"]
+mod journal;
+#[cfg(windows)]
+pub use journal::{InstallerAttemptStatus, installer_attempt_status, refresh_installer_attempt};
+
+#[cfg(windows)]
 #[path = "update_windows/cache.rs"]
 mod cache;
 #[cfg(windows)]

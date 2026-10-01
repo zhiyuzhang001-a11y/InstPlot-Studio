@@ -478,6 +478,9 @@ mod tests {
     #[test]
     fn native_runner_requires_normal_exit_and_retains_exclusive_access() {
         use super::super::{RunningWindowsInstaller, TrackedWindowsProcess, WindowsInstallAccess};
+        use crate::update_transaction::{
+            TransactionStore, UpdateIdentity, UpdateStage, UpdateTransaction,
+        };
         use std::process::{Command, Stdio};
         use std::time::Duration;
 
@@ -506,6 +509,26 @@ mod tests {
             version: Version::parse(VERSION).unwrap(),
             desktop_shortcut: false,
         };
+        let store = TransactionStore::lock(&locks).unwrap();
+        let mut transaction = UpdateTransaction::new(UpdateIdentity {
+            product: "instplot-studio".into(),
+            platform: "windows-x86_64".into(),
+            installed_path: installation.directory().to_owned(),
+            previous_version: VERSION.into(),
+            candidate_version: "0.1.2-rc.4".into(),
+            candidate_sha256: "c".repeat(64),
+            candidate_size: 1,
+        })
+        .unwrap();
+        for stage in [
+            UpdateStage::WaitingForExit,
+            UpdateStage::Applying,
+            UpdateStage::RecoveryRequired,
+            UpdateStage::Restoring,
+        ] {
+            transaction.transition(stage).unwrap();
+        }
+        store.write(&transaction).unwrap();
         let mut previous = Command::new(&executable)
             .args(["--exact", "update_windows::assets::tests::installer_test_child_waits_for_normal_parent_pipe_close"])
             .env("STUDIO_INSTALLER_TEST_WAIT", "1")
@@ -519,25 +542,89 @@ mod tests {
                 asset.pin().unwrap(),
                 &access,
                 &tracked,
-                &log
+                &log,
+                &store,
+                &transaction
             )
             .is_err()
         );
         assert!(!log.exists());
+        assert!(!locks.join("restore-installer.json").exists());
         drop(previous.stdin.take());
         assert!(tracked.wait_for_exit(Duration::from_secs(5)).unwrap());
         assert!(previous.wait().unwrap().success());
+        assert_eq!(tracked.exit_code_if_exited().unwrap(), Some(0));
+        let mut foreign_transaction =
+            UpdateTransaction::new(transaction.identity().clone()).unwrap();
+        for stage in [
+            UpdateStage::WaitingForExit,
+            UpdateStage::Applying,
+            UpdateStage::RecoveryRequired,
+            UpdateStage::Restoring,
+        ] {
+            foreign_transaction.transition(stage).unwrap();
+        }
+        assert!(
+            RunningWindowsInstaller::start(
+                &installation,
+                asset.pin().unwrap(),
+                &access,
+                &tracked,
+                &locks.join("foreign-transaction.log"),
+                &store,
+                &foreign_transaction
+            )
+            .is_err()
+        );
+        assert!(!locks.join("foreign-transaction.log").exists());
+        assert!(!locks.join("restore-installer.json").exists());
         let mut running = RunningWindowsInstaller::start(
             &installation,
             asset.pin().unwrap(),
             &access,
             &tracked,
             &log,
+            &store,
+            &transaction,
         )
         .unwrap();
         assert_ne!(running.process_id(), 0);
+        use super::super::{InstallerAttemptStatus, installer_attempt_status};
+        assert!(
+            matches!(installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
+            InstallerAttemptStatus::Running { process_id, created } if process_id == running.process_id() && created > 0)
+        );
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        // Windows sharing denies atomic checkpoint replacement. Even after
+        // Child exits, a failed durable write must not return successful exit
+        // or release the installer lease/access lock.
+        use std::os::windows::fs::OpenOptionsExt;
+        let blocked_checkpoint = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0)
+            .open(locks.join("restore-installer.json"))
+            .unwrap();
+        loop {
+            match running.try_wait() {
+                Err(_) => break,
+                Ok(None) => {}
+                Ok(Some(_)) => panic!("exit was returned without durable checkpoint"),
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "checkpoint fault was not reached"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            fs::OpenOptions::new()
+                .write(true)
+                .open(asset.path())
+                .is_err()
+        );
+        assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
+        drop(blocked_checkpoint);
         loop {
             if running.try_wait().unwrap().is_some() {
                 break;
@@ -549,6 +636,130 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         drop(running);
+        assert!(matches!(
+            installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
+            InstallerAttemptStatus::Exited { .. }
+        ));
+        let recorded = fs::read(locks.join("restore-installer.json")).unwrap();
+        assert!(
+            RunningWindowsInstaller::start(
+                &installation,
+                asset.pin().unwrap(),
+                &access,
+                &tracked,
+                &locks.join("duplicate.log"),
+                &store,
+                &transaction
+            )
+            .is_err()
+        );
+        assert!(!locks.join("duplicate.log").exists());
+        assert_eq!(
+            fs::read(locks.join("restore-installer.json")).unwrap(),
+            recorded
+        );
+        // Read-only restart inspection binds a real still-live fixture process;
+        // wrong creation time must not turn into an inferred exit.
+        let mut inspection_child = Command::new(asset.path())
+            .args(["--exact", "update_windows::assets::tests::installer_test_child_waits_for_normal_parent_pipe_close"])
+            .env("STUDIO_INSTALLER_TEST_WAIT", "1").stdin(Stdio::piped())
+            .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let inspection_process =
+            TrackedWindowsProcess::bind_child(&inspection_child, asset.path()).unwrap();
+        let created = super::super::process::child_process_created(&inspection_child).unwrap();
+        let mut inspecting: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
+        inspecting["phase"] = "running".into();
+        inspecting["process"] = serde_json::json!([inspection_child.id(), created]);
+        inspecting["exit_code"] = serde_json::Value::Null;
+        let journal_path = locks.join("restore-installer.json");
+        super::super::write_private_atomic(
+            &journal_path,
+            &serde_json::to_vec(&inspecting).unwrap(),
+        )
+        .unwrap();
+        let lease = asset.pin().unwrap();
+        assert_eq!(
+            super::super::refresh_installer_attempt(
+                &store,
+                &transaction,
+                &installation,
+                &lease,
+                &access
+            )
+            .unwrap(),
+            InstallerAttemptStatus::Running {
+                process_id: inspection_child.id(),
+                created
+            }
+        );
+        inspecting["process"] = serde_json::json!([inspection_child.id(), created + 1]);
+        super::super::write_private_atomic(
+            &journal_path,
+            &serde_json::to_vec(&inspecting).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            super::super::refresh_installer_attempt(
+                &store,
+                &transaction,
+                &installation,
+                &lease,
+                &access
+            )
+            .is_err()
+        );
+        drop(inspection_child.stdin.take());
+        assert!(
+            inspection_process
+                .wait_for_exit(Duration::from_secs(5))
+                .unwrap()
+        );
+        assert!(inspection_child.wait().unwrap().success());
+        assert_eq!(inspection_process.exit_code_if_exited().unwrap(), Some(0));
+        drop(lease);
+        // A simulated crash-before-checkpoint must never become retry/exit
+        // permission. These edits affect this isolated fixture's journal only.
+        let mut interrupted: serde_json::Value = serde_json::from_slice(&recorded).unwrap();
+        interrupted["phase"] = "intent".into();
+        interrupted["process"] = serde_json::Value::Null;
+        interrupted["exit_code"] = serde_json::Value::Null;
+        super::super::write_private_atomic(
+            &journal_path,
+            &serde_json::to_vec(&interrupted).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
+            InstallerAttemptStatus::Unresolved
+        );
+        assert!(
+            RunningWindowsInstaller::start(
+                &installation,
+                asset.pin().unwrap(),
+                &access,
+                &tracked,
+                &locks.join("uncertain-replay.log"),
+                &store,
+                &transaction
+            )
+            .is_err()
+        );
+        assert!(!locks.join("uncertain-replay.log").exists());
+        interrupted["transaction_id"] = "0".repeat(32).into();
+        super::super::write_private_atomic(
+            &journal_path,
+            &serde_json::to_vec(&interrupted).unwrap(),
+        )
+        .unwrap();
+        assert!(installer_attempt_status(&store, &transaction, &installation, &asset).is_err());
+        interrupted["transaction_id"] = transaction.id().into();
+        interrupted["unexpected"] = true.into();
+        super::super::write_private_atomic(
+            &journal_path,
+            &serde_json::to_vec(&interrupted).unwrap(),
+        )
+        .unwrap();
+        assert!(installer_attempt_status(&store, &transaction, &installation, &asset).is_err());
         // The helper still owns the installation lock after installer exit,
         // so it can verify health or restore without opening a race.
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());

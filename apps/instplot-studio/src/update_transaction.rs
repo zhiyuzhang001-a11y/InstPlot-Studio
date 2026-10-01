@@ -248,6 +248,11 @@ pub struct TransactionStore {
 }
 
 impl TransactionStore {
+    #[cfg(windows)]
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
     pub(crate) fn require_directory(&self, directory: &Path) -> io::Result<()> {
         if fs::canonicalize(&self.directory)? == directory {
             Ok(())

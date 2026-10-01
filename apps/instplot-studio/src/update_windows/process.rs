@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+    WaitForSingleObject,
 };
 use windows::core::PWSTR;
 
@@ -142,10 +143,50 @@ impl TrackedWindowsProcess {
             _ => Err(io::Error::last_os_error()),
         }
     }
+
+    /// Check the signal first: exit code 259 may itself be a real exit code.
+    /// Query rights only; https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess
+    pub fn exit_code_if_exited(&self) -> io::Result<Option<i32>> {
+        if !self.wait_for_exit(Duration::ZERO)? {
+            return Ok(None);
+        }
+        let mut code = 0_u32;
+        // SAFETY: owned query/synchronization handle, confirmed signaled above,
+        // valid output storage. No termination rights or process mutation.
+        unsafe { GetExitCodeProcess(self.handle, &mut code) }.map_err(io::Error::other)?;
+        Ok(Some(code as i32))
+    }
 }
 
 pub fn current_process_created() -> io::Result<u64> {
     TrackedWindowsProcess::capture(std::process::id())?.created()
+}
+
+/// Read creation time through the owned Child handle, including after exit.
+/// No PID lookup: the handle is kept by the caller and cannot identify a reused PID.
+pub(super) fn child_process_created(child: &std::process::Child) -> io::Result<u64> {
+    use std::os::windows::io::AsRawHandle;
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: Child owns a live process handle; writable FILETIMEs are valid
+    // for this query. No handle ownership is transferred or termination requested.
+    unsafe {
+        GetProcessTimes(
+            HANDLE(child.as_raw_handle()),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .map_err(io::Error::other)?;
+    let created = (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+    if created == 0 {
+        return Err(io::Error::other("invalid installer creation time"));
+    }
+    Ok(created)
 }
 
 #[cfg(test)]
@@ -160,6 +201,7 @@ mod tests {
             TrackedWindowsProcess::bind(std::process::id(), created, &executable).unwrap();
         process.require_executable(&executable).unwrap();
         assert!(!process.wait_for_exit(Duration::ZERO).unwrap());
+        assert_eq!(process.exit_code_if_exited().unwrap(), None);
         assert!(process.wait_for_exit(Duration::from_secs(31)).is_err());
         assert!(TrackedWindowsProcess::bind(std::process::id(), created + 1, &executable).is_err());
         assert!(TrackedWindowsProcess::bind(0, created, &executable).is_err());
