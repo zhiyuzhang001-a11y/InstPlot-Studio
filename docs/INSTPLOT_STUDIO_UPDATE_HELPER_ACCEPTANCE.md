@@ -243,3 +243,9 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 候选启动新增消耗单次预留及排他锁的 owned-process 接口：仅核验安装器成功与原生安装后的公开预留可启动；固定健康参数，不使用 shell。释放排他锁后由已认证候选取得共享锁，普通窗口仍被活动事务挡住。CreateProcess 成功后即使绑定或写盘失败也保留 Child 和租约，不重试、不强杀；失败/退出不算健康。恢复前必须先取得真实 owned Child 退出证据并持久写入，或记录确定的 CreateProcess 失败，再释放二进制租约；损坏记录拒绝，不据此自动重放或宣布恢复成功。
 
 新增原生测试覆盖真实启动失败、真实测试进程提前退出和注入启动后检查点失败；测试进程不是 Studio GUI。实际 Windows 库及测试交叉 Clippy、工作区全目标全特性 Clippy 已通过；Windows 运行及完整助手/恢复 GUI 链仍待验收。默认入口关闭、协议 0，不合并、不发布、不替换 Spotlight、不清理恢复证据。
+
+## 安装前最后复核状态门（本地实现，Windows 运行待验）
+
+`WindowsHelperSession::enter_applying` 必须持有精确安装目录的排他锁，原生旧进程已正常退出；请求原文与已加载请求一致，helper-ready 精确绑定当前助手 PID/创建时间、事务 ID/nonce。再次验证注册安装身份、原版 exe/LICENSE、助手复制体、新旧签名包绑定/有效性及主项目只读绑定后，才由 WaitingForExit 持久切换 Applying。任一错误不切换、不安装、不强杀、不启动窗口。切换本身不是安装成功，更不是健康或恢复成功。
+
+新鲜执行与安装前中止共用已有 apply/restore/candidate 意图检查，部分记录也拒绝，不删除记录获取重试资格。新增 Windows 组件测试覆盖 Prepared/外来 nonce 拒绝、复核错误保持 WaitingForExit、三类部分意图保持原文、合法一次状态切换、重复切换及应用后中止拒绝；不运行安装器，不冒称真实 helper/GUI 链通过。实际 Windows 全库源/测试交叉 Clippy、工作区全目标全特性 Clippy 通过，Windows 原生运行待 CI。完整助手控制器与配置/恢复保护尚未完成；协议和默认入口不变。

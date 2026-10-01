@@ -19,7 +19,7 @@ use super::{
 
 const HELPER_NAME: &str = "instplot-update-helper.exe";
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AssetBinding {
     cache: PathBuf,
@@ -59,7 +59,7 @@ impl AssetBinding {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelperRequest {
     schema: u32,
@@ -404,6 +404,59 @@ impl WindowsHelperSession {
         self.request.resume_project.as_ref()
     }
 
+    /// Enter apply only after normal old-GUI exit and exact installation
+    /// exclusion. This does not execute an installer or authorize a replay.
+    pub fn enter_applying(
+        &self,
+        access: &super::WindowsInstallAccess,
+    ) -> io::Result<UpdateTransaction> {
+        access.require_exclusive(self.installation.directory())?;
+        begin_applying(&self.store, &self.request, || {
+            if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+                return Err(invalid("old application has not exited normally"));
+            }
+            let request: HelperRequest = serde_json::from_slice(&read_private(
+                &self.directory.join("request.json"),
+                64 * 1024,
+            )?)
+            .map_err(invalid)?;
+            if request != self.request {
+                return Err(invalid("helper request changed before apply"));
+            }
+            let ready: HelperReady = serde_json::from_slice(&read_private(
+                &self.directory.join("helper-ready.json"),
+                4096,
+            )?)
+            .map_err(invalid)?;
+            if !ready.matches(
+                &self.request,
+                std::process::id(),
+                super::current_process_created()?,
+            ) {
+                return Err(invalid("apply requires this acknowledged helper"));
+            }
+            super::native::revalidate_installation(&self.installation)?;
+            require_original_files(&self.installation, &self.request)?;
+            if digest_file(&self.directory.join(HELPER_NAME))?
+                != self.request.previous_binary_sha256
+            {
+                return Err(invalid("helper changed before apply"));
+            }
+            self.request
+                .recovery
+                .require(self.installers.recovery.installer())?;
+            self.request
+                .candidate
+                .require(self.installers.candidate.installer())?;
+            self.installers.recovery.installer().revalidate()?;
+            self.installers.candidate.installer().revalidate()?;
+            if let Some(project) = self.resume_project() {
+                drop(project.pin(self.installation.directory())?);
+            }
+            Ok(())
+        })
+    }
+
     /// A bounded wait/permission failure BEFORE installation may safely end
     /// the transaction only after proving the exact old installation intact.
     /// Never use this to disguise an ambiguous or started installer as canceled.
@@ -450,6 +503,29 @@ fn abort_waiting(
 ) -> io::Result<UpdateTransaction> {
     let mut state = store.read(&request.identity)?;
     require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    require_no_execution(store)?;
+    verify_original()?;
+    state.record_error(reason);
+    state.transition(UpdateStage::FailedBeforeApply)?;
+    store.write(&state)?;
+    Ok(state)
+}
+
+fn begin_applying(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    verify_readiness: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    require_no_execution(store)?;
+    verify_readiness()?;
+    state.transition(UpdateStage::Applying)?;
+    store.write(&state)?;
+    Ok(state)
+}
+
+fn require_no_execution(store: &TransactionStore) -> io::Result<()> {
     for name in [
         "apply-installer.json",
         "restore-installer.json",
@@ -458,14 +534,14 @@ fn abort_waiting(
         match fs::symlink_metadata(store.directory().join(name)) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
-            Ok(_) => return Err(invalid("execution evidence forbids pre-apply cancellation")),
+            Ok(_) => {
+                return Err(invalid(
+                    "execution evidence forbids a fresh pre-apply action",
+                ));
+            }
         }
     }
-    verify_original()?;
-    state.record_error(reason);
-    state.transition(UpdateStage::FailedBeforeApply)?;
-    store.write(&state)?;
-    Ok(state)
+    Ok(())
 }
 
 const RELEASE_LICENSE: &[u8] =
@@ -711,6 +787,60 @@ mod tests {
         let mut changed_license = self::request();
         changed_license.previous_license_sha256 = "e".repeat(64);
         assert!(changed_license.transaction().is_err());
+    }
+
+    #[test]
+    fn entering_apply_requires_fresh_waiting_and_all_readiness_checks() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-apply-gate-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let prepared = request.transaction().unwrap();
+        store.write(&prepared).unwrap();
+        assert!(begin_applying(&store, &request, || panic!("not waiting")).is_err());
+        let mut waiting = prepared;
+        waiting.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&waiting).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(begin_applying(&store, &foreign, || panic!("foreign request")).is_err());
+        assert!(begin_applying(&store, &request, || Err(invalid("readiness failed"))).is_err());
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial intent").unwrap();
+            assert!(
+                begin_applying(&store, &request, || panic!("execution already reserved")).is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial intent\"");
+            // Synthetic fixture cleanup only. Production never removes intent
+            // to retry or reclassify an interrupted update.
+            fs::remove_file(path).unwrap();
+        }
+        let applying = begin_applying(&store, &request, || Ok(())).unwrap();
+        assert_eq!(applying.stage(), UpdateStage::Applying);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        assert!(begin_applying(&store, &request, || panic!("must not replay")).is_err());
+        assert!(abort_waiting(&store, &request, "late cancellation", || Ok(())).is_err());
+        assert!(!root.join("apply-installer.json").exists());
+        assert!(!root.join("candidate-launch.json").exists());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
