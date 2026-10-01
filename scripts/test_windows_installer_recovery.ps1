@@ -8,7 +8,8 @@ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
 $MachineRegistration = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
-if ((Test-Path $Registration) -or (Test-Path $MachineRegistration)) {
+$MachineRegistration32 = 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
+if ((Test-Path $Registration) -or (Test-Path $MachineRegistration) -or (Test-Path $MachineRegistration32)) {
     throw 'Refusing to modify an existing Studio registration.'
 }
 $DesktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
@@ -70,7 +71,7 @@ function VerifyInstallation([string]$Directory, [string]$Version, [string]$Hash,
         $Record.UninstallString -notlike "*$Directory*unins000.exe*") {
         throw 'Uninstall registration did not retain version/path/identity.'
     }
-    if (Test-Path $MachineRegistration) { throw 'Installer changed to machine scope.' }
+    if ((Test-Path $MachineRegistration) -or (Test-Path $MachineRegistration32)) { throw 'Installer changed to machine scope.' }
     # Exercise production read-only native registry/Shell discovery, not a mock.
     $Discovery = & $Binary --check-update-installation | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $Discovery.product -ne 'instplot-studio' -or
@@ -98,6 +99,14 @@ function ExpectDiscoveryFailure([string]$Binary, [string]$Case) {
         -RedirectStandardOutput (Join-Path $EvidenceRoot "$Case-discovery.stdout.log") `
         -RedirectStandardError (Join-Path $EvidenceRoot "$Case-discovery.stderr.log")
     if ($Process.ExitCode -eq 0) { throw "Unsafe installation discovery succeeded: $Case" }
+}
+
+function RegistrationSnapshot {
+    if (-not (Test-Path $Registration)) { return 'absent' }
+    # Partial installation may have missing fields. Record that state rather
+    # than requiring a completed installation before testing its recovery.
+    return (Get-ItemProperty $Registration | Select-Object DisplayVersion, InstallLocation, UninstallString |
+        ConvertTo-Json -Compress)
 }
 
 Push-Location $RepositoryRoot
@@ -144,6 +153,35 @@ try {
     $OldInstaller = CompileInstaller $OldSource $CurrentVersion $Definition (Join-Path $TaskRoot 'old-setup')
     $NewInstaller = CompileInstaller $NewSource $NextVersion $NewDefinition (Join-Path $TaskRoot 'new-setup')
     $FaultInstaller = CompileInstaller $NewSource $NextVersion $FaultDefinition (Join-Path $TaskRoot 'fault-setup')
+    # Disposable fault installers only. AfterInstall/Win32 DLL declarations use
+    # Inno's documented script interfaces; none enter the product definition.
+    # https://jrsoftware.org/ishelp/topic_scriptinstall.htm
+    # https://jrsoftware.org/ishelp/topic_scriptdll.htm
+    $InterruptDefinition = Join-Path $TaskRoot 'interrupt.iss'
+    $AddedEntry = 'Source: "{#SourceDir}\update-added.bin"; DestDir: "{app}"; Flags: ignoreversion'
+    $InterruptContent = [IO.File]::ReadAllText($NewDefinition)
+    if (([regex]::Matches($InterruptContent, [regex]::Escape($AddedEntry))).Count -ne 1) {
+        throw 'Ambiguous interruption point; refuse to inject a different failure.'
+    }
+    $InterruptCode = @'
+
+[Code]
+procedure ExitProcess(ExitCode: Cardinal);
+  external 'ExitProcess@kernel32.dll stdcall';
+procedure InterruptAfterPayload;
+begin
+  if not SaveStringToFile(ExpandConstant('{app}\prototype-interrupted.txt'), 'after-payload', False) then
+    RaiseException('Cannot record interruption point');
+  ExitProcess(91);
+end;
+'@
+    [IO.File]::WriteAllText($InterruptDefinition,
+        $InterruptContent.Replace($AddedEntry, $AddedEntry + '; AfterInstall: InterruptAfterPayload') + $InterruptCode)
+    $FailedRecoveryDefinition = Join-Path $TaskRoot 'failed-recovery.iss'
+    [IO.File]::WriteAllText($FailedRecoveryDefinition, [IO.File]::ReadAllText($Definition) + "`n[Code]`n" +
+        "function InitializeSetup(): Boolean;`nbegin`n  Result := False;`nend;`n")
+    $InterruptInstaller = CompileInstaller $NewSource $NextVersion $InterruptDefinition (Join-Path $TaskRoot 'interrupt-setup')
+    $FailedRecoveryInstaller = CompileInstaller $OldSource $CurrentVersion $FailedRecoveryDefinition (Join-Path $TaskRoot 'failed-recovery-setup')
     # All recovery assets are available BEFORE mutating the installation.
     $OldInstallerHash = (Get-FileHash -Algorithm SHA256 $OldInstaller).Hash
     $Results = @()
@@ -202,6 +240,31 @@ try {
         $UserHash = (Get-FileHash -Algorithm SHA256 $UserFile).Hash
         Install $FaultInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-cancel.log") $true
         VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
+        # Abrupt exit AFTER real new payload copy, before the remaining install
+        # stages: do not substitute an early InitializeSetup cancellation.
+        Install $InterruptInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-interrupt.log") $true
+        $InterruptProof = Join-Path $InstallRoot 'prototype-interrupted.txt'
+        if (-not (Test-Path $InterruptProof) -or [IO.File]::ReadAllText($InterruptProof) -ne 'after-payload') {
+            throw 'Installer did not reach the specified post-payload interruption point.'
+        }
+        ProductIdentity (Join-Path $InstallRoot 'instplot-studio.exe') $NextVersion
+        if ((Get-FileHash -Algorithm SHA256 (Join-Path $InstallRoot 'instplot-studio.exe')).Hash -ne $NewHash -or
+            (Get-FileHash -Algorithm SHA256 (Join-Path $InstallRoot 'update-added.bin')).Hash -ne $AddedHash) {
+            throw 'Interruption did not leave the recorded new payload.'
+        }
+        $InterruptedRecord = RegistrationSnapshot
+        Install $FailedRecoveryInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-failed-recovery.log") $true
+        if ((Get-FileHash -Algorithm SHA256 (Join-Path $InstallRoot 'instplot-studio.exe')).Hash -ne $NewHash -or
+            (RegistrationSnapshot) -ne $InterruptedRecord -or
+            (Get-FileHash -Algorithm SHA256 $UserFile).Hash -ne $UserHash -or
+            (Get-FileHash -Algorithm SHA256 $OldInstaller).Hash -ne $OldInstallerHash) {
+            throw 'Failed recovery changed the partial install/user data or lost its hash-verified recovery fixture.'
+        }
+        # A later explicit fixture recovery, not an automatic retry loop.
+        Install $OldInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-interrupted-restore.log")
+        VerifyInstallation $InstallRoot $CurrentVersion $OldHash $Desktop
+        RemoveAddedFile $InstallRoot $AddedHash
+        if ((Get-FileHash -Algorithm SHA256 $UserFile).Hash -ne $UserHash) { throw 'Interrupted recovery modified user data.' }
         Install $NewInstaller $InstallRoot $Desktop (Join-Path $EvidenceRoot "$Name-new.log")
         VerifyInstallation $InstallRoot $NextVersion $NewHash $Desktop
         if (-not (Test-Path (Join-Path $InstallRoot 'update-added.bin'))) { throw 'New release file missing.' }
@@ -212,6 +275,20 @@ try {
         if (-not (Test-Path (Join-Path $InstallRoot 'update-added.bin'))) {
             throw 'Expected leftover release file not found; review recovery assumption.'
         }
+        $AddedFile = Join-Path $InstallRoot 'update-added.bin'
+        [IO.File]::WriteAllText($AddedFile, 'modified fixture file must not be deleted')
+        $ModifiedHash = (Get-FileHash -Algorithm SHA256 $AddedFile).Hash
+        $CleanupRejected = $false
+        try { RemoveAddedFile $InstallRoot $AddedHash }
+        catch {
+            if ($_.Exception.ToString() -notmatch 'New release file changed') { throw }
+            $CleanupRejected = $true
+        }
+        if (-not $CleanupRejected -or -not (Test-Path $AddedFile) -or
+            (Get-FileHash -Algorithm SHA256 $AddedFile).Hash -ne $ModifiedHash) {
+            throw 'Modified release file was deleted or changed by cleanup.'
+        }
+        Copy-Item (Join-Path $NewSource 'update-added.bin') $AddedFile
         RemoveAddedFile $InstallRoot $AddedHash
         if ((Get-FileHash -Algorithm SHA256 $UserFile).Hash -ne $UserHash) { throw 'User file was modified.' }
         Checked (Join-Path $InstallRoot 'instplot-studio.exe') @('--export-fixed-png', (Join-Path $EvidenceRoot "$Name-restored.png"))
@@ -226,6 +303,9 @@ try {
             native_registry_and_shortcut_discovery = $true;
             portable_and_conflicting_registry_rejected = $true;
             installer_cancel_kept_old = $true; rollback_identity_and_hash = $true;
+            interrupted_after_payload_restored = $true;
+            failed_recovery_kept_assets_and_user_data = $true;
+            modified_added_file_cleanup_rejected = $true;
             added_file_hash_cleanup = $true; user_data_preserved = $true; uninstall_verified = $true }
     }
     @{ product = 'instplot-studio'; scope = 'installer-recovery-prototype-not-GUI-updater';
