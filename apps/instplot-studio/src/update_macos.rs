@@ -217,47 +217,11 @@ pub(super) fn prepare(
     fs::write(directory.join(".metadata_never_index"), []).map_err(error)?;
     let store = TransactionStore::lock(&directory).map_err(error)?;
     store.write(&transaction).map_err(error)?;
-    let mount = directory.join("mount");
-    private_directory(&mount)?;
-    run(
-        "/usr/bin/hdiutil",
-        &[
-            "attach".as_ref(),
-            "-readonly".as_ref(),
-            "-nobrowse".as_ref(),
-            "-mountpoint".as_ref(),
-            mount.as_os_str(),
-            package_path.as_os_str(),
-        ],
+    let candidate_binary_hash = stage_dmg(
+        &directory,
+        package_path,
+        &transaction.identity().candidate_version,
     )?;
-    let staged = (|| {
-        let source = mount.join("InstPlot Studio.app");
-        verify_bundle(&source, &transaction.identity().candidate_version, None)?;
-        let source_hash = digest(&source.join(EXECUTABLE))?;
-        run(
-            "/usr/bin/ditto",
-            &[
-                source.as_os_str(),
-                directory.join("candidate.app").as_os_str(),
-            ],
-        )?;
-        verify_bundle(
-            &directory.join("candidate.app"),
-            &transaction.identity().candidate_version,
-            Some(&source_hash),
-        )?;
-        let protocol = output(
-            &directory.join("candidate.app").join(EXECUTABLE),
-            &["--update-protocol".as_ref()],
-        )?;
-        if protocol.trim() != "1" {
-            return Err("候选应用不支持本次安全更新协议。".to_owned());
-        }
-        Ok(source_hash)
-    })();
-    let detached = run("/usr/bin/hdiutil", &["detach".as_ref(), mount.as_os_str()]);
-    let candidate_binary_hash = staged?;
-    detached?;
     let previous_binary_hash = digest(&target.join(EXECUTABLE))?;
     let helper = directory.join("update-helper");
     fs::copy(target.join(EXECUTABLE), &helper).map_err(error)?;
@@ -273,6 +237,79 @@ pub(super) fn prepare(
     };
     prepared.write_request()?;
     Ok(prepared)
+}
+
+// Called only after signed package/version/hash checks. Keep mounting, copying
+// and detaching together so both accepted and rejected bundles unmount.
+fn stage_dmg(
+    directory: &Path,
+    package_path: &Path,
+    candidate_version: &str,
+) -> Result<String, String> {
+    let mount = directory.join("mount");
+    private_directory(&mount)?;
+    run(
+        "/usr/bin/hdiutil",
+        &[
+            "attach".as_ref(),
+            "-readonly".as_ref(),
+            "-nobrowse".as_ref(),
+            "-mountpoint".as_ref(),
+            mount.as_os_str(),
+            package_path.as_os_str(),
+        ],
+    )?;
+    let staged = (|| {
+        let source = mount.join("InstPlot Studio.app");
+        verify_bundle_static(&source, candidate_version, None)?;
+        let source_hash = digest(&source.join(EXECUTABLE))?;
+        run(
+            "/usr/bin/ditto",
+            &[
+                source.as_os_str(),
+                directory.join("candidate.app").as_os_str(),
+            ],
+        )?;
+        verify_bundle_static(
+            &directory.join("candidate.app"),
+            candidate_version,
+            Some(&source_hash),
+        )?;
+        Ok(source_hash)
+    })();
+    let detached = detach_dmg(&mount);
+    let hash = match (staged, detached) {
+        (Ok(hash), Ok(())) => Ok(hash),
+        (Err(stage), Ok(())) => Err(stage),
+        (Ok(_), Err(detach)) => Err(detach),
+        (Err(stage), Err(detach)) => {
+            Err(format!("{stage}\n映像未正常卸载，保留暂存目录：{detach}"))
+        }
+    }?;
+    // Do not execute from the mounted image: system security assessment can
+    // prevent its normal ejection. Preserve ditto's metadata and verify the
+    // local copy completely before running either bounded identity probe.
+    let candidate = directory.join("candidate.app");
+    verify_bundle(&candidate, candidate_version, Some(&hash))?;
+    let protocol = output(&candidate.join(EXECUTABLE), &["--update-protocol".as_ref()])?;
+    if protocol.trim() != "1" {
+        return Err("候选应用不支持本次安全更新协议。".to_owned());
+    }
+    Ok(hash)
+}
+
+fn detach_dmg(mount: &Path) -> Result<(), String> {
+    let started = Instant::now();
+    for attempt in 0..3 {
+        match run("/usr/bin/hdiutil", &["detach".as_ref(), mount.as_os_str()]) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == 2 || started.elapsed() >= Duration::from_secs(5) => {
+                return Err(error);
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+    unreachable!("bounded detach attempts always return")
 }
 
 impl PreparedMacUpdate {
@@ -593,6 +630,19 @@ fn load_request(directory: &Path) -> Result<PreparedMacUpdate, String> {
 }
 
 fn verify_bundle(path: &Path, version: &str, expected_hash: Option<&str>) -> Result<(), String> {
+    verify_bundle_static(path, version, expected_hash)?;
+    let identity = output(&path.join(EXECUTABLE), &["--product-info".as_ref()])?;
+    if identity.trim() != format!("InstPlot Studio\tinstplot-studio\t{version}") {
+        return Err("应用产品或版本不匹配。".into());
+    }
+    Ok(())
+}
+
+fn verify_bundle_static(
+    path: &Path,
+    version: &str,
+    expected_hash: Option<&str>,
+) -> Result<(), String> {
     if !fs::symlink_metadata(path).map_err(error)?.is_dir() {
         return Err("应用 bundle 无效。".into());
     }
@@ -644,10 +694,6 @@ fn verify_bundle(path: &Path, version: &str, expected_hash: Option<&str>) -> Res
     )?;
     if architecture.trim() != "arm64" {
         return Err("更新包不是 macOS arm64。".into());
-    }
-    let identity = output(&executable, &["--product-info".as_ref()])?;
-    if identity.trim() != format!("InstPlot Studio\tinstplot-studio\t{version}") {
-        return Err("应用产品或版本不匹配。".into());
     }
     Ok(())
 }
@@ -843,7 +889,25 @@ mod tests {
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
-            fs::remove_dir_all(&self.root).unwrap();
+            // A failed test may leave its own read-only DMG mounted. Never
+            // recursively traverse that mount or panic again during unwinding.
+            if let Ok(entries) = fs::read_dir(&self.root) {
+                for entry in entries.flatten() {
+                    let mount = entry.path().join("mount");
+                    if mount.join("InstPlot Studio.app").exists()
+                        && let Err(error) = detach_dmg(&mount)
+                    {
+                        eprintln!(
+                            "Retaining mounted test fixture {}: {error}",
+                            self.root.display()
+                        );
+                        return;
+                    }
+                }
+            }
+            if let Err(error) = fs::remove_dir_all(&self.root) {
+                eprintln!("Retaining test fixture {}: {error}", self.root.display());
+            }
         }
     }
 
@@ -930,5 +994,48 @@ mod tests {
         let link = fixture.root.join("link");
         std::os::unix::fs::symlink(file, &link).unwrap();
         assert!(read_bounded(&link, 10).is_err());
+    }
+
+    #[test]
+    fn real_dmg_staging_preserves_identity_and_detaches_after_rejection() {
+        let fixture = Fixture::new();
+        let source_dir = fixture.root.join("source 数据");
+        fs::create_dir(&source_dir).unwrap();
+        let source = fixture.bundle("source 数据/InstPlot Studio.app", "0.1.3-rc.2");
+        let source_hash = digest(&source.join(EXECUTABLE)).unwrap();
+        let dmg = fixture.root.join("candidate 数据.dmg");
+        run(
+            "/usr/bin/hdiutil",
+            &[
+                "create".as_ref(),
+                "-format".as_ref(),
+                "UDZO".as_ref(),
+                "-fs".as_ref(),
+                "HFS+".as_ref(),
+                "-volname".as_ref(),
+                "Studio QA".as_ref(),
+                "-srcfolder".as_ref(),
+                source_dir.as_os_str(),
+                dmg.as_os_str(),
+            ],
+        )
+        .unwrap();
+        let accepted = fixture.root.join("accepted");
+        private_directory(&accepted).unwrap();
+        let staged = stage_dmg(&accepted, &dmg, "0.1.3-rc.2");
+        assert_eq!(staged.unwrap(), source_hash);
+        verify_bundle(
+            &accepted.join("candidate.app"),
+            "0.1.3-rc.2",
+            Some(&source_hash),
+        )
+        .unwrap();
+        assert!(!accepted.join("mount/InstPlot Studio.app").exists());
+        let rejected = fixture.root.join("rejected");
+        private_directory(&rejected).unwrap();
+        assert!(stage_dmg(&rejected, &dmg, "0.1.3-rc.3").is_err());
+        assert!(!rejected.join("candidate.app").exists());
+        assert!(!rejected.join("mount/InstPlot Studio.app").exists());
+        assert_eq!(digest(&source.join(EXECUTABLE)).unwrap(), source_hash);
     }
 }
