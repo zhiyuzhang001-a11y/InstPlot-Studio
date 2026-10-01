@@ -6,6 +6,13 @@ All notable changes to InstPlot Studio are recorded here.
 
 No changes yet.
 
+## [0.1.2-rc.2] - 2026-10-01
+
+### Fixed
+
+- Use Studio's existing dark interface on Windows, macOS and Linux regardless of the operating
+  system theme. Panels, controls and text use the same dark palette; plot canvases remain white.
+
 ## [0.1.2-rc.1] - 2026-09-29
 
 ### Added

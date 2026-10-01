@@ -1885,7 +1885,7 @@ source = "git+https://github.com/zhiyuzhang001-a11y/InstPlot-Lite.git?rev=80ad37
 
 [[package]]
 name = "instplot-demo"
-version = "0.1.2-rc.1"
+version = "0.1.2-rc.2"
 dependencies = [
  "instplot-studio",
  "instplot-ui",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "instplot-layout"
-version = "0.1.2-rc.1"
+version = "0.1.2-rc.2"
 dependencies = [
  "instplot-export",
  "instplot-render",
@@ -1942,7 +1942,7 @@ dependencies = [
 
 [[package]]
 name = "instplot-studio"
-version = "0.1.2-rc.1"
+version = "0.1.2-rc.2"
 dependencies = [
  "atomicwrites",
  "directories",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "instplot-update-signature"
-version = "0.1.2-rc.1"
+version = "0.1.2-rc.2"
 dependencies = [
  "ed25519-dalek",
 ]

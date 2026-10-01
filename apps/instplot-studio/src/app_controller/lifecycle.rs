@@ -6,6 +6,8 @@ impl StudioApp {
         started: Instant,
         startup: Option<HandoffImport>,
     ) -> Self {
+        // Keep Studio's dark interface consistent across operating system themes.
+        creation.egui_ctx.set_theme(egui::ThemePreference::Dark);
         creation.egui_ctx.options_mut(|options| {
             options.zoom_with_keyboard = true;
         });
