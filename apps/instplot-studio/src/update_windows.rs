@@ -79,7 +79,9 @@ pub use journal::{InstallerAttemptStatus, installer_attempt_status, refresh_inst
 #[path = "update_windows/candidate.rs"]
 mod candidate;
 #[cfg(windows)]
-pub use candidate::{WindowsCandidateLaunch, WindowsHealthFrame, WindowsHealthStartup};
+pub use candidate::{
+    WindowsCandidateLaunch, WindowsCandidateProcess, WindowsHealthFrame, WindowsHealthStartup,
+};
 
 #[cfg(windows)]
 #[path = "update_windows/cache.rs"]

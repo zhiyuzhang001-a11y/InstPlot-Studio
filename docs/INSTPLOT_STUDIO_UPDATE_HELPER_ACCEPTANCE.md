@@ -235,3 +235,11 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 安装前中止新增助手接口：必须仍为 WaitingForExit、没有 apply/restore 安装器意图或候选启动记录，且原生旧安装及固定原版文件复核通过，才能持久 FailedBeforeApply（不是 Completed/RolledBack）。任一不确定执行证据存在时保留原状态/证据，不冒称取消成功；原因限额与 nonce 脱敏沿用共用事务。普通窗口允许严格 FailedBeforeApply 终态，修正早期启动保护遗漏该终态的问题。新增测试涵盖原版核验失败、部分执行记录、重复中止、Applying 中止拒绝与安全终态启动。
 
 本地启动参数两项通过，Studio 全特性库回归 217 通过/1 忽略、GUI binary 114 通过，工作区全目标全特性 Clippy 与实际 Windows 库源/测试交叉 Clippy 通过。Windows 新 GUI 二进制编译/测试待 required CI；未进行 Windows 实机 GUI 更新或本机锁屏绕过。完整助手执行、单次实际候选启动、失败恢复和剩余 macOS 真实按钮验收仍未完成，不开放默认入口、不合并或发布。
+
+# Windows 路径边界修复与独占候选启动
+
+`45cae5b` 的 Windows quality 运行 `36929863421` 因保存项目库测试失败；audit 运行 `36929863534` 的 formal-workspace-tests 亦失败，摘要没有单项断言，不借此宣称所有 audit 故障已解决；macOS/Linux quality 通过。quality 失败断言为安装目录内项目必须拒绝：项目路径 canonicalize 后带 Windows verbatim 前缀，调用者给出的安装目录仍为 DOS 写法，直接 starts_with 错误放行。capture/pin 现在均拒绝重定向安装路径并规范化安装目录后比较路径组件，补充 DOS/canonical 两种写法及 pin 拒绝测试。候选项目测试建立真实安装目录，不削弱生产要求。修复后的 Windows 运行证据仍待新 CI。
+
+候选启动新增消耗单次预留及排他锁的 owned-process 接口：仅核验安装器成功与原生安装后的公开预留可启动；固定健康参数，不使用 shell。释放排他锁后由已认证候选取得共享锁，普通窗口仍被活动事务挡住。CreateProcess 成功后即使绑定或写盘失败也保留 Child 和租约，不重试、不强杀；失败/退出不算健康。恢复前必须先取得真实 owned Child 退出证据并持久写入，或记录确定的 CreateProcess 失败，再释放二进制租约；损坏记录拒绝，不据此自动重放或宣布恢复成功。
+
+新增原生测试覆盖真实启动失败、真实测试进程提前退出和注入启动后检查点失败；测试进程不是 Studio GUI。实际 Windows 库及测试交叉 Clippy、工作区全目标全特性 Clippy 已通过；Windows 运行及完整助手/恢复 GUI 链仍待验收。默认入口关闭、协议 0，不合并、不发布、不替换 Spotlight、不清理恢复证据。

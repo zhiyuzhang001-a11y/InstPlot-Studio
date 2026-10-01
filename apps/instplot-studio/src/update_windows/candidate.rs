@@ -6,7 +6,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
-use std::process::Child;
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
@@ -69,6 +69,70 @@ pub struct WindowsCandidateLaunch<'a> {
 }
 
 impl<'a> WindowsCandidateLaunch<'a> {
+    /// Consumes the one-shot reservation AND installation exclusion. All
+    /// post-CreateProcess errors return the owned process object, never discard
+    /// its Child or leases. The ordinary-GUI journal gate covers the lock handoff.
+    pub fn spawn_once(
+        self,
+        access: WindowsInstallAccess,
+    ) -> io::Result<WindowsCandidateProcess<'a>> {
+        if self._candidate_lease.is_none() {
+            return Err(invalid(
+                "candidate launch requires its verified package lease",
+            ));
+        }
+        self.spawn_reserved(access)
+    }
+
+    fn spawn_reserved(
+        self,
+        access: WindowsInstallAccess,
+    ) -> io::Result<WindowsCandidateProcess<'a>> {
+        self.spawn_reserved_with(access, |launch, child| launch.bind_child(child).map(|_| ()))
+    }
+
+    fn spawn_reserved_with(
+        mut self,
+        access: WindowsInstallAccess,
+        bind: impl FnOnce(&mut Self, &Child) -> io::Result<()>,
+    ) -> io::Result<WindowsCandidateProcess<'a>> {
+        access.require_exclusive(&self.record.identity.installed_path)?;
+        let state = self.store.read(&self.record.identity)?;
+        self.require_record(&state)?;
+        if state.stage() != UpdateStage::Applying
+            || self.record.process.is_some()
+            || self.process.is_some()
+        {
+            return Err(invalid(
+                "candidate launch is not a fresh applying reservation",
+            ));
+        }
+        let log =
+            super::create_private_file(&self.store.directory().join("candidate-startup.log"))?;
+        let stdout = log.try_clone()?;
+        // The candidate needs shared access. Do not hold installation exclusion
+        // across its GUI startup, and never let the installer start it as well.
+        drop(access);
+        let result = Command::new(&self.record.executable)
+            .arg("--update-health")
+            .arg(self.store.directory())
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(log))
+            .spawn();
+        let (child, checkpoint_error) = match result {
+            Ok(child) => {
+                let error = bind(&mut self, &child).err().map(|error| error.to_string());
+                (Some(child), error)
+            }
+            Err(error) => (None, Some(error.to_string())),
+        };
+        Ok(WindowsCandidateProcess {
+            launch: self,
+            child,
+            checkpoint_error,
+        })
+    }
     /// Reserve BEFORE CreateProcess, only after a durable successful installer
     /// exit and native installed identity verification. This is NOT a product/
     /// protocol probe or permission to skip release-file/configuration checks.
@@ -257,6 +321,121 @@ impl<'a> WindowsCandidateLaunch<'a> {
             return Err(invalid("candidate is still running"));
         }
         self._binary_lease.take();
+        Ok(())
+    }
+}
+
+/// Owns the actual candidate child even when launch checkpointing fails. No
+/// method retries spawning, kills it, or treats exit/spawn as GUI health.
+pub struct WindowsCandidateProcess<'a> {
+    launch: WindowsCandidateLaunch<'a>,
+    child: Option<Child>,
+    checkpoint_error: Option<String>,
+}
+
+impl WindowsCandidateProcess<'_> {
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
+    }
+    pub fn checkpoint_error(&self) -> Option<&str> {
+        self.checkpoint_error.as_deref()
+    }
+
+    /// Actual owned-handle observation, NOT durable permission to restore.
+    /// None-child here is known CreateProcess failure, never a guessed missing PID.
+    pub fn owned_process_exited(&mut self) -> io::Result<bool> {
+        match self.child.as_mut() {
+            Some(child) => Ok(child.try_wait()?.is_some()),
+            None => Ok(true),
+        }
+    }
+
+    pub fn accept_health(&mut self) -> io::Result<()> {
+        if self.child.is_none() || self.checkpoint_error.is_some() || self.owned_process_exited()? {
+            return Err(invalid(
+                "candidate has no live successfully checkpointed child",
+            ));
+        }
+        self.launch.accept_health()
+    }
+
+    pub fn request_normal_exit(&mut self) -> io::Result<()> {
+        if self.owned_process_exited()? {
+            return Ok(());
+        }
+        let state = self.launch.store.read(&self.launch.record.identity)?;
+        self.launch.require_record(&state)?;
+        if self.checkpoint_error.is_some() || self.launch.record.process.is_none() {
+            return Err(invalid(
+                "unbound candidate must retain its native witness for inspection",
+            ));
+        }
+        let path = self.launch.store.directory().join("stop-requested.json");
+        if path.try_exists()? {
+            if !read_private_json::<bool>(&path, 16)? {
+                return Err(invalid("invalid stop request"));
+            }
+            return Ok(());
+        }
+        let mut file = super::create_private_file(&path)?;
+        file.write_all(b"true")?;
+        file.sync_all()
+    }
+
+    pub fn release_binary_after_exit(&mut self) -> io::Result<()> {
+        if !self.owned_process_exited()? {
+            return Err(invalid("candidate is still running"));
+        }
+        if let Some(child) = self.child.as_mut() {
+            let state = self.launch.store.read(&self.launch.record.identity)?;
+            self.launch.require_record(&state)?;
+            let status = child
+                .try_wait()?
+                .ok_or_else(|| invalid("candidate is still running"))?;
+            // Retained Child HANDLE, not PID lookup. This also covers a candidate
+            // that died before bind_child could record a still-live witness.
+            let created = super::process::child_process_created(child)?;
+            #[derive(Serialize)]
+            struct OwnedExit<'a> {
+                launch: &'a LaunchRecord,
+                process_id: u32,
+                created: u64,
+                exit_code: i32,
+            }
+            let evidence = OwnedExit {
+                launch: &self.launch.record,
+                process_id: child.id(),
+                created,
+                exit_code: status
+                    .code()
+                    .ok_or_else(|| invalid("candidate exit code unavailable"))?,
+            };
+            let mut file = super::create_private_file(
+                &self
+                    .launch
+                    .store
+                    .directory()
+                    .join("candidate-owned-exit.json"),
+            )?;
+            file.write_all(&serde_json::to_vec(&evidence).map_err(invalid)?)?;
+            file.sync_all()?;
+            self.launch._binary_lease.take();
+            return Ok(());
+        }
+        let state = self.launch.store.read(&self.launch.record.identity)?;
+        self.launch.require_record(&state)?;
+        if self.launch.record.process.is_some() || self.launch.process.is_some() {
+            return Err(invalid("unexpected process after failed CreateProcess"));
+        }
+        let path = self
+            .launch
+            .store
+            .directory()
+            .join("candidate-not-started.json");
+        let mut file = super::create_private_file(&path)?;
+        file.write_all(&serde_json::to_vec(&self.launch.record).map_err(invalid)?)?;
+        file.sync_all()?;
+        self.launch._binary_lease.take();
         Ok(())
     }
 }
@@ -783,6 +962,7 @@ mod tests {
         let state = fixture.transaction();
         store.write(&state).unwrap();
         let project = fixture.0.join("待恢复 项目.instplot");
+        super::super::create_private_directory(&state.identity().installed_path).unwrap();
         crate::FigureDocument::showcase().save(&project).unwrap();
         let (resume, original_lease) =
             super::super::WindowsResumeProject::capture(&project, &state.identity().installed_path)
@@ -802,6 +982,92 @@ mod tests {
         )
         .unwrap();
         assert!(launch.require_record(&state).is_err());
+    }
+
+    #[test]
+    fn actual_spawn_failure_is_not_health_and_cannot_be_replayed() {
+        let fixture = Fixture::new();
+        let store = TransactionStore::lock(&fixture.0).unwrap();
+        let state = fixture.transaction();
+        let target = &state.identity().installed_path;
+        super::super::create_private_directory(target).unwrap();
+        let locks = fixture.0.join("locks");
+        super::super::create_private_directory(&locks).unwrap();
+        store.write(&state).unwrap();
+        let exe = target.join("not-an-executable.exe");
+        let mut file = super::super::create_private_file(&exe).unwrap();
+        file.write_all(b"not a PE program").unwrap();
+        drop(file);
+        let launch = WindowsCandidateLaunch::begin(&store, &state, exe.clone()).unwrap();
+        let access = WindowsInstallAccess::acquire(target, &locks, true).unwrap();
+        // Private fixture adapter only: no signed package/native installation.
+        let mut process = launch.spawn_reserved(access).unwrap();
+        assert!(process.process_id().is_none());
+        assert!(process.checkpoint_error().is_some());
+        assert!(process.owned_process_exited().unwrap());
+        assert!(process.accept_health().is_err());
+        process.release_binary_after_exit().unwrap();
+        assert!(fixture.0.join("candidate-not-started.json").exists());
+        assert!(!fixture.0.join("health.json").exists());
+        assert!(WindowsCandidateLaunch::begin(&store, &state, exe).is_err());
+        assert_eq!(
+            store.read(state.identity()).unwrap().stage(),
+            UpdateStage::Applying
+        );
+    }
+
+    #[test]
+    fn actual_early_child_exit_is_retained_and_never_health() {
+        let fixture = Fixture::new();
+        let store = TransactionStore::lock(&fixture.0).unwrap();
+        let state = fixture.transaction();
+        let target = &state.identity().installed_path;
+        super::super::create_private_directory(target).unwrap();
+        let locks = fixture.0.join("locks");
+        super::super::create_private_directory(&locks).unwrap();
+        store.write(&state).unwrap();
+        let launch = WindowsCandidateLaunch::begin(&store, &state, executable()).unwrap();
+        let access = WindowsInstallAccess::acquire(target, &locks, true).unwrap();
+        // Real harness Child rejects the GUI flag and exits; NOT Studio GUI.
+        let mut process = launch
+            .spawn_reserved_with(access, |_, _| {
+                Err(invalid("injected post-spawn checkpoint failure"))
+            })
+            .unwrap();
+        assert!(process.process_id().is_some());
+        assert_eq!(
+            process.checkpoint_error(),
+            Some("injected post-spawn checkpoint failure")
+        );
+        let started = Instant::now();
+        while !process.owned_process_exited().unwrap() {
+            assert!(started.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(process.accept_health().is_err());
+        // Native exit alone must not release protection when the durable
+        // launch identity changed. Preserve the lease and inspection evidence.
+        let launch_path = fixture.0.join("candidate-launch.json");
+        let original = std::fs::read(&launch_path).unwrap();
+        let mut foreign = process.launch.record.clone();
+        foreign.binary_sha256 = "0".repeat(64);
+        super::super::write_private_atomic(&launch_path, &serde_json::to_vec(&foreign).unwrap())
+            .unwrap();
+        assert!(process.release_binary_after_exit().is_err());
+        assert!(process.launch._binary_lease.is_some());
+        assert!(!fixture.0.join("candidate-owned-exit.json").exists());
+        // Restore only this synthetic test record, never repair production
+        // evidence automatically.
+        super::super::write_private_atomic(&launch_path, &original).unwrap();
+        process.release_binary_after_exit().unwrap();
+        assert!(fixture.0.join("candidate-owned-exit.json").exists());
+        assert!(process.release_binary_after_exit().is_err());
+        assert!(!fixture.0.join("health.json").exists());
+        assert!(WindowsCandidateLaunch::begin(&store, &state, executable()).is_err());
+        assert_ne!(
+            store.read(state.identity()).unwrap().stage(),
+            UpdateStage::Completed
+        );
     }
 
     #[test]

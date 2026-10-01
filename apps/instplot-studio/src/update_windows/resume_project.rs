@@ -20,7 +20,11 @@ impl WindowsResumeProject {
     pub(super) fn capture(path: &Path, installation: &Path) -> io::Result<(Self, File)> {
         super::reject_redirected_path(path)?;
         let path = std::fs::canonicalize(path)?;
-        if path.starts_with(installation) {
+        // canonicalize adds Windows' verbatim prefix. Normalize BOTH paths
+        // before comparing components, including caller-supplied DOS paths.
+        super::reject_redirected_path(installation)?;
+        let installation = std::fs::canonicalize(installation)?;
+        if path.starts_with(&installation) {
             return Err(super::invalid(
                 "resume project cannot be inside the installation",
             ));
@@ -35,7 +39,9 @@ impl WindowsResumeProject {
     }
 
     pub(super) fn pin(&self, installation: &Path) -> io::Result<File> {
-        if self.path.starts_with(installation)
+        super::reject_redirected_path(installation)?;
+        let installation = std::fs::canonicalize(installation)?;
+        if self.path.starts_with(&installation)
             || std::fs::canonicalize(&self.path)? != self.path
             || self.sha256.len() != 64
             || !self
@@ -139,6 +145,10 @@ mod tests {
         wrong.sha256 = "0".repeat(64);
         assert!(wrong.pin(&installation).is_err());
         assert!(WindowsResumeProject::capture(&path, &root).is_err());
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        assert!(WindowsResumeProject::capture(&path, &canonical_root).is_err());
+        assert!(bound.pin(&root).is_err());
+        assert!(bound.pin(&canonical_root).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), before);
         drop(lease);
         std::fs::write(&path, b"corrupt").unwrap();
