@@ -70,6 +70,12 @@ mod journal;
 pub use journal::{InstallerAttemptStatus, installer_attempt_status, refresh_installer_attempt};
 
 #[cfg(windows)]
+#[path = "update_windows/candidate.rs"]
+mod candidate;
+#[cfg(windows)]
+pub use candidate::WindowsCandidateLaunch;
+
+#[cfg(windows)]
 #[path = "update_windows/cache.rs"]
 mod cache;
 #[cfg(windows)]
