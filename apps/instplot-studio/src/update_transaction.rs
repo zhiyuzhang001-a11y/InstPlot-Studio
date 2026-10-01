@@ -201,20 +201,14 @@ impl UpdateTransaction {
     }
 
     pub fn accept_health(&mut self, receipt: &HealthReceipt) -> io::Result<()> {
-        let expected_process = Some((receipt.process_id, receipt.process_started.clone()));
-        if self.stage != UpdateStage::AwaitingHealth
-            || receipt.transaction_id != self.id
-            || receipt.nonce != self.nonce
-            || receipt.product != self.identity.product
-            || receipt.platform != self.identity.platform
-            || receipt.version != self.identity.candidate_version
-            || receipt.installed_path != self.identity.installed_path
-            || expected_process != self.candidate_process
-            || !receipt.initialized
-            || !receipt.window_ready
-        {
+        if self.stage != UpdateStage::AwaitingHealth {
             return Err(invalid("unmatched or incomplete update health receipt"));
         }
+        self.require_health_payload(
+            receipt,
+            &self.identity.candidate_version,
+            self.bound_candidate(),
+        )?;
         self.stage = UpdateStage::Completed;
         Ok(())
     }
@@ -228,23 +222,74 @@ impl UpdateTransaction {
         receipt: &HealthReceipt,
         recovered_process: (u32, &str),
     ) -> io::Result<()> {
-        if self.stage != UpdateStage::Restoring
-            || recovered_process.0 == 0
-            || recovered_process.1.is_empty()
-            || receipt.transaction_id != self.id
+        if self.stage != UpdateStage::Restoring {
+            return Err(invalid("unmatched or incomplete recovery health receipt"));
+        }
+        self.require_health_payload(
+            receipt,
+            &self.identity.previous_version,
+            Some(recovered_process),
+        )?;
+        self.stage = UpdateStage::RolledBack;
+        Ok(())
+    }
+
+    /// Read-only verification after a possibly lost write acknowledgement.
+    /// Platform code must additionally verify its retained live native witness.
+    pub fn verify_committed_health(&self, receipt: &HealthReceipt) -> io::Result<()> {
+        if self.stage != UpdateStage::Completed {
+            return Err(invalid("candidate health is not durably committed"));
+        }
+        self.require_health_payload(
+            receipt,
+            &self.identity.candidate_version,
+            self.bound_candidate(),
+        )
+    }
+
+    pub fn verify_committed_recovery_health(
+        &self,
+        receipt: &HealthReceipt,
+        recovered_process: (u32, &str),
+    ) -> io::Result<()> {
+        if self.stage != UpdateStage::RolledBack {
+            return Err(invalid("recovery health is not durably committed"));
+        }
+        self.require_health_payload(
+            receipt,
+            &self.identity.previous_version,
+            Some(recovered_process),
+        )
+    }
+
+    fn bound_candidate(&self) -> Option<(u32, &str)> {
+        self.candidate_process
+            .as_ref()
+            .map(|(pid, start)| (*pid, start.as_str()))
+    }
+
+    fn require_health_payload(
+        &self,
+        receipt: &HealthReceipt,
+        version: &str,
+        process: Option<(u32, &str)>,
+    ) -> io::Result<()> {
+        if !process.is_some_and(|(pid, start)| {
+            pid > 0
+                && !start.is_empty()
+                && receipt.process_id == pid
+                && receipt.process_started == start
+        }) || receipt.transaction_id != self.id
             || receipt.nonce != self.nonce
             || receipt.product != self.identity.product
             || receipt.platform != self.identity.platform
-            || receipt.version != self.identity.previous_version
+            || receipt.version != version
             || receipt.installed_path != self.identity.installed_path
-            || receipt.process_id != recovered_process.0
-            || receipt.process_started != recovered_process.1
             || !receipt.initialized
             || !receipt.window_ready
         {
-            return Err(invalid("unmatched or incomplete recovery health receipt"));
+            return Err(invalid("unmatched or incomplete health payload"));
         }
-        self.stage = UpdateStage::RolledBack;
         Ok(())
     }
 
@@ -498,7 +543,13 @@ mod tests {
         let mut bad = valid.clone();
         bad.window_ready = false;
         assert!(state.accept_health(&bad).is_err());
+        assert!(state.verify_committed_health(&valid).is_err());
         state.accept_health(&valid).unwrap();
+        assert_eq!(state.stage(), UpdateStage::Completed);
+        state.verify_committed_health(&valid).unwrap();
+        state.verify_committed_health(&valid).unwrap();
+        assert!(state.verify_committed_health(&bad).is_err());
+        assert!(state.accept_health(&valid).is_err());
         assert_eq!(state.stage(), UpdateStage::Completed);
         assert!(state.transition(UpdateStage::Restoring).is_err());
     }
@@ -562,8 +613,25 @@ mod tests {
                 .accept_recovery_health(&valid, (witness.0, ""))
                 .is_err()
         );
+        assert!(
+            state
+                .verify_committed_recovery_health(&valid, witness)
+                .is_err()
+        );
         state.accept_recovery_health(&valid, witness).unwrap();
         assert_eq!(state.stage(), UpdateStage::RolledBack);
+        state
+            .verify_committed_recovery_health(&valid, witness)
+            .unwrap();
+        state
+            .verify_committed_recovery_health(&valid, witness)
+            .unwrap();
+        assert!(state.verify_committed_health(&valid).is_err());
+        assert!(
+            state
+                .verify_committed_recovery_health(&valid, (24, witness.1))
+                .is_err()
+        );
         assert!(state.accept_recovery_health(&valid, witness).is_err());
         assert!(state.accept_health(&valid).is_err());
     }

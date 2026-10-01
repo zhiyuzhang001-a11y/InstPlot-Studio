@@ -402,6 +402,44 @@ impl<'a> WindowsCandidateLaunch<'a> {
         self.commit_health(|state| self.store.write(state))
     }
 
+    /// Recover a lost durable-write acknowledgement without writing, retrying
+    /// the installation, or initiating rollback after a committed update.
+    pub fn verify_committed_health(&self) -> io::Result<()> {
+        let process = self
+            .process
+            .as_ref()
+            .ok_or_else(|| invalid("GUI not bound"))?;
+        if process.wait_for_exit(Duration::ZERO)? {
+            return Err(invalid("GUI exited before committed-health verification"));
+        }
+        let (pid, created) = self
+            .record
+            .process
+            .ok_or_else(|| invalid("GUI identity missing"))?;
+        let receipt: HealthReceipt = read_private_json(
+            &self
+                .store
+                .directory()
+                .join(self.record.purpose.health_file()),
+            16 * 1024,
+        )?;
+        if receipt.process_id != pid || receipt.process_started != created.to_string() {
+            return Err(invalid("committed receipt differs from live native GUI"));
+        }
+        let state = self.store.read(&self.record.identity)?;
+        self.require_record(&state)?;
+        match self.record.purpose {
+            LaunchPurpose::Candidate => state.verify_committed_health(&receipt)?,
+            LaunchPurpose::Recovery => {
+                state.verify_committed_recovery_health(&receipt, (pid, &created.to_string()))?
+            }
+        }
+        if process.wait_for_exit(Duration::ZERO)? {
+            return Err(invalid("GUI exited during committed-health verification"));
+        }
+        Ok(())
+    }
+
     fn commit_health(
         &self,
         persist: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
@@ -507,6 +545,13 @@ impl WindowsCandidateProcess<'_> {
             ));
         }
         self.launch.accept_health()
+    }
+
+    pub fn verify_committed_health(&mut self) -> io::Result<()> {
+        if self.child.is_none() || self.checkpoint_error.is_some() || self.owned_process_exited()? {
+            return Err(invalid("no live successfully checkpointed owned GUI"));
+        }
+        self.launch.verify_committed_health()
     }
 
     pub fn request_normal_exit(&mut self) -> io::Result<()> {
@@ -1063,7 +1108,21 @@ mod tests {
             UpdateStage::AwaitingHealth
         );
         assert!(!launch.has_exited().unwrap());
-        launch.accept_health().unwrap();
+        assert!(launch.verify_committed_health().is_err());
+        // The atomic state write may succeed before its acknowledgement fails.
+        // Re-read the exact committed receipt; never start rollback on that error alone.
+        assert!(
+            launch
+                .commit_health(|committed| {
+                    store.write(committed)?;
+                    Err(io::Error::other(
+                        "injected lost durable commit acknowledgement",
+                    ))
+                })
+                .is_err()
+        );
+        launch.verify_committed_health().unwrap();
+        launch.verify_committed_health().unwrap();
         assert_eq!(
             store.read(state.identity()).unwrap().stage(),
             UpdateStage::Completed
@@ -1072,6 +1131,7 @@ mod tests {
         drop(child.stdin.take());
         assert!(child.wait().unwrap().success());
         assert!(launch.has_exited().unwrap());
+        assert!(launch.verify_committed_health().is_err());
         launch.release_binary_after_exit().unwrap();
         assert!(launch._binary_lease.is_none());
     }
@@ -1418,7 +1478,20 @@ mod tests {
             startup.first_canvas_ready().unwrap(),
             WindowsHealthFrame::Pending
         );
-        launch.accept_health().unwrap();
+        assert!(launch.verify_committed_health().is_err());
+        assert!(
+            launch
+                .commit_health(|committed| {
+                    store.write(committed)?;
+                    Err(invalid("injected lost recovery commit acknowledgement"))
+                })
+                .is_err()
+        );
+        launch.verify_committed_health().unwrap();
+        write_receipt(&receipt_path, &wrong);
+        assert!(launch.verify_committed_health().is_err());
+        write_receipt(&receipt_path, &recovery);
+        launch.verify_committed_health().unwrap();
         assert_eq!(
             store.read(state.identity()).unwrap().stage(),
             UpdateStage::RolledBack
