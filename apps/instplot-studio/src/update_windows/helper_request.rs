@@ -467,6 +467,55 @@ impl WindowsHelperSession {
         })
     }
 
+    /// Move a failed owned candidate into recovery, never a live/unknown child.
+    /// Does not run the recovery installer, launch the old GUI or mark RolledBack.
+    pub fn enter_restoring_after_candidate(
+        &self,
+        candidate: &mut super::WindowsCandidateProcess<'_>,
+        access: &super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<UpdateTransaction> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("original application is still running"));
+        }
+        let mut state = self.store.read(&self.request.identity)?;
+        require_transaction(&self.request, &state, state.stage())?;
+        candidate.require_exit_for_recovery(&self.store, &state)?;
+        if super::installer_attempt_status(
+            &self.store,
+            &state,
+            &self.installation,
+            self.installers.candidate.installer(),
+        )? != (super::InstallerAttemptStatus::Exited { exit_code: 0 })
+        {
+            return Err(invalid("candidate installer exit evidence is unresolved"));
+        }
+        self.request
+            .recovery
+            .require(self.installers.recovery.installer())?;
+        self.installers.recovery.installer().revalidate()?;
+        for name in ["restore-installer.json", "recovery-launch.json"] {
+            match fs::symlink_metadata(self.directory.join(name)) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+                Ok(_) => {
+                    return Err(invalid(
+                        "recovery execution already reserved; inspection required",
+                    ));
+                }
+            }
+        }
+        if state.stage() != UpdateStage::RecoveryRequired {
+            state.record_error(reason);
+            state.transition(UpdateStage::RecoveryRequired)?;
+            self.store.write(&state)?;
+        }
+        state.transition(UpdateStage::Restoring)?;
+        self.store.write(&state)?;
+        Ok(state)
+    }
+
     /// Verify the current fixed release-file contract AFTER a durable successful
     /// old-installer exit. No GUI launch, deletion, configuration restoration or
     /// RolledBack transition is performed here.

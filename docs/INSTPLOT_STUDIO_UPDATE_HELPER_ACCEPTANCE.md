@@ -249,3 +249,11 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 `WindowsHelperSession::enter_applying` 必须持有精确安装目录的排他锁，原生旧进程已正常退出；请求原文与已加载请求一致，helper-ready 精确绑定当前助手 PID/创建时间、事务 ID/nonce。再次验证注册安装身份、原版 exe/LICENSE、助手复制体、新旧签名包绑定/有效性及主项目只读绑定后，才由 WaitingForExit 持久切换 Applying。任一错误不切换、不安装、不强杀、不启动窗口。切换本身不是安装成功，更不是健康或恢复成功。
 
 新鲜执行与安装前中止共用已有 apply/restore/candidate 意图检查，部分记录也拒绝，不删除记录获取重试资格。新增 Windows 组件测试覆盖 Prepared/外来 nonce 拒绝、复核错误保持 WaitingForExit、三类部分意图保持原文、合法一次状态切换、重复切换及应用后中止拒绝；不运行安装器，不冒称真实 helper/GUI 链通过。实际 Windows 全库源/测试交叉 Clippy、工作区全目标全特性 Clippy 通过，Windows 原生运行待 CI。完整助手控制器与配置/恢复保护尚未完成；协议和默认入口不变。
+
+## 候选退出到恢复状态门（组件衔接，真实恢复 GUI 未完成）
+
+`enter_restoring_after_candidate` 只接受当前助手保留的 owned 候选对象，不接受单独从磁盘推断退出：同一事务目录/当前持久阶段、真实 Child 的 PID/创建时间/退出码与私有退出记录完全一致，或该对象确证 CreateProcess 未启动且对应记录完全一致；exe 租约必须已在持久退出证据后释放。Applying/AwaitingHealth/RecoveryRequired 以外的状态拒绝，成功完成态不得回退。丢失、修改、未知字段、部分证据或未持久的阶段均拒绝。
+
+随后还必须持有目标排他锁、原版进程确证退出、新版安装器持久退出码 0、旧恢复包仍符合原请求与信任/有效性要求，且没有既有 restore-installer/recovery-launch 意图，才持久写 RecoveryRequired 再写 Restoring；第一次写成功、第二次失败不伪装为终态。该方法不安装旧包、不重开 GUI、不标 RolledBack，也不授权从磁盘重建丢失的句柄。
+
+扩展真实测试 Child 的组件测试覆盖释放前拒绝、已知未启动与退出证据篡改拒绝、其他事务目录拒绝、未持久阶段拒绝、恢复执行阶段拒绝；进程仍是测试程序，不是 Studio GUI。实际 Windows 库/测试交叉 Clippy 和工作区全目标全特性 Clippy 通过，Windows 原生运行待下一批 CI；完整控制器、原版 GUI 健康及恢复项目可用性仍未完成。入口保持关闭，不发布或清理恢复证据。

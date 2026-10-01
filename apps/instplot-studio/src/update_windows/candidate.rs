@@ -333,6 +333,15 @@ pub struct WindowsCandidateProcess<'a> {
     checkpoint_error: Option<String>,
 }
 
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnedCandidateExit {
+    launch: LaunchRecord,
+    process_id: u32,
+    created: u64,
+    exit_code: i32,
+}
+
 impl WindowsCandidateProcess<'_> {
     pub fn process_id(&self) -> Option<u32> {
         self.child.as_ref().map(Child::id)
@@ -395,15 +404,8 @@ impl WindowsCandidateProcess<'_> {
             // Retained Child HANDLE, not PID lookup. This also covers a candidate
             // that died before bind_child could record a still-live witness.
             let created = super::process::child_process_created(child)?;
-            #[derive(Serialize)]
-            struct OwnedExit<'a> {
-                launch: &'a LaunchRecord,
-                process_id: u32,
-                created: u64,
-                exit_code: i32,
-            }
-            let evidence = OwnedExit {
-                launch: &self.launch.record,
+            let evidence = OwnedCandidateExit {
+                launch: self.launch.record.clone(),
                 process_id: child.id(),
                 created,
                 exit_code: status
@@ -436,6 +438,60 @@ impl WindowsCandidateProcess<'_> {
         file.write_all(&serde_json::to_vec(&self.launch.record).map_err(invalid)?)?;
         file.sync_all()?;
         self.launch._binary_lease.take();
+        Ok(())
+    }
+
+    /// In-memory owned-handle proof is mandatory. Disk evidence alone cannot
+    /// resume an interrupted helper or authorize installation over a live GUI.
+    pub(super) fn require_exit_for_recovery(
+        &mut self,
+        store: &TransactionStore,
+        state: &UpdateTransaction,
+    ) -> io::Result<()> {
+        store.require_directory(self.launch.store.directory())?;
+        let persisted = store.read(&self.launch.record.identity)?;
+        require_same(state, &persisted, state.stage())?;
+        self.launch.require_record(state)?;
+        if !matches!(
+            state.stage(),
+            UpdateStage::Applying | UpdateStage::AwaitingHealth | UpdateStage::RecoveryRequired
+        ) || self.launch._binary_lease.is_some()
+            || !self.owned_process_exited()?
+        {
+            return Err(invalid("candidate is not safely released for recovery"));
+        }
+        if let Some(child) = self.child.as_mut() {
+            let status = child
+                .try_wait()?
+                .ok_or_else(|| invalid("candidate still running"))?;
+            let expected = OwnedCandidateExit {
+                launch: self.launch.record.clone(),
+                process_id: child.id(),
+                created: super::process::child_process_created(child)?,
+                exit_code: status
+                    .code()
+                    .ok_or_else(|| invalid("candidate exit code unavailable"))?,
+            };
+            let actual: OwnedCandidateExit = read_private_json(
+                &store.directory().join("candidate-owned-exit.json"),
+                128 * 1024,
+            )?;
+            if actual != expected {
+                return Err(invalid("candidate exit evidence changed"));
+            }
+        } else {
+            let actual: LaunchRecord = read_private_json(
+                &store.directory().join("candidate-not-started.json"),
+                64 * 1024,
+            )?;
+            if actual != self.launch.record
+                || self.checkpoint_error.is_none()
+                || self.launch.record.process.is_some()
+                || self.launch.process.is_some()
+            {
+                return Err(invalid("candidate non-start evidence changed"));
+            }
+        }
         Ok(())
     }
 }
@@ -1006,8 +1062,16 @@ mod tests {
         assert!(process.checkpoint_error().is_some());
         assert!(process.owned_process_exited().unwrap());
         assert!(process.accept_health().is_err());
+        assert!(process.require_exit_for_recovery(&store, &state).is_err());
         process.release_binary_after_exit().unwrap();
         assert!(fixture.0.join("candidate-not-started.json").exists());
+        process.require_exit_for_recovery(&store, &state).unwrap();
+        let non_start = fixture.0.join("candidate-not-started.json");
+        let original = std::fs::read(&non_start).unwrap();
+        super::super::write_private_atomic(&non_start, b"{}").unwrap();
+        assert!(process.require_exit_for_recovery(&store, &state).is_err());
+        super::super::write_private_atomic(&non_start, &original).unwrap();
+        process.require_exit_for_recovery(&store, &state).unwrap();
         assert!(!fixture.0.join("health.json").exists());
         assert!(WindowsCandidateLaunch::begin(&store, &state, exe).is_err());
         assert_eq!(
@@ -1067,6 +1131,41 @@ mod tests {
         assert_ne!(
             store.read(state.identity()).unwrap().stage(),
             UpdateStage::Completed
+        );
+        process.require_exit_for_recovery(&store, &state).unwrap();
+        let exit_path = fixture.0.join("candidate-owned-exit.json");
+        let original = std::fs::read(&exit_path).unwrap();
+        let mut foreign: OwnedCandidateExit = serde_json::from_slice(&original).unwrap();
+        foreign.created += 1;
+        super::super::write_private_atomic(&exit_path, &serde_json::to_vec(&foreign).unwrap())
+            .unwrap();
+        assert!(process.require_exit_for_recovery(&store, &state).is_err());
+        super::super::write_private_atomic(&exit_path, &original).unwrap();
+        process.require_exit_for_recovery(&store, &state).unwrap();
+        let another = Fixture::new();
+        let another_store = TransactionStore::lock(&another.0).unwrap();
+        assert!(
+            process
+                .require_exit_for_recovery(&another_store, &state)
+                .is_err()
+        );
+        let mut restoring = state.clone();
+        restoring.transition(UpdateStage::RecoveryRequired).unwrap();
+        assert!(
+            process
+                .require_exit_for_recovery(&store, &restoring)
+                .is_err()
+        );
+        store.write(&restoring).unwrap();
+        process
+            .require_exit_for_recovery(&store, &restoring)
+            .unwrap();
+        restoring.transition(UpdateStage::Restoring).unwrap();
+        store.write(&restoring).unwrap();
+        assert!(
+            process
+                .require_exit_for_recovery(&store, &restoring)
+                .is_err()
         );
     }
 
