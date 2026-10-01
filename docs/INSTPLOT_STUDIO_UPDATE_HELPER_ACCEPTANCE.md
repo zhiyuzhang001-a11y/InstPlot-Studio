@@ -90,3 +90,13 @@ Mac 10 项安装契约/资产测试及全目标全功能 Clippy 通过。隔离 
 新增 Windows 用例覆盖多实例释放前排他拒绝、错误安装锁拒绝、不同安装独立，以及正常关闭绑定子进程后才允许执行、执行期间/结束后锁保持。执行用例使用签名隔离测试 harness，不是真实 Inno，也不运行 GUI；实际 Inno 兼容性仍由恢复原型证明。上述完整 Windows 模块交叉 Clippy 已通过，运行测试待新 CI。GUI 启动接入须由 Windows 全量构建确认。
 
 这只是安装访问与执行适配器接入；Windows 外置助手的持久请求/状态机、单次新版启动、首画布健康、恢复失败处理及真实 GUI 验收仍未完成。入口继续关闭，不计为整体自动更新通过。
+
+提交 `4113a2c` 四项 CI 全通过，运行 `36896046217` 的附件已读取，两种桌面任务均确认 `installer_read_lease_execution=true`；原生租约的读允许、写入/删除/改名拒绝与已有写句柄拒绝测试通过。真实 Inno 正常安装、中断与恢复在持有租约时运行通过，原恢复断言仍全通过。
+
+提交 `2dabb7b` 四项 CI 全通过；已读取该提交的 Windows Quality 运行 `36899505866` 日志，`all_instances_must_release_shared_access_before_installation`、`installer_test_child_waits_for_normal_parent_pipe_close`、`native_runner_requires_normal_exit_and_retains_exclusive_access` 均通过，实际 Inno 恢复原型同轮 PASS。这证明访问锁、正常退出与受限执行组件在 Windows 运行，不是完整外置助手或实机 GUI 更新通过。macOS 本轮完整 Studio 回归 337 项通过、1 项原有跳过，Windows 专属用例不计入本机数字。
+
+后续下载权限接入：Windows 下载根改由同一固定私有根创建，临时安装包、原清单及签名都使用显式 owner-only 文件创建接口；不修旧/外来目录权限，不清旧缓存。下载后硬链接提交仍不覆盖目标，并新增文件/证据权限与拒绝覆盖断言，待下一轮 Windows CI。
+
+该下载权限批次本机完整 Studio 全目标/全 feature 回归 337 项通过、1 项原有跳过；全工作区 Clippy `-D warnings`、格式与差异空白检查通过。实际 Windows 原生模块交叉 Clippy 通过；Windows GUI 下载权限用例尚未在 Windows 执行，不纳入本机测试通过数。
+
+macOS 下载/DMG/用户重启完整链路的独立测试环境已构建：仅忽略目录中的源码快照使用专用公钥、本地 HTTPS CA、隔离缓存及 QA bundle ID；不修改产品信任根或系统证书，不用生产私钥/OSS。两个真实 GUI 版本和签名 DMG 已准备，旧 QA GUI 已启动，但本机锁屏使桌面操作被明确拒绝，尚未点击更新或执行替换；待用户解锁，不能计为完整 GUI 链路通过。

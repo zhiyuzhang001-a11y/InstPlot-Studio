@@ -670,24 +670,32 @@ fn check_for_update() -> Result<CheckOutcome, String> {
 }
 
 fn private_update_cache() -> Result<PathBuf, String> {
-    let project = ProjectDirs::from("com", "InstPlot", "InstPlot Studio")
-        .ok_or_else(|| "无法确定用户更新缓存目录。".to_owned())?;
-    let root = project.cache_dir().join("updates");
-    fs::create_dir_all(&root).map_err(|_| "无法创建更新缓存目录。".to_owned())?;
-    if fs::symlink_metadata(&root)
-        .map_err(|_| "无法读取更新缓存。".to_owned())?
-        .file_type()
-        .is_symlink()
+    #[cfg(windows)]
     {
-        return Err("更新缓存不能是符号链接。".to_owned());
+        instplot_studio::update_windows::private_download_root()
+            .map_err(|_| "无法创建或验证私有更新缓存权限。".to_owned())
     }
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "无法保护更新缓存权限。".to_owned())?;
+        let project = ProjectDirs::from("com", "InstPlot", "InstPlot Studio")
+            .ok_or_else(|| "无法确定用户更新缓存目录。".to_owned())?;
+        let root = project.cache_dir().join("updates");
+        fs::create_dir_all(&root).map_err(|_| "无法创建更新缓存目录。".to_owned())?;
+        if fs::symlink_metadata(&root)
+            .map_err(|_| "无法读取更新缓存。".to_owned())?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("更新缓存不能是符号链接。".to_owned());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+                .map_err(|_| "无法保护更新缓存权限。".to_owned())?;
+        }
+        Ok(root)
     }
-    Ok(root)
 }
 
 fn update_cache_destination(file_name: &str) -> Result<PathBuf, String> {
@@ -716,7 +724,11 @@ fn update_cache_destination_at(root: &Path, file_name: &str) -> Result<PathBuf, 
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     let directory = root.join(id);
+    #[cfg(not(windows))]
     fs::create_dir(&directory).map_err(|_| "无法创建私有更新目录。".to_owned())?;
+    #[cfg(windows)]
+    instplot_studio::update_windows::create_private_directory(&directory)
+        .map_err(|_| "无法创建私有更新目录。".to_owned())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -731,15 +743,21 @@ fn write_cache_evidence(directory: &Path, update: &AvailableUpdate) -> Result<()
         ("manifest.json", update.signed_manifest.as_slice()),
         ("manifest.json.sig", update.manifest_signature.as_slice()),
     ] {
+        #[cfg(not(windows))]
         let mut options = OpenOptions::new();
+        #[cfg(not(windows))]
         options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        #[cfg(not(windows))]
         let mut file = options
             .open(directory.join(name))
+            .map_err(|_| "无法保留签名更新证据。".to_owned())?;
+        #[cfg(windows)]
+        let mut file = instplot_studio::update_windows::create_private_file(&directory.join(name))
             .map_err(|_| "无法保留签名更新证据。".to_owned())?;
         file.write_all(bytes)
             .and_then(|()| file.sync_all())
@@ -1074,11 +1092,17 @@ fn write_verified_stream(
     cancel: &AtomicBool,
     progress: &mut impl FnMut(u64),
 ) -> Result<(), String> {
+    #[cfg(not(windows))]
     let mut options = OpenOptions::new();
+    #[cfg(not(windows))]
     options.write(true).create_new(true);
+    #[cfg(not(windows))]
     let mut output = options
         .open(temporary)
         .map_err(|_| "无法创建临时下载文件。".to_owned())?;
+    #[cfg(windows)]
+    let mut output = instplot_studio::update_windows::create_private_file(temporary)
+        .map_err(|_| "无法创建或验证私有临时下载文件。".to_owned())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1295,7 +1319,10 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
+        #[cfg(not(windows))]
         fs::create_dir(&root).unwrap();
+        #[cfg(windows)]
+        instplot_studio::update_windows::create_private_directory(&root).unwrap();
         let payload = b"verified update payload";
         let package = UpdatePackage {
             file_name: "update.bin".to_owned(),
@@ -1318,6 +1345,8 @@ mod tests {
         let destination = root.join("update.bin");
         install_no_clobber(&temporary, &destination).unwrap();
         assert_eq!(fs::read(&destination).unwrap(), payload);
+        #[cfg(windows)]
+        instplot_studio::update_windows::validate_private_file(&destination).unwrap();
 
         let second = root.join(".second.part");
         fs::write(&second, b"different").unwrap();
@@ -1333,7 +1362,10 @@ mod tests {
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
+        #[cfg(not(windows))]
         fs::create_dir(&root).unwrap();
+        #[cfg(windows)]
+        instplot_studio::update_windows::create_private_directory(&root).unwrap();
         let package = UpdatePackage {
             file_name: "update.bin".to_owned(),
             id: "portable".to_owned(),
@@ -1362,6 +1394,44 @@ mod tests {
                 &mut |_| {},
             )
             .is_err()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn signed_cache_evidence_is_owner_only_and_never_overwrites() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-evidence-acl-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        instplot_studio::update_windows::create_private_directory(&root).unwrap();
+        let update = AvailableUpdate {
+            version: "0.1.2-rc.3".into(),
+            notes_url: String::new(),
+            package: UpdatePackage {
+                id: "inno-setup".into(),
+                package_type: "inno-setup".into(),
+                file_name: "fixture.exe".into(),
+                minimum_system: None,
+                sha256: "00".repeat(32),
+                size_bytes: 1,
+                url: String::new(),
+            },
+            // Evidence-writer fixture only; not accepted as signed metadata.
+            signed_manifest: b"fixture metadata".to_vec(),
+            manifest_signature: vec![7; 64],
+        };
+        write_cache_evidence(&root, &update).unwrap();
+        for name in ["manifest.json", "manifest.json.sig"] {
+            instplot_studio::update_windows::validate_private_file(&root.join(name)).unwrap();
+        }
+        assert!(write_cache_evidence(&root, &update).is_err());
+        assert_eq!(
+            fs::read(root.join("manifest.json")).unwrap(),
+            update.signed_manifest
         );
         fs::remove_dir_all(root).unwrap();
     }

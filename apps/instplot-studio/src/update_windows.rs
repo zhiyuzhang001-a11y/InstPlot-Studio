@@ -23,7 +23,7 @@ pub use assets::{VerifiedWindowsInstaller, WindowsInstallerPair};
 #[path = "update_windows/native.rs"]
 mod native;
 #[cfg(windows)]
-pub use native::discover_current_installation;
+pub use native::{discover_current_installation, private_download_root};
 
 #[cfg(windows)]
 #[path = "update_windows/process.rs"]

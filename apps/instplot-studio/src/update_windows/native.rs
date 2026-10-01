@@ -215,6 +215,17 @@ pub(super) fn updater_private_root() -> io::Result<PathBuf> {
     Ok(root)
 }
 
+/// Fixed per-user download root; never changes an existing foreign ACL.
+pub fn private_download_root() -> io::Result<PathBuf> {
+    let root = updater_private_root()?.join("downloads");
+    if let Err(error) = super::create_private_directory(&root)
+        && super::validate_private_directory(&root).is_err()
+    {
+        return Err(error);
+    }
+    Ok(root)
+}
+
 pub(super) fn revalidate_installation(installation: &WindowsInstallation) -> io::Result<()> {
     let current = discover_installation_at(
         installation.executable(),
