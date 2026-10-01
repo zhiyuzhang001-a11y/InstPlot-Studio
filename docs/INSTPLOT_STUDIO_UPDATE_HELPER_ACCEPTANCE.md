@@ -311,3 +311,5 @@ Windows 仅 `in-place-update-preview` 构建增加内部 `--update-health <事�
 阶段引擎继续加入 `wait_after_preflight`：认证复制体先持久写精确 helper-ready，父窗口确认后才可正常关闭。每次 poll 用保留的原生旧进程句柄非阻塞观察，不强关；旧 GUI 退出且所有支持实例放开共享锁后，才取得目标排他锁并通过既有安装前最终复核。就绪后 30 秒到期无论刚退出还是锁未满足均不启动安装；旧身份/固定文件及无执行意图复核成功后进入 FailedBeforeApply，否则 InspectionRequired，不伪称取消或回滚成功。新增 0/29/30/31 秒策略边界测试，Windows 运行待 CI。仍未接父窗口工作冻结、兼容协议和 Windows apply CLI，因此没有开放重启/安装入口。
 
 父窗口的 `confirm_ready` 进一步要求同一 WaitingForExit 持久事务与请求原文未变，并在原安装/固定文件复核之后重新观察实际 owned helper Child 的创建身份与存活；就绪文件本身不授权退出。该检查通过只读 snapshot，不申请助手持有的写锁，不修复请求。新增组件测试覆盖助手写锁持有时正常读取、Prepared/Applying 与外来 nonce 拒绝、请求中的桌面任务变化拒绝且不改回原文。实际 Windows 全库/测试交叉 Clippy 通过，Windows 运行待 CI。外层父窗口冻结/启动调用尚未接入。
+
+本机本批完整 `cargo test --locked -p instplot-studio --all-targets --all-features` 退出码 0：库 218 通过/1 原有忽略、二进制 114 通过、集成契约 8 通过，共 340 通过/1 忽略；工作区及实际 Windows 库/测试交叉 Clippy 通过。这不包含 Windows 专属策略/原生运行，也不是用户界面点击完成更新的验收。当前 GitHub head `5392542` 三项通过、Windows Quality 运行中；后续本地三项提交单独等待推送验收，不借旧证据。
