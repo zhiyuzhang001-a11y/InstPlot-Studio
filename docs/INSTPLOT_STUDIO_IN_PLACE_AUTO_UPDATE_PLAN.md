@@ -251,3 +251,5 @@ Windows 兼容门补充签名绑定的可选平台字段 `windows_in_place`：�
 Windows 预览构建增加 `--windows-update-helper <private-transaction>`，复用认证复制体载入与 owned 阶段引擎；普通构建不暴露。父侧提供固定参数的单次 spawn 适配器：先完整复核并持久 WaitingForExit，直接 CreateProcess 返回实际 Child，不按 shell 执行路径、不自动关闭 GUI；父侧仍须冻结工作、保留 Child 并调用 confirm_ready。明确 CreateProcess 失败且原窗口仍活跃/原文件有效/无执行意图时可持久 FailedBeforeApply，不能提交中止则保留检查、不重放。GUI 的保存/取消/正常关闭及持有对象仍未串联；不能凭命令存在开放更新或生成生产契约。
 
 父侧新增预览取消门：仅精确仍在运行的原 GUI 可在 WaitingForExit、无任何执行意图、原文件有效时持久 FailedBeforeApply；确认丢失后精确只读复核可幂等返回。助手每次等待轮询优先识别匹配的取消终态、复核无意图和原文件后正常结束，不再继续等退出/超时或安装。父窗口仍须保持冻结并保留实际 helper Child/Prepared 资源，直到该 Child 真正退出，再释放双方项目租约、解除编辑/保存冻结；取消写入成功本身不证明租约已释放。不强杀，状态/证据异常保留检查，真实 GUI 取消链待验。
+
+父側預覽 `WindowsParentHelper` 封裝單次 spawn 返回的實際 Child 與 Prepared 租約，提供有界 10 秒就緒輪詢（完整證明後計時檢查）及持久取消/實際退出/再次驗證後釋放的接口。任何取消請求（含提交失敗）後不得再授予就緒；錯誤與未退出均不能解凍。正常 GUI 退出前仍須立即重驗就緒；等待期間不得 Drop 此 owner。誤 Drop 且實際子進程仍活躍或未知時保留句柄/租約至父進程退出，不自動殺進程或清理證據。此保守防誤用策略不是常規取消路徑，也不是 GUI 生命周期完成；UI 還需在保存/草稿確認後接通 owner、取消後輪詢、錯誤保持冻结及診斷。

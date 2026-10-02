@@ -39,6 +39,12 @@ mod helper_request;
 #[cfg(windows)]
 pub use helper_request::{PreparedWindowsHelper, WindowsHelperSession};
 
+#[cfg(all(windows, feature = "in-place-update-preview"))]
+#[path = "update_windows/parent_helper.rs"]
+mod parent_helper;
+#[cfg(all(windows, feature = "in-place-update-preview"))]
+pub use parent_helper::{WindowsParentHelper, WindowsParentReadiness};
+
 #[cfg(windows)]
 #[path = "update_windows/controller.rs"]
 mod controller;
