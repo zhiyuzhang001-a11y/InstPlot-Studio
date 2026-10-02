@@ -387,3 +387,5 @@ cancel_before_exit 只由匹配 PID/原生创建时间/实际 exe 的仍活跃�
 扩展 cancellation 组件用例：等待状态不伪装取消；外来 nonce 拒绝；取消终态连续只读核验两次且原始 transaction 字节不变；原文件复核失败拒绝；四类部分执行意图拒绝且不修改证据；Applying 阶段不能识别为取消。实际 Windows 库/测试交叉 Clippy 与工作区全目标全特性 Clippy 通过，新运行断言及真实父窗口取消/租约释放仍待 CI/实机。
 
 2026-10-02 00:59 UTC head `21cf096` Linux/Mac Quality 与 windows-audit 通过，Windows Quality 仍运行中；不持续监听、不取消该轮验收。后续本地改动继续保留待推送。
+
+2026-10-02 01:08 UTC 核验 `21cf096` 四项 CI 全部通过，无未解决 review thread。Windows job `110651660121` 明确候选启动前身份失败策略、原生 installer runner 和父窗口重复终结回执测试通过，Studio 库 264 通过/2 忽略，真实 Inno on/off 两次通过。恢复附件 `11203122796` 保存于 ignored target/windows-recovery-21cf096.jSbXC2，范围仍为 installer-recovery-prototype-not-GUI-updater；生产版本不变，desktop on/off 均 applied/restored/user_data_preserved=true，快捷方式分别 true/false。本轮仅证明远端既有改动；签名契约、预览助手 CLI 和扩展取消门三批本地提交将进入新一轮 CI，不借旧 head 声称新增断言已运行或 Windows GUI 验收完成。
