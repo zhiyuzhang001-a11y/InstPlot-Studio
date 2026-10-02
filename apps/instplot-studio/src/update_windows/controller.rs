@@ -131,6 +131,10 @@ impl<'a> WindowsUpdateController<'a> {
     }
 
     fn poll_old_exit(&mut self) -> io::Result<()> {
+        if self.helper.cancelled_before_apply()? {
+            self.enter(WindowsControllerPhase::FailedBeforeApply);
+            return Ok(());
+        }
         if exit_wait_expired(self.entered.elapsed()) {
             self.helper.abort_before_apply(
                 "normal exit or installation exclusion timed out before apply",

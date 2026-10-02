@@ -274,6 +274,47 @@ impl PreparedWindowsHelper {
         store.write(&state)
     }
 
+    /// Commit cancellation while the parent is still frozen/open. Afterwards
+    /// keep the owned helper Child and this object until the helper has exited;
+    /// only then drop project leases and unfreeze editing/saving. Ok alone is
+    /// not proof those leases were released. Matching durable cancellation is
+    /// verified read-only on a lost-ack retry.
+    #[cfg(feature = "in-place-update-preview")]
+    pub fn cancel_before_exit(&self) -> io::Result<()> {
+        let store = TransactionStore::lock(&self.directory)?;
+        if cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+            return Ok(());
+        }
+        abort_waiting(
+            &store,
+            &self.request,
+            "user cancelled before application exit",
+            || self.verify_running_parent(),
+        )?;
+        Ok(())
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    fn verify_running_parent(&self) -> io::Result<()> {
+        let installed = self.request.installation()?;
+        if self.request.old_process_id != std::process::id()
+            || self.request.old_process_created != super::current_process_created()?
+            || fs::canonicalize(std::env::current_exe()?)? != installed.executable()
+        {
+            return Err(invalid("cancellation is not from the bound running parent"));
+        }
+        let old = TrackedWindowsProcess::bind(
+            self.request.old_process_id,
+            self.request.old_process_created,
+            installed.executable(),
+        )?;
+        if old.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("parent already exited before cancellation"));
+        }
+        super::native::revalidate_installation(&installed)?;
+        require_original_files(&installed, &self.request)
+    }
+
     /// Caller must freeze work first and retain the returned actual Child until
     /// confirm_ready succeeds or cancellation is durably completed. This never
     /// closes the GUI, waits for readiness, or accepts an arbitrary command.
@@ -470,6 +511,17 @@ impl WindowsHelperSession {
     }
     pub fn resume_project(&self) -> Option<&super::WindowsResumeProject> {
         self.request.resume_project.as_ref()
+    }
+
+    pub(super) fn cancelled_before_apply(&self) -> io::Result<bool> {
+        cancelled_waiting(&self.store, &self.request, || {
+            super::native::revalidate_installation(&self.installation)?;
+            self.installers
+                .recovery
+                .installer()
+                .require_installed_files(self.installation.directory())?;
+            require_original_files(&self.installation, &self.request)
+        })
     }
 
     /// Only after the exact live GUI's durable health commit. No file edits,
@@ -737,6 +789,24 @@ impl WindowsHelperSession {
             .installer()
             .require_installed_files(self.installation.directory())?;
         require_original_files(&self.installation, &self.request)
+    }
+}
+
+fn cancelled_waiting(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<bool> {
+    let state = store.read(&request.identity)?;
+    require_transaction(request, &state, state.stage())?;
+    match state.stage() {
+        UpdateStage::WaitingForExit => Ok(false),
+        UpdateStage::FailedBeforeApply => {
+            require_no_execution(store)?;
+            verify_original()?;
+            Ok(true)
+        }
+        _ => Err(invalid("waiting helper stage changed; inspection required")),
     }
 }
 
@@ -1324,6 +1394,10 @@ mod tests {
         let mut waiting = request.transaction().unwrap();
         waiting.transition(UpdateStage::WaitingForExit).unwrap();
         store.write(&waiting).unwrap();
+        assert!(!cancelled_waiting(&store, &request, || panic!("still waiting")).unwrap());
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(cancelled_waiting(&store, &foreign, || panic!("foreign nonce")).is_err());
         assert!(
             abort_waiting(&store, &request, "wait failed", || Err(invalid(
                 "original installation could not be verified"
@@ -1361,10 +1435,31 @@ mod tests {
         let raw = fs::read_to_string(root.join("transaction.json")).unwrap();
         let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(value["last_error"], "[redacted]");
+        for _ in 0..2 {
+            assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+            assert_eq!(
+                fs::read_to_string(root.join("transaction.json")).unwrap(),
+                raw
+            );
+        }
+        assert!(cancelled_waiting(&store, &request, || Err(invalid("original changed"))).is_err());
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial execution evidence").unwrap();
+            assert!(cancelled_waiting(&store, &request, || panic!("partial intent")).is_err());
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial execution evidence\"");
+            fs::remove_file(path).unwrap();
+        }
         assert!(abort_waiting(&store, &request, "again", || Ok(())).is_err());
         let mut applying = waiting;
         applying.transition(UpdateStage::Applying).unwrap();
         store.write(&applying).unwrap();
+        assert!(cancelled_waiting(&store, &request, || panic!("already applying")).is_err());
         assert!(abort_waiting(&store, &request, "not a safe cancellation", || Ok(())).is_err());
         assert_eq!(
             store.read(&request.identity).unwrap().stage(),

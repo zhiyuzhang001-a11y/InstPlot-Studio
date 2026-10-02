@@ -377,3 +377,13 @@ PreparedWindowsHelper 新增预览固定 spawn 适配器，复核后单次持久
 新增 Windows 启动命令解析/缺参数/多参数/普通 exe 非私有事务拒绝测试，以及固定路径含中文空格/`&` 仍为字面参数且无自定义环境的命令构造测试。Mac startup 测试 3 项通过（其中验证非 Windows 不暴露该命令），工作区 Clippy 与实际 Windows 库/测试交叉 Clippy 通过；Windows 二进制 CLI 与真实创建/就绪/退出链待 CI/实机，不能声称本机已运行 Windows 命令。
 
 2026-10-02 00:49 UTC head `21cf096` Mac Quality 与 windows-audit 通过，Linux/Windows Quality 运行中；只核验一次，本地契约和预览入口改动待本轮最终证据后再推送。未修改版本、发布、OSS、Spotlight 或生产私钥。
+
+## 父侧持久取消与助手立即识别（本地，Windows 运行待验）
+
+cancel_before_exit 只由匹配 PID/原生创建时间/实际 exe 的仍活跃原父窗口调用；私有写锁下要求 WaitingForExit、无任何 apply/restore/candidate/recovery 意图及原文件不变，才持久 FailedBeforeApply。已写成功但确认丢失时，只读验证精确取消终态与原文件后可幂等确认，不重写事务。父窗口在提交失败时仍冻结/open，不能仅因用户点取消就允许退出旧进程。
+
+助手 waiting poll 优先检查精确事务取消终态、无执行意图及原安装/签名旧固定文件；匹配则正常终结并释放会话租约，WaitingForExit 继续既有等待，其他阶段/nonce/部分证据拒绝，不能转成取消或触发安装。父侧取消提交后仍必须持有 actual Child/Prepared 并等待该助手正常退出，再释放父侧项目只读句柄和解冻保存；本批没有把提交成功假称为进程退出或 GUI 恢复可写。
+
+扩展 cancellation 组件用例：等待状态不伪装取消；外来 nonce 拒绝；取消终态连续只读核验两次且原始 transaction 字节不变；原文件复核失败拒绝；四类部分执行意图拒绝且不修改证据；Applying 阶段不能识别为取消。实际 Windows 库/测试交叉 Clippy 与工作区全目标全特性 Clippy 通过，新运行断言及真实父窗口取消/租约释放仍待 CI/实机。
+
+2026-10-02 00:59 UTC head `21cf096` Linux/Mac Quality 与 windows-audit 通过，Windows Quality 仍运行中；不持续监听、不取消该轮验收。后续本地改动继续保留待推送。
