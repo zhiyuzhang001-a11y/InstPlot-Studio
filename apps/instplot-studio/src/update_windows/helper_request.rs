@@ -273,6 +273,60 @@ impl PreparedWindowsHelper {
         state.transition(UpdateStage::WaitingForExit)?;
         store.write(&state)
     }
+
+    /// Caller must freeze work first and retain the returned actual Child until
+    /// confirm_ready succeeds or cancellation is durably completed. This never
+    /// closes the GUI, waits for readiness, or accepts an arbitrary command.
+    #[cfg(feature = "in-place-update-preview")]
+    pub fn spawn_after_work_protection(&self) -> io::Result<std::process::Child> {
+        self.arm_waiting()?;
+        match helper_command(&self.helper_executable(), &self.directory).spawn() {
+            Ok(child) => Ok(child),
+            Err(spawn_error) => {
+                // CreateProcess failed: no child was returned and no install
+                // intent can exist. Preserve evidence if cancellation cannot
+                // be committed; never retry spawning this transaction.
+                let cancelled = (|| {
+                    let store = TransactionStore::lock(&self.directory)?;
+                    abort_waiting(&store, &self.request, "helper could not be started", || {
+                        let installation = self.request.installation()?;
+                        let old = TrackedWindowsProcess::bind(
+                            self.request.old_process_id,
+                            self.request.old_process_created,
+                            installation.executable(),
+                        )?;
+                        if old.wait_for_exit(std::time::Duration::ZERO)? {
+                            return Err(invalid("old application exited before helper failure"));
+                        }
+                        super::native::revalidate_installation(&installation)?;
+                        require_original_files(&installation, &self.request)
+                    })?;
+                    Ok::<_, io::Error>(())
+                })();
+                match cancelled {
+                    Ok(()) => Err(spawn_error),
+                    Err(cancel_error) => Err(invalid(format!(
+                        "helper spawn failed ({spawn_error}); cancellation requires inspection ({cancel_error})"
+                    ))),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "in-place-update-preview")]
+fn helper_command(executable: &Path, directory: &Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(executable);
+    command
+        .arg("--windows-update-helper")
+        .arg(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+    command
 }
 
 impl HelperRequest {
@@ -987,6 +1041,23 @@ fn copy_helper(source: &Path, destination: &Path) -> io::Result<(File, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "in-place-update-preview")]
+    #[test]
+    fn copied_helper_command_has_fixed_entry_and_one_literal_transaction_path() {
+        let executable = Path::new(r"C:\Users\example\private\instplot-update-helper.exe");
+        let directory = Path::new(r"C:\Users\example\私有 事务 & untouched");
+        let command = helper_command(executable, directory);
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![
+                std::ffi::OsStr::new("--windows-update-helper"),
+                directory.as_os_str(),
+            ]
+        );
+        assert_eq!(command.get_envs().count(), 0);
+    }
 
     #[test]
     fn successful_installer_requires_a_fresh_prelaunch_identity_failure() {

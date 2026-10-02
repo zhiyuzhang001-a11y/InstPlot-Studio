@@ -43,6 +43,13 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
             let health = HealthStartup::load_recovery(&path)?;
             launch_gui_with_health(health).map_err(Into::into)
         }
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        StartupCommand::WindowsUpdateHelper(path) => {
+            let helper =
+                instplot_studio::update_windows::WindowsHelperSession::load_waiting(&path)?;
+            instplot_studio::update_windows::run_helper_after_preflight(&helper)?;
+            Ok(())
+        }
         StartupCommand::ProductInfo => {
             println!("{}", product_info());
             Ok(())
@@ -145,6 +152,8 @@ enum StartupCommand {
     UpdateHealth(PathBuf),
     #[cfg(all(windows, feature = "in-place-update-preview"))]
     UpdateRecoveryHealth(PathBuf),
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    WindowsUpdateHelper(PathBuf),
     ProductInfo,
     ExportFixedPdf(PathBuf),
     ExportFixedPng(PathBuf),
@@ -184,6 +193,10 @@ impl StartupCommand {
             #[cfg(all(windows, feature = "in-place-update-preview"))]
             (Some(flag), Some(path), None) if flag == "--update-recovery-health" => {
                 Ok(Self::UpdateRecoveryHealth(path.into()))
+            }
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            (Some(flag), Some(path), None) if flag == "--windows-update-helper" => {
+                Ok(Self::WindowsUpdateHelper(path.into()))
             }
             (Some(flag), None, None) if flag == "--product-info" => Ok(Self::ProductInfo),
             (Some(flag), Some(path), None) if flag == "--export-fixed-pdf" => {
@@ -345,6 +358,49 @@ fn launch_gui_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    #[test]
+    fn windows_helper_command_has_one_exact_private_transaction_argument() {
+        assert_eq!(
+            StartupCommand::parse([
+                OsString::from("--windows-update-helper"),
+                OsString::from("私有 事务"),
+            ])
+            .unwrap(),
+            StartupCommand::WindowsUpdateHelper(PathBuf::from("私有 事务"))
+        );
+        assert!(StartupCommand::parse([OsString::from("--windows-update-helper")]).is_err());
+        assert!(
+            StartupCommand::parse([
+                OsString::from("--windows-update-helper"),
+                OsString::from("transaction"),
+                OsString::from("extra"),
+            ])
+            .is_err()
+        );
+        // The normal executable must fail authentication before entering the
+        // helper loop: no private request can make its path a copied helper.
+        assert!(
+            run([
+                OsString::from("--windows-update-helper"),
+                std::env::temp_dir().into_os_string(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[cfg(not(all(windows, feature = "in-place-update-preview")))]
+    #[test]
+    fn normal_builds_do_not_expose_the_windows_helper_command() {
+        assert!(
+            StartupCommand::parse([
+                OsString::from("--windows-update-helper"),
+                OsString::from("transaction"),
+            ])
+            .is_err()
+        );
+    }
 
     #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
     #[test]

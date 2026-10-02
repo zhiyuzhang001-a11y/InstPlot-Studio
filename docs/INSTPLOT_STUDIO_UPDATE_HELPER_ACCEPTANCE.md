@@ -367,3 +367,13 @@ Mac HelperReady 必须对应 LaunchingHelper，错阶段就绪不会关闭原窗
 新增三项跨平台测试：旧清单下载与自动应用隔离；签名契约匹配固定文件/文件篡改/缺失/未重签契约篡改/未来协议拒绝；有效签名下的畸形契约和跨平台错放拒绝。资产测试本机 9 通过，原签名更新测试 4 通过，工作区 Clippy 和 Windows 库/测试交叉 Clippy 通过。新增 Windows pinned-binary 用例要求错哈希在写意图前拒绝、匹配后预留一次，原生运行待后续 CI。
 
 发布生成/验证脚本目前仍只处理现行清单，不生成契约字段；必须在真实助手入口和兼容能力验收完成后同时接通，不能凭声明开放更新。旧 rc.2 客户端会拒绝未知字段，首次仍须手动迁入更新客户端，不能覆盖既有 rc.2 公共清单。此为计划内兼容门的接收规则，不代表 Windows GUI、父窗口或正式发布完成。
+
+## Windows 预览复制助手命令与受限启动适配器（本地）
+
+预览二进制新增精确 `--windows-update-helper` 单一事务路径命令，必须先经 WindowsHelperSession::load_waiting 完整认证：固定私有根、事务/schema/nonce/请求/当前复制体路径哈希、原生旧进程身份、新旧可信签名包/契约及固定旧文件，才能进入独立 helper loop。普通安装 exe 直接调用不能冒充复制体，普通构建不存在此入口；不新增用户可用 apply/restart 按钮，公开 Windows 协议仍 0。
+
+PreparedWindowsHelper 新增预览固定 spawn 适配器，复核后单次持久 WaitingForExit 再启动复制体，参数固定为命令和字面事务路径；不使用 shell、不传任意环境/命令，返回实际 Child。CreateProcess 明确失败时，在精确旧 GUI 仍活跃、原安装/固定文件正常及无执行意图条件下持久 FailedBeforeApply；中止失败保留证据并报检查，不重复 spawn。成功后调用者必须继续持有 Child/Prepared 对象，原生 confirm_ready 成功才允许正常退出；当前 GUI 尚未接该调用及取消生命周期，不能把此适配器当作已可用自动更新。
+
+新增 Windows 启动命令解析/缺参数/多参数/普通 exe 非私有事务拒绝测试，以及固定路径含中文空格/`&` 仍为字面参数且无自定义环境的命令构造测试。Mac startup 测试 3 项通过（其中验证非 Windows 不暴露该命令），工作区 Clippy 与实际 Windows 库/测试交叉 Clippy 通过；Windows 二进制 CLI 与真实创建/就绪/退出链待 CI/实机，不能声称本机已运行 Windows 命令。
+
+2026-10-02 00:49 UTC head `21cf096` Mac Quality 与 windows-audit 通过，Linux/Windows Quality 运行中；只核验一次，本地契约和预览入口改动待本轮最终证据后再推送。未修改版本、发布、OSS、Spotlight 或生产私钥。
