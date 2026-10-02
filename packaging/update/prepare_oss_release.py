@@ -98,6 +98,11 @@ def load_asset_spec(path: Path) -> dict[str, Any]:
         raise ValueError("asset specification must contain a platforms object")
     if not payload["platforms"]:
         raise ValueError("asset specification must contain at least one platform")
+    for platform_spec in payload["platforms"].values():
+        if isinstance(platform_spec, dict) and "windows_in_place" in platform_spec:
+            # Do not silently discard an installation contract that this
+            # publisher cannot yet produce and validate after GUI acceptance.
+            raise ValueError("windows_in_place publication is not enabled")
     return payload
 
 
@@ -134,11 +139,13 @@ def prepare(
     ):
         raise ValueError("expires_at must be later than published_at")
 
+    # Reject unsupported capability declarations before accessing signing
+    # material or replacing any existing staging directory.
+    spec = load_asset_spec(asset_spec_path)
     private_key = private_key.resolve()
     if not private_key.is_file():
         raise ValueError(f"private key not found: {private_key}")
     verify_private_key(private_key, public_key_hex)
-    spec = load_asset_spec(asset_spec_path)
 
     staged_root = output.resolve() / product
     if staged_root.exists():

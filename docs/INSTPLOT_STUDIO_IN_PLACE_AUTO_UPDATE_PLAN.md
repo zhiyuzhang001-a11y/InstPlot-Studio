@@ -269,3 +269,5 @@ AppUpdateState 已接入既有 RestartForUpdate 保存/草稿保护后的内部�
 仍需 Windows 实际多实例/按钮/取消后保存/正常退出/重开项目及完整恢复 GUI 证据、Mac 解锁后的下载/DMG/用户重启完整链、真实兼容能力探针和契约生成/发布验证脚本配套。上述接入代码和组件测试不能替代这些门槛；不得合并/发布/更新 OSS 或 Spotlight 来冒充验收完成。
 
 预览 Windows x86_64 构建新增只读 `--windows-update-capabilities` 探针，报告已编译组件协议，同时明确 public_update_protocol=0、gui_acceptance_complete=false、public_apply_entry_enabled=false。它不是可发布安装契约或 GUI 验收声明；普通构建与其他平台拒绝此命令。发布脚本仍不得据此自动生成 windows_in_place 或开放更新。Windows 实际运行证据待该提交 CI，Mac 只验证拒绝分支。
+
+现行发布生成器显式拒绝资产规格中的 windows_in_place（包括 null 和错放其他平台），不再静默丢弃。拒绝在访问签名材料、替换 staging 之前发生。此为暂未支持契约发布的防误用门，不是契约生成实现；既有无此字段的发布流程不变，待实机验收及生成/验证配套完成后再协调启用。

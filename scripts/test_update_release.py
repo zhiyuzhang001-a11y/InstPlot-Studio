@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,6 +133,37 @@ class UpdateReleaseTests(unittest.TestCase):
                 expires_at="2026-12-29T00:00:00Z",
                 output=self.root / "bad-output",
             )
+
+    def test_unsupported_install_contract_rejected_before_keys_or_staging(self) -> None:
+        assets = self.root / "unsupported-assets.json"
+        staged = self.root / "output" / "instplot-studio"
+        staged.mkdir(parents=True)
+        sentinel = staged / "keep.txt"
+        sentinel.write_bytes(b"existing staging must survive")
+        for platform in ("windows-x86_64", "linux-x86_64"):
+            for declaration in (None, {}, {"schema": 1}):
+                with self.subTest(platform=platform, declaration=declaration):
+                    assets.write_text(json.dumps({"platforms": {platform: {
+                        "windows_in_place": declaration,
+                    }}}), encoding="utf-8")
+                    with patch.object(MODULE, "verify_private_key") as verify:
+                        with self.assertRaisesRegex(ValueError, "publication is not enabled"):
+                            MODULE.prepare(
+                                asset_spec_path=assets,
+                                version="0.1.2-rc.1",
+                                release_sequence=1,
+                                product="instplot-studio",
+                                public_root="https://downloads.example.test/instplot-studio",
+                                private_key=self.root / "must-not-access.pem",
+                                public_key_hex=self.public_key_hex,
+                                key_id="test-key-1",
+                                notes_url="https://example.test/notes",
+                                published_at="2026-09-29T00:00:00Z",
+                                expires_at="2026-12-29T00:00:00Z",
+                                output=self.root / "output",
+                            )
+                        verify.assert_not_called()
+                    self.assertEqual(sentinel.read_bytes(), b"existing staging must survive")
 
     def test_stable_and_prerelease_channels_follow_semver(self) -> None:
         self.assertEqual(MODULE.channel_for("0.1.2"), "stable")

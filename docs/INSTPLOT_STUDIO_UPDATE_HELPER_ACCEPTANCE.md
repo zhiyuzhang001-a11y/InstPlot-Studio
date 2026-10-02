@@ -427,3 +427,7 @@ Windows 库及实际 app_update 源码的隔离交叉 Clippy 类型检查、工�
 仅 Windows x86_64 的 in-place-update-preview 构建接受无参数 `--windows-update-capabilities`，多余参数拒绝；普通构建与其他平台拒绝。静态 JSON 区分组件协议与已验收更新能力，scope=preview-components-not-accepted-updater，公开协议 0、GUI 验收 false、公开应用入口 false。不会读取事务、注册表、私钥、联网或启动助手，不改变安装和版本。Windows 测试覆盖字段及命令运行，实际证据待 CI；Mac startup 四项测试通过，只证明非 Windows 拒绝及既有启动行为。不能用这个探针代替真实 GUI 验收或授权生产清单生成。
 
 2026-10-02 02:28 UTC 单次核验 `2a8242d`：Linux/Mac Quality 已通过，Windows Quality 与 windows-audit 仍运行。未持续监听；新增父侧锁/取消/UI 断言尚未获得这一 head 的最终 Windows 运行证据。
+
+## 发布契约防静默丢弃门（仅本地脚本）
+
+prepare_oss_release.py 目前不能生成/验证 windows_in_place，因此资产规格显式带该字段时立即拒绝，不静默签发一个缺契约清单。null、空对象、示例 schema 和错放 Linux 都拒绝；在访问签名材料与重建 staging 之前验证。测试使用隔离临时夹具，验证不存在私钥仍得到契约拒绝、verify_private_key 未调用、既有 staging 哨兵内容保持不变。既有无契约签名/指针测试继续执行。没有访问生产私钥、实际发布目录或 OSS；此门不表示发布契约已实现或可开放更新。
