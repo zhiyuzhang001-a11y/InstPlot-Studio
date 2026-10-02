@@ -401,3 +401,7 @@ WindowsParentHelper 预览接口在既有单次 spawn 后保留实际 Child 与 
 正常取消及时释放资源；误 Drop 时真实子进程活跃/退出状态未知，保守保留所有资源至父进程退出，避免把误 Drop 当取消成功。新增三项策略测试覆盖就绪精确成功/缺回执/权限及其他错误/超时；取消提交失败前不观察退出、活跃/未知退出不释放、退出后复核失败；误 Drop 的保留策略。工作区全目标全特性 Clippy 和 Windows 库/测试交叉 Clippy 通过，策略运行仍待 Windows CI；不是实际父窗口、真实资源释放或实机 GUI 证据。当前 AppUpdateState 仍未持有/调用该对象，默认入口不变。
 
 2026-10-02 01:30 UTC `30dd4ca` Linux Quality 通过，其余三项运行中；本地持有器改动待该轮最终证据后推送，不取消正在运行的验收。
+
+2026-10-02 01:40 UTC `30dd4ca` Linux/Mac Quality 与 windows-audit 通过，Windows Quality 仍运行；不重复轮询。父侧接入检查确认现有 shared 安装锁及未完成事务 startup 门不能单独证明既有第二实例已退出，父窗口正常退出前仍须实现原生唯一实例证明；助手之后拿不到排他锁虽然能保护文件，不能代替退出前门槛。本地 holder 不授予多实例安全能力，GUI 尚未接入，继续默认关闭。
+
+2026-10-02 01:50 UTC 核验 `30dd4ca` 四项 CI 全部通过，无未解决 review thread。Windows job `110662318313` 明确签名契约严格验证、错 binary 哈希写启动意图前拒绝、复制助手字面命令、普通 exe 助手命令拒绝及扩展持久取消测试通过；真实 Inno 升级/恢复 on/off 两次通过。附件 `11204019579` 保存于 ignored target/windows-recovery-30dd4ca.m4iCdN，results 无 false 断言、生产版本不变，两例 applied/restored/user_data_preserved=true、desktop_shortcut 分别 true/false。仅证明该 head 的组件和 CLI 运行，仍非 Windows GUI 自动更新验收；后续 `403b82c` 父侧持有器尚待新的 CI。
