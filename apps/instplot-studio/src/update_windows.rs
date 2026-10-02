@@ -46,6 +46,12 @@ mod controller;
 pub use controller::{WindowsControllerPhase, WindowsUpdateController};
 
 #[cfg(windows)]
+#[path = "update_windows/helper_runtime.rs"]
+mod helper_runtime;
+#[cfg(windows)]
+pub use helper_runtime::run_helper_after_preflight;
+
+#[cfg(windows)]
 #[path = "update_windows/resume_project.rs"]
 mod resume_project;
 #[cfg(windows)]

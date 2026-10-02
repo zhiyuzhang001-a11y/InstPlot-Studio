@@ -251,6 +251,12 @@ impl<'a> RunningWindowsInstaller<'a> {
         self.child.id()
     }
 
+    /// Only for retaining the helper during inspection. No journal write,
+    /// exclusion handoff, installation-success or recovery authorization.
+    pub(super) fn owned_process_exited(&mut self) -> io::Result<bool> {
+        Ok(self.child.try_wait()?.is_some())
+    }
+
     /// Read-only failed-exit proof for recovery before any candidate GUI exists.
     /// Requires this retained Child and the already-transferred owned exclusion;
     /// a journal on disk alone cannot authorize recovery or replay.

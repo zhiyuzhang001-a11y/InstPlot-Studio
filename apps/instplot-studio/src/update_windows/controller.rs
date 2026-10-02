@@ -75,6 +75,24 @@ impl<'a> WindowsUpdateController<'a> {
         self.phase
     }
 
+    /// Inspection may release this controller only after every owned native
+    /// child has actually exited. Unknown observation retains all resources.
+    /// This neither writes exit evidence nor permits recovery/replaying work.
+    pub(super) fn inspection_children_exited(&mut self) -> io::Result<bool> {
+        if self.phase != WindowsControllerPhase::InspectionRequired {
+            return Err(invalid("native inspection requires a latched failure"));
+        }
+        let installer_exited = match self.installer.as_mut() {
+            Some(installer) => installer.owned_process_exited()?,
+            None => true,
+        };
+        let gui_exited = match self.gui.as_mut() {
+            Some(gui) => gui.owned_process_exited()?,
+            None => true,
+        };
+        Ok(installer_exited && gui_exited)
+    }
+
     /// One nonblocking step. Errors latch inspection and retain all owned
     /// witnesses; another poll cannot replay installation, launch, or recovery.
     pub fn poll(&mut self) -> io::Result<WindowsControllerPhase> {

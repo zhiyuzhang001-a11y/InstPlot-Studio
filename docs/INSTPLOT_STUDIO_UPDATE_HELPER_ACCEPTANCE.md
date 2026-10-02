@@ -333,3 +333,11 @@ Windows Quality job `110632039722` 单项失败于 assets.rs 的非零退出证�
 本机补跑 macOS 助手五项组件均通过：真实 ad-hoc bundle 版本/哈希/篡改拒绝、真实签名 bundle 交换恢复、真实只读 DMG 身份/正常卸载及拒绝路径、精确 ready 绑定和只读状态文件边界。使用隔离夹具，不替换用户应用，不等于下载按钮/重启/保存对话框的完整 GUI 验收；桌面解锁门槛与 Windows 实机门槛仍未解决。
 
 `374b801` 最终四项 CI 全通过。Windows Quality job `110635867340` 日志确认非零原生 Child 退出证明、助手写锁期间父窗口只读复核、安装前正常退出期限、已完成/外来阶段不关闭不恢复等新增断言通过；真实 Inno 两次运行通过。恢复附件 `11200684226` 下载至 ignored target/windows-recovery-374b801.HpayuQ：results.json 两例无 false 断言、production_version_unchanged=true；desktop-on/off-native-runner.json 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。范围明确 installer-recovery-prototype-not-GUI-updater，不代替 Windows 实机 GUI、父窗口启动助手或健康后实际保存验收。后续 `8834646` 的健康提交后项目 lease 释放仍须新 head 的 Windows CI。
+
+## 独立助手生命周期（内部实现，Windows 运行待验）
+
+`run_helper_after_preflight` 持有认证 helper 会话对应的完整控制器，250ms 间隔顺序推进，不强杀、不重放、不清理。只有 Completed/RolledBack/FailedBeforeApply 合法终态直接返回；引擎出错后停止阶段推进，只读观察实际 owned 安装器及 GUI Child。存活或观察错误均继续保留所有对象/租约/锁，不以超时推定退出；全部已退出后带原错误返回，未完成事务仍阻止普通应用误入，不伪造健康/恢复。该函数没有生产 CLI/UI 调用者，不能代替父窗口冻结、协议/产品兼容探针或真实 GUI 门槛。
+
+策略夹具覆盖三类合法终态、安装中不提前结束、错误及 InspectionRequired 后无步骤重放、存活/原生观察错误均不释放，只有确证全部退出才返回。实际 Windows runner 用例补充检查点故障期间只读 owned 退出观察不修改 journal、不转交排他锁，已交接后仍可只读观察；这些新断言尚待 Windows CI。策略夹具不是原生 GUI 验收。
+
+本批工作区全目标/全特性 Clippy 与实际 Windows 库/测试交叉 Clippy 通过；本机 Studio 全目标/全特性测试 340 通过、1 原有忽略、0 失败。macOS 回归不能代替仅 Windows 编译的新增运行断言，仍由下一批 CI 核验。

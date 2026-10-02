@@ -794,6 +794,13 @@ mod tests {
         );
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         assert!(running.take_owned_access_after_exit().is_err());
+        let before_inspection = fs::read(locks.join("restore-installer.json")).unwrap();
+        assert!(running.owned_process_exited().unwrap());
+        assert_eq!(
+            fs::read(locks.join("restore-installer.json")).unwrap(),
+            before_inspection
+        );
+        assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         assert!(
             running
                 .require_owned_failed_exit(&store, &transaction, &installation, &asset)
@@ -813,6 +820,7 @@ mod tests {
         let access = running.take_owned_access_after_exit().unwrap();
         assert!(running.take_owned_access_after_exit().is_err());
         assert!(running.try_wait().is_err());
+        assert!(running.owned_process_exited().unwrap());
         assert!(WindowsInstallAccess::acquire(&fixture.directory, &locks, false).is_err());
         // A test-only spawn adapter selects a child that exits with code 23.
         // Native handles, checkpoints, leases and lock transfer remain real;
