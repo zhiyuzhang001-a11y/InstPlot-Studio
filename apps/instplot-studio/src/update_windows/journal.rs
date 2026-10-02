@@ -183,7 +183,7 @@ impl<'a> InstallerJournal<'a> {
         self.persist()
     }
 
-    pub(super) fn require_owned_failed_exit(
+    pub(super) fn require_owned_exit(
         &self,
         store: &TransactionStore,
         transaction: &UpdateTransaction,
@@ -194,18 +194,13 @@ impl<'a> InstallerJournal<'a> {
     ) -> io::Result<()> {
         self.store.require_directory(store.directory())?;
         let persisted = read_journal(store, transaction, installation, installer)?;
-        if exit_code == 0 {
-            return Err(invalid(
-                "successful installer exit cannot authorize failed-install recovery",
-            ));
-        }
         if persisted.path != self.path
             || persisted.attempt != self.attempt
             || persisted.attempt.process != Some(process)
             || persisted.attempt.status()? != (InstallerAttemptStatus::Exited { exit_code })
         {
             return Err(invalid(
-                "failed installer evidence differs from retained native child",
+                "installer evidence differs from retained native child",
             ));
         }
         Ok(())

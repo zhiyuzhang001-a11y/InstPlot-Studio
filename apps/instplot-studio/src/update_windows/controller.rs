@@ -193,14 +193,31 @@ impl<'a> WindowsUpdateController<'a> {
         let launch = if restoring {
             WindowsCandidateLaunch::reserve_recovery(self.helper, &state, access)?
         } else {
-            WindowsCandidateLaunch::reserve(
+            match WindowsCandidateLaunch::reserve(
                 self.helper.store(),
                 &state,
                 self.helper.installation(),
                 &self.helper.installers().candidate,
                 access,
                 self.helper.resume_project(),
-            )?
+            ) {
+                Ok(launch) => launch,
+                Err(_) => {
+                    // Recheck identity and exact owned installer exit; an I/O
+                    // reservation error or partial GUI intent is not recovery.
+                    let recovery = self
+                        .helper
+                        .start_recovery_after_prelaunch_identity_failure(
+                            installer,
+                            self.access
+                                .take()
+                                .ok_or_else(|| invalid("exclusion missing"))?,
+                        )?;
+                    self.installer = Some(recovery);
+                    self.enter(WindowsControllerPhase::Restoring);
+                    return Ok(());
+                }
+            }
         };
         self.gui = Some(
             launch.spawn_once(

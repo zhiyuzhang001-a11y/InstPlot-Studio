@@ -225,6 +225,21 @@ impl<'a> WindowsCandidateLaunch<'a> {
                 "candidate installer has no durable successful exit",
             ));
         }
+        let installed = Self::verify_installed_candidate(previous, candidate)?;
+        let mut launch = Self::begin_with_resume(
+            store,
+            transaction,
+            installed.executable().into(),
+            resume_project,
+        )?;
+        launch._candidate_lease = Some(candidate_lease);
+        Ok(launch)
+    }
+
+    pub(super) fn verify_installed_candidate(
+        previous: &WindowsInstallation,
+        candidate: &super::VerifiedWindowsInstaller,
+    ) -> io::Result<WindowsInstallation> {
         let installed = WindowsInstallation::bind(
             &super::WindowsInstallRecord {
                 app_id: super::STUDIO_APP_ID.into(),
@@ -237,14 +252,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
             &candidate.version().to_string(),
         )?;
         super::native::revalidate_installation(&installed)?;
-        let mut launch = Self::begin_with_resume(
-            store,
-            transaction,
-            installed.executable().into(),
-            resume_project,
-        )?;
-        launch._candidate_lease = Some(candidate_lease);
-        Ok(launch)
+        Ok(installed)
     }
 
     #[cfg(test)]

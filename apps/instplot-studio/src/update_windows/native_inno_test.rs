@@ -120,6 +120,10 @@ fn wait_installer(
     mut running: RunningWindowsInstaller<'_>,
     log: &Path,
     evidence: &Path,
+    store: &TransactionStore,
+    transaction: &UpdateTransaction,
+    installation: &super::WindowsInstallation,
+    installer: &VerifiedWindowsInstaller,
 ) -> WindowsInstallAccess {
     // Keep the running object and its leases/lock even on checkpoint errors.
     // The workflow's disposable runner timeout remains the external test bound.
@@ -146,6 +150,17 @@ fn wait_installer(
     let access = running.take_owned_access_after_exit().unwrap();
     assert!(running.take_owned_access_after_exit().is_err());
     assert!(running.try_wait().is_err());
+    assert_eq!(
+        running
+            .require_owned_exit(store, transaction, installation, installer)
+            .unwrap(),
+        0
+    );
+    assert!(
+        running
+            .require_owned_failed_exit(store, transaction, installation, installer)
+            .is_err()
+    );
     access
 }
 
@@ -243,6 +258,10 @@ fn real_inno_native_runner_updates_and_restores() {
         running,
         &apply_log,
         &evidence_directory.join(format!("{name}-native-apply.log")),
+        &store,
+        &transaction,
+        &original,
+        pair.candidate(),
     );
     let candidate_installation = installed(&directory, &version, desktop);
     assert_eq!(candidate_installation.directory(), original.directory());
@@ -268,6 +287,10 @@ fn real_inno_native_runner_updates_and_restores() {
         running,
         &restore_log,
         &evidence_directory.join(format!("{name}-native-restore.log")),
+        &store,
+        &transaction,
+        &original,
+        pair.recovery(),
     );
     let restored = installed(&directory, &original.version().to_string(), desktop);
     assert_eq!(restored.directory(), original.directory());

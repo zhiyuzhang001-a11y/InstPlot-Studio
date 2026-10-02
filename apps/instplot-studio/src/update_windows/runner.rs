@@ -267,6 +267,24 @@ impl<'a> RunningWindowsInstaller<'a> {
         installation: &WindowsInstallation,
         installer: &super::VerifiedWindowsInstaller,
     ) -> io::Result<()> {
+        let code = self.require_owned_exit(store, transaction, installation, installer)?;
+        if code == 0 {
+            return Err(invalid(
+                "successful installer exit cannot authorize failed-install recovery",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Exact owned/durable exit proof, not permission to recover. Code zero
+    /// requires an independent prelaunch failure gate; it is never health.
+    pub(super) fn require_owned_exit(
+        &mut self,
+        store: &TransactionStore,
+        transaction: &UpdateTransaction,
+        installation: &WindowsInstallation,
+        installer: &super::VerifiedWindowsInstaller,
+    ) -> io::Result<i32> {
         if self.access.is_some() || self.checkpoint_error.is_some() {
             return Err(invalid(
                 "installer exclusion has not been durably transferred",
@@ -285,7 +303,10 @@ impl<'a> RunningWindowsInstaller<'a> {
             .child
             .try_wait()?
             .ok_or_else(|| invalid("installer is still running"))?;
-        self.journal.require_owned_failed_exit(
+        let code = status
+            .code()
+            .ok_or_else(|| invalid("installer exit code unavailable"))?;
+        self.journal.require_owned_exit(
             store,
             transaction,
             installation,
@@ -294,10 +315,9 @@ impl<'a> RunningWindowsInstaller<'a> {
                 self.child.id(),
                 super::process::child_process_created(&self.child)?,
             ),
-            status
-                .code()
-                .ok_or_else(|| invalid("installer exit code unavailable"))?,
-        )
+            code,
+        )?;
+        Ok(code)
     }
 
     /// No drop-on-error ownership transfer. A live child or checkpoint error

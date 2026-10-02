@@ -832,6 +832,12 @@ mod tests {
             installer_attempt_status(&store, &transaction, &installation, &asset).unwrap(),
             InstallerAttemptStatus::Exited { exit_code: 23 }
         );
+        assert_eq!(
+            running
+                .require_owned_exit(&store, &transaction, &installation, &asset)
+                .unwrap(),
+            23
+        );
         let original = fs::read(locks.join("restore-installer.json")).unwrap();
         let mut tampered: serde_json::Value = serde_json::from_slice(&original).unwrap();
         tampered["process"][0] = (running.process_id() + 1).into();

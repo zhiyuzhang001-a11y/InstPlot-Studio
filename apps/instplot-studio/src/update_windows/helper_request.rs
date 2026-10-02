@@ -578,6 +578,51 @@ impl WindowsHelperSession {
         access: super::WindowsInstallAccess,
         reason: &str,
     ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        self.start_prelaunch_recovery(access, reason, |state| {
+            failed.require_owned_failed_exit(
+                &self.store,
+                state,
+                &self.installation,
+                self.installers.candidate.installer(),
+            )
+        })
+    }
+
+    /// Successful installer exit is not a valid installed application. Recover
+    /// only when identity validation fails again and no GUI intent exists.
+    /// A failed reservation/write alone must never authorize this path.
+    pub(super) fn start_recovery_after_prelaunch_identity_failure(
+        &self,
+        completed: &mut super::RunningWindowsInstaller<'_>,
+        access: super::WindowsInstallAccess,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        self.start_prelaunch_recovery(
+            access,
+            "candidate installed identity failed before GUI launch",
+            |state| {
+                let code = completed.require_owned_exit(
+                    &self.store,
+                    state,
+                    &self.installation,
+                    self.installers.candidate.installer(),
+                )?;
+                require_failed_candidate_validation(code, || {
+                    super::WindowsCandidateLaunch::verify_installed_candidate(
+                        &self.installation,
+                        self.installers.candidate.installer(),
+                    )
+                    .map(|_| ())
+                })
+            },
+        )
+    }
+
+    fn start_prelaunch_recovery(
+        &self,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+        verify_owned_exit: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
         access.require_exclusive(self.installation.directory())?;
         if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
             return Err(invalid("original application is still running"));
@@ -586,14 +631,8 @@ impl WindowsHelperSession {
             .recovery
             .require(self.installers.recovery.installer())?;
         let recovery = self.installers.recovery.installer().pin()?;
-        let state = begin_failed_installer_recovery(&self.store, &self.request, reason, |state| {
-            failed.require_owned_failed_exit(
-                &self.store,
-                state,
-                &self.installation,
-                self.installers.candidate.installer(),
-            )
-        })?;
+        let state =
+            begin_failed_installer_recovery(&self.store, &self.request, reason, verify_owned_exit)?;
         super::RunningWindowsInstaller::start_owned(
             &self.installation,
             recovery,
@@ -681,6 +720,29 @@ fn require_no_execution(store: &TransactionStore) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn require_failed_candidate_validation(
+    owned_exit_code: i32,
+    revalidate: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    if owned_exit_code != 0 {
+        return Err(invalid("prelaunch validation recovery requires exit zero"));
+    }
+    match revalidate() {
+        Ok(()) => Err(invalid(
+            "valid candidate identity cannot authorize recovery",
+        )),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::InvalidData | io::ErrorKind::NotFound
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn begin_failed_installer_recovery(
@@ -911,6 +973,26 @@ fn copy_helper(source: &Path, destination: &Path) -> io::Result<(File, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successful_installer_requires_a_fresh_prelaunch_identity_failure() {
+        for code in [-1, 1, 23] {
+            assert!(require_failed_candidate_validation(code, || panic!("not exit zero")).is_err());
+        }
+        assert!(require_failed_candidate_validation(0, || Ok(())).is_err());
+        assert!(
+            require_failed_candidate_validation(0, || Err(invalid("identity mismatch"))).is_ok()
+        );
+        assert!(
+            require_failed_candidate_validation(0, || Err(io::Error::from(
+                io::ErrorKind::NotFound
+            )))
+            .is_ok()
+        );
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            assert!(require_failed_candidate_validation(0, || Err(io::Error::from(kind))).is_err());
+        }
+    }
 
     fn request() -> HelperRequest {
         let identity = UpdateIdentity {
