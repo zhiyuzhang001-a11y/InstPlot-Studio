@@ -421,3 +421,9 @@ AppUpdateState 现保留实际 WindowsParentOwned，沿既有保存/草稿保护
 Windows 库及实际 app_update 源码的隔离交叉 Clippy 类型检查、工作区全目标全特性 Clippy 通过。ignored target/windows-native-check 加入 UI wrapper，仅类型检查使用不带 TLS 特性的 ureq 以避开本机缺 Windows C SDK；不运行网络、不修改生产依赖/锁文件、不冒充 Windows 链接、TLS 安全或 GUI 运行验证。真正 Windows CI 继续使用生产 Rustls 和既定依赖。测试夹具初次 headless 输出未清理 texture delta，按 egui 测试契约清理后通过；未改生产渲染逻辑。
 
 2026-10-02 02:15 UTC（距上次核验超过 10 分钟）`2bac6b1` 四项 CI 全部通过，无未解决 review thread。Windows job `110669478773` 的 parent_helper 三项策略通过，真实 Inno 两次通过；附件 `11205930679` 在 ignored target/windows-recovery-2bac6b1.Pzeu2y，scope 仍为 installer-recovery-prototype-not-GUI-updater，无 false 断言、生产版本不变，on/off applied/restored/user_data_preserved=true、快捷方式分别 true/false。此次仅证明已推送 holder 策略，不借它宣称后续 `45e531e` 原生提升或本批 UI 实机通过。
+
+## 只读预览能力探针（Windows 运行待验）
+
+仅 Windows x86_64 的 in-place-update-preview 构建接受无参数 `--windows-update-capabilities`，多余参数拒绝；普通构建与其他平台拒绝。静态 JSON 区分组件协议与已验收更新能力，scope=preview-components-not-accepted-updater，公开协议 0、GUI 验收 false、公开应用入口 false。不会读取事务、注册表、私钥、联网或启动助手，不改变安装和版本。Windows 测试覆盖字段及命令运行，实际证据待 CI；Mac startup 四项测试通过，只证明非 Windows 拒绝及既有启动行为。不能用这个探针代替真实 GUI 验收或授权生产清单生成。
+
+2026-10-02 02:28 UTC 单次核验 `2a8242d`：Linux/Mac Quality 已通过，Windows Quality 与 windows-audit 仍运行。未持续监听；新增父侧锁/取消/UI 断言尚未获得这一 head 的最终 Windows 运行证据。

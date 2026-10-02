@@ -50,6 +50,11 @@ pub(crate) fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), B
             instplot_studio::update_windows::run_helper_after_preflight(&helper)?;
             Ok(())
         }
+        #[cfg(all(windows, target_arch = "x86_64", feature = "in-place-update-preview"))]
+        StartupCommand::WindowsUpdateCapabilities => {
+            println!("{}", windows_preview_capabilities());
+            Ok(())
+        }
         StartupCommand::ProductInfo => {
             println!("{}", product_info());
             Ok(())
@@ -154,6 +159,8 @@ enum StartupCommand {
     UpdateRecoveryHealth(PathBuf),
     #[cfg(all(windows, feature = "in-place-update-preview"))]
     WindowsUpdateHelper(PathBuf),
+    #[cfg(all(windows, target_arch = "x86_64", feature = "in-place-update-preview"))]
+    WindowsUpdateCapabilities,
     ProductInfo,
     ExportFixedPdf(PathBuf),
     ExportFixedPng(PathBuf),
@@ -178,6 +185,10 @@ impl StartupCommand {
         match (arguments.next(), arguments.next(), arguments.next()) {
             (None, None, None) => Ok(Self::Gui),
             (Some(flag), None, None) if flag == "--update-protocol" => Ok(Self::UpdateProtocol),
+            #[cfg(all(windows, target_arch = "x86_64", feature = "in-place-update-preview"))]
+            (Some(flag), None, None) if flag == "--windows-update-capabilities" => {
+                Ok(Self::WindowsUpdateCapabilities)
+            }
             #[cfg(windows)]
             (Some(flag), None, None) if flag == "--check-update-installation" => {
                 Ok(Self::CheckUpdateInstallation)
@@ -242,6 +253,28 @@ impl StartupCommand {
             ),
         }
     }
+}
+
+/// Read-only introspection of compiled preview components. This deliberately
+/// does NOT claim accepted GUI updates or enable publication/installation.
+#[cfg(all(windows, target_arch = "x86_64", feature = "in-place-update-preview"))]
+fn windows_preview_capabilities() -> serde_json::Value {
+    serde_json::json!({
+        "schema": 1,
+        "product": "instplot-studio",
+        "version": env!("CARGO_PKG_VERSION"),
+        "platform": "windows-x86_64",
+        "scope": "preview-components-not-accepted-updater",
+        "public_update_protocol": 0,
+        "gui_acceptance_complete": false,
+        "public_apply_entry_enabled": false,
+        "components": {
+            "helper_protocol": 1,
+            "transaction_schema": 1,
+            "candidate_health_protocol": 1,
+            "recovery_health_protocol": 1,
+        },
+    })
 }
 
 fn launch_gui(startup: Option<HandoffImport>, project_path: Option<PathBuf>) -> eframe::Result {
@@ -358,6 +391,36 @@ fn launch_gui_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(windows, target_arch = "x86_64", feature = "in-place-update-preview"))]
+    #[test]
+    fn windows_capability_probe_is_exact_and_does_not_claim_accepted_updates() {
+        let flag = "--windows-update-capabilities";
+        assert_eq!(
+            StartupCommand::parse([OsString::from(flag)]).unwrap(),
+            StartupCommand::WindowsUpdateCapabilities
+        );
+        assert!(StartupCommand::parse([OsString::from(flag), OsString::from("extra")]).is_err());
+        let value = windows_preview_capabilities();
+        assert_eq!(value["product"], "instplot-studio");
+        assert_eq!(value["platform"], "windows-x86_64");
+        assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(value["scope"], "preview-components-not-accepted-updater");
+        assert_eq!(value["public_update_protocol"], 0);
+        assert_eq!(value["gui_acceptance_complete"], false);
+        assert_eq!(value["public_apply_entry_enabled"], false);
+        assert_eq!(value["components"]["helper_protocol"], 1);
+        assert_eq!(value["components"]["transaction_schema"], 1);
+        assert_eq!(value["components"]["candidate_health_protocol"], 1);
+        assert_eq!(value["components"]["recovery_health_protocol"], 1);
+        assert!(run([OsString::from(flag)]).is_ok());
+    }
+
+    #[cfg(not(all(windows, target_arch = "x86_64", feature = "in-place-update-preview")))]
+    #[test]
+    fn normal_or_non_windows_build_rejects_preview_capability_command() {
+        assert!(StartupCommand::parse([OsString::from("--windows-update-capabilities")]).is_err());
+    }
 
     #[cfg(all(windows, feature = "in-place-update-preview"))]
     #[test]

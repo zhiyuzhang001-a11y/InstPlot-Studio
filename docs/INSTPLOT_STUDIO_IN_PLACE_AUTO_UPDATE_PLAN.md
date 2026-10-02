@@ -267,3 +267,5 @@ AppUpdateState 已接入既有 RestartForUpdate 保存/草稿保护后的内部�
 正常退出发出前再次复核真实 owner、排他父锁、nonce 和等待状态；退出命令单次派发，派发后不再提供迟到取消按钮，撤销状态不能沿用缓存 allow_close。主窗口仅拦截未经授权的提前关闭，不拦截助手已批准的正常退出。没有新增公开“应用更新”按钮，正式入口仍默认关闭，Windows 公开协议仍 0；内部预览路径不等于实机 GUI 验收或发布能力。
 
 仍需 Windows 实际多实例/按钮/取消后保存/正常退出/重开项目及完整恢复 GUI 证据、Mac 解锁后的下载/DMG/用户重启完整链、真实兼容能力探针和契约生成/发布验证脚本配套。上述接入代码和组件测试不能替代这些门槛；不得合并/发布/更新 OSS 或 Spotlight 来冒充验收完成。
+
+预览 Windows x86_64 构建新增只读 `--windows-update-capabilities` 探针，报告已编译组件协议，同时明确 public_update_protocol=0、gui_acceptance_complete=false、public_apply_entry_enabled=false。它不是可发布安装契约或 GUI 验收声明；普通构建与其他平台拒绝此命令。发布脚本仍不得据此自动生成 windows_in_place 或开放更新。Windows 实际运行证据待该提交 CI，Mac 只验证拒绝分支。
