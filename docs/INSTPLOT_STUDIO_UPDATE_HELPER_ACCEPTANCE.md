@@ -327,3 +327,7 @@ Windows Quality job `110632039722` 单项失败于 assets.rs 的非零退出证�
 阶段引擎确认真实存活 GUI 的精确持久 Completed/RolledBack 后，才释放该启动对象与助手会话持有的主项目只读句柄，避免助手仍存活时用户正常保存被共享权限阻止。跨事务目录、未提交、未绑定/退出/检查点不明、回执不一致均不得提前解除；解除只关闭已持有句柄，不写项目、不清理备份、不回退安全缓存。GUI 自己的健康启动保护仍待提交后结束。
 
 扩展原生测试 Child/真实保存项目组件：未绑定和 AwaitingHealth 不解除，精确提交后可以打开项目写句柄但不改任何字节，重复合法解除可幂等核验，进程退出后拒绝确认。助手会话使用单线程 Cell 保存 lease 以允许控制器的受限终态释放，仍不提供任意资源释放入口。Windows 全库/测试交叉 Clippy 通过；真实 Windows 运行和 GUI 后续保存验收待本批 CI/实机，不据此开放入口。
+
+`374b801` 修复后的 Windows audit 运行 `36942139416` 成功。附件 `11201056953` 已下载至 ignored target/windows-audit-374b801.0NqPh2，validation/summary.json 明确 formal-workspace-tests（cargo test --workspace --locked --all-targets）退出码 0/pass；附件没有单项 formal-workspace-tests.log，不能声称从此附件逐项读取了新断言。Linux/macOS Quality 同轮通过，Windows Quality 尚在运行，真实 Inno 附件仍须最终独立核验。PR #9 当前没有未解决 review thread。
+
+本机补跑 macOS 助手五项组件均通过：真实 ad-hoc bundle 版本/哈希/篡改拒绝、真实签名 bundle 交换恢复、真实只读 DMG 身份/正常卸载及拒绝路径、精确 ready 绑定和只读状态文件边界。使用隔离夹具，不替换用户应用，不等于下载按钮/重启/保存对话框的完整 GUI 验收；桌面解锁门槛与 Windows 实机门槛仍未解决。
