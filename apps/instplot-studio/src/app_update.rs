@@ -343,9 +343,17 @@ impl AppUpdateState {
                 }
                 #[cfg(target_os = "macos")]
                 UpdateEvent::HelperReady(result) => {
-                    match result {
-                        Ok(()) => self.close_requested = true,
-                        Err(explanation) => self.phase = UpdatePhase::Failed { explanation },
+                    if !matches!(self.phase, UpdatePhase::LaunchingHelper) {
+                        self.close_requested = false;
+                        self.phase = UpdatePhase::Failed {
+                            explanation: "更新助手回执与当前重启阶段不一致；原窗口保持打开。"
+                                .into(),
+                        };
+                    } else {
+                        match result {
+                            Ok(()) => self.close_requested = true,
+                            Err(explanation) => self.phase = UpdatePhase::Failed { explanation },
+                        }
                     }
                     keep_receiver = false;
                 }
@@ -411,6 +419,11 @@ impl AppUpdateState {
                     };
                     keep_receiver = false;
                 }
+            }
+            // A terminal result consumes this task's receiver. Never let a
+            // queued duplicate/progress event overwrite its accepted outcome.
+            if !keep_receiver {
+                break;
             }
         }
         if keep_receiver {
@@ -1325,6 +1338,99 @@ fn byte_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_update_result_consumes_receiver_without_duplicate_replay() {
+        let mut state = AppUpdateState::default();
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        for message in ["first verified failure", "queued duplicate"] {
+            sender
+                .send(UpdateEvent::Downloaded(Box::new(Err(message.into()))))
+                .unwrap();
+        }
+        state.poll(&egui::Context::default());
+        assert!(matches!(&state.phase, UpdatePhase::Failed { explanation }
+            if explanation == "first verified failure"));
+        assert!(state.receiver.is_none());
+        assert!(!state.take_close_request());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn helper_wait_freezes_work_without_authorizing_exit_and_failure_unfreezes() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::LaunchingHelper;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        state.poll(&egui::Context::default());
+        assert!(state.is_launching());
+        assert!(state.receiver.is_some());
+        assert!(!state.take_close_request());
+        assert!(!state.take_restart_request());
+        sender
+            .send(UpdateEvent::HelperReady(Err(
+                "helper identity mismatch".into()
+            )))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(!state.is_launching());
+        assert!(matches!(&state.phase, UpdatePhase::Failed { explanation }
+            if explanation == "helper identity mismatch"));
+        assert!(!state.take_close_request());
+        assert!(state.receiver.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn disconnected_helper_never_authorizes_exit() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::LaunchingHelper;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        drop(sender);
+        state.poll(&egui::Context::default());
+        assert!(matches!(state.phase, UpdatePhase::Failed { .. }));
+        assert!(!state.is_launching());
+        assert!(!state.take_close_request());
+        assert!(state.receiver.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ready_helper_requests_close_once_and_keeps_work_frozen() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::LaunchingHelper;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender.send(UpdateEvent::HelperReady(Ok(()))).unwrap();
+        sender
+            .send(UpdateEvent::HelperReady(Err(
+                "duplicate must not overwrite".into(),
+            )))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(state.is_launching());
+        assert!(state.take_close_request());
+        assert!(!state.take_close_request());
+        assert!(state.receiver.is_none());
+        state.poll(&egui::Context::default());
+        assert!(!state.take_close_request());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn helper_acknowledgement_outside_restart_phase_keeps_old_window_open() {
+        let mut state = AppUpdateState::default();
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender.send(UpdateEvent::HelperReady(Ok(()))).unwrap();
+        state.poll(&egui::Context::default());
+        assert!(matches!(state.phase, UpdatePhase::Failed { .. }));
+        assert!(!state.is_launching());
+        assert!(!state.take_close_request());
+        assert!(state.receiver.is_none());
+    }
 
     #[test]
     fn update_events_stay_compact_on_every_platform() {
