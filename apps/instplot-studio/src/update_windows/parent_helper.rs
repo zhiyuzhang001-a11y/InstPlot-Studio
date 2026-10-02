@@ -3,7 +3,7 @@ use std::io;
 use std::process::Child;
 use std::time::{Duration, Instant};
 
-use super::PreparedWindowsHelper;
+use super::{PreparedWindowsHelper, WindowsInstallAccess};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -45,7 +45,10 @@ impl WindowsParentHelper {
     /// Recheck immediately before requesting normal GUI exit, even if an
     /// earlier poll returned Ready. The owned process, nonce, durable state,
     /// original installation and files are authenticated on every success.
-    pub fn poll_readiness(&mut self) -> io::Result<WindowsParentReadiness> {
+    pub fn poll_readiness(
+        &mut self,
+        parent_access: &WindowsInstallAccess,
+    ) -> io::Result<WindowsParentReadiness> {
         if self.cancellation_requested {
             return Err(invalid(
                 "readiness is disabled after cancellation was requested",
@@ -58,14 +61,40 @@ impl WindowsParentHelper {
         if owned.child.try_wait()?.is_some() {
             return Err(invalid("owned helper exited before GUI close"));
         }
+        parent_access.require_parent_exit_access(&owned.prepared)?;
         let proof = owned.prepared.confirm_ready(&owned.child);
         readiness_result(self.started.elapsed(), proof)
+    }
+
+    /// Promote the parent's original shared guard only after the helper's
+    /// WaitingForExit request blocks new startup. Retain that exact guard until
+    /// GUI exit, or restore shared access after completed cancellation. A failed
+    /// promotion permanently disables readiness on this owner; cancel/inspect.
+    pub fn promote_installation_access(
+        &mut self,
+        parent_access: &mut WindowsInstallAccess,
+    ) -> io::Result<()> {
+        if self.cancellation_requested {
+            return Err(invalid("cannot promote after cancellation was requested"));
+        }
+        let owned = self
+            .owned
+            .as_ref()
+            .ok_or_else(|| invalid("helper ownership has already ended"))?;
+        let result = parent_access.promote_for_parent_exit(&owned.prepared);
+        if result.is_err() {
+            self.cancellation_requested = true;
+        }
+        result
     }
 
     /// Commit exact cancellation before observing exit. Keep work frozen on
     /// false OR error. Only true means the actual helper exited, cancellation
     /// was revalidated afterwards, and parent project leases were released.
-    pub fn cancel_and_poll_exit(&mut self) -> io::Result<bool> {
+    pub fn cancel_and_poll_exit(
+        &mut self,
+        parent_access: &mut WindowsInstallAccess,
+    ) -> io::Result<bool> {
         self.cancellation_requested = true;
         let Some(owned) = self.owned.as_mut() else {
             return Ok(true);
@@ -76,6 +105,10 @@ impl WindowsParentHelper {
             || prepared.cancel_before_exit(),
             || child.try_wait().map(|status| status.is_some()),
         )? {
+            // Only an exited helper and a revalidated cancellation permit the
+            // original GUI's shared access to be restored. Failure keeps the
+            // project/installer leases here, and the parent remains frozen.
+            parent_access.restore_parent_shared_access(prepared)?;
             self.owned.take();
             Ok(true)
         } else {

@@ -11,8 +11,9 @@ use super::{validate_private_directory, validate_private_file};
 
 pub struct WindowsInstallAccess {
     target: PathBuf,
-    _lock: File,
+    lock: File,
     exclusive: bool,
+    held: bool,
 }
 
 impl WindowsInstallAccess {
@@ -32,7 +33,7 @@ impl WindowsInstallAccess {
     }
 
     fn require_idle_in(&self, root: &Path) -> io::Result<()> {
-        if self.exclusive {
+        if self.exclusive || !self.held {
             return Err(invalid(
                 "ordinary startup requires shared installation access",
             ));
@@ -141,19 +142,103 @@ impl WindowsInstallAccess {
         .map_err(io::Error::from)?;
         Ok(Self {
             target,
-            _lock: lock,
+            lock,
             exclusive,
+            held: true,
         })
     }
 
     pub(super) fn require_exclusive(&self, target: &Path) -> io::Result<()> {
         reject_redirected_path(target)?;
-        if !self.exclusive || self.target != std::fs::canonicalize(target)? {
+        if !self.held || !self.exclusive || self.target != std::fs::canonicalize(target)? {
             return Err(invalid(
                 "exclusive access to the exact installation is required",
             ));
         }
         Ok(())
+    }
+
+    /// Parent remains open/frozen. A durable, exact WaitingForExit request must
+    /// already block new ordinary startup before we briefly release our shared
+    /// lock. Native exclusive acquisition then proves no other shared instance
+    /// remains. Keep this guard until normal parent exit; any error denies exit.
+    #[cfg(feature = "in-place-update-preview")]
+    pub fn promote_for_parent_exit(
+        &mut self,
+        prepared: &super::PreparedWindowsHelper,
+    ) -> io::Result<()> {
+        let target = self.target.clone();
+        self.promote_shared_with_gate(|| prepared.confirm_bound_parent_waiting(&target))
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn require_parent_exit_access(
+        &self,
+        prepared: &super::PreparedWindowsHelper,
+    ) -> io::Result<()> {
+        self.require_exclusive(&self.target)?;
+        prepared.confirm_bound_parent_waiting(&self.target)
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn restore_parent_shared_access(
+        &mut self,
+        prepared: &super::PreparedWindowsHelper,
+    ) -> io::Result<()> {
+        let target = self.target.clone();
+        self.restore_shared_with_gate(|| prepared.confirm_bound_parent_cancelled(&target))
+    }
+
+    #[cfg(any(test, feature = "in-place-update-preview"))]
+    fn restore_shared_with_gate(
+        &mut self,
+        mut verify_cancelled: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        verify_cancelled()?;
+        if self.held && !self.exclusive {
+            return Ok(());
+        }
+        if self.held {
+            self.lock.unlock()?;
+            self.held = false;
+        }
+        self.exclusive = false;
+        self.lock.try_lock_shared().map_err(io::Error::from)?;
+        self.held = true;
+        verify_cancelled()
+    }
+
+    #[cfg(any(test, feature = "in-place-update-preview"))]
+    fn promote_shared_with_gate(
+        &mut self,
+        mut verify_waiting: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if !self.held || self.exclusive {
+            return Err(invalid(
+                "parent promotion requires its held shared installation lock",
+            ));
+        }
+        verify_waiting()?;
+        self.lock.unlock()?;
+        self.held = false;
+        match self.lock.try_lock().map_err(io::Error::from) {
+            Ok(()) => {
+                self.exclusive = true;
+                self.held = true;
+                // Lost/corrupt waiting proof must not authorize GUI exit even
+                // when the lock was acquired. Retain exclusive for inspection.
+                verify_waiting()
+            }
+            Err(promotion) => match self.lock.try_lock_shared().map_err(io::Error::from) {
+                Ok(()) => {
+                    self.held = true;
+                    Err(promotion)
+                }
+                Err(restoration) => Err(invalid(format!(
+                    "parent lock promotion failed ({promotion}); shared lock restoration failed ({restoration}); keep parent frozen"
+                ))),
+            },
+        }
     }
 }
 
@@ -252,8 +337,19 @@ mod tests {
         std::fs::create_dir(&other).unwrap();
         let locks = root.join("private-locks");
         create_private_directory(&locks).unwrap();
-        let first = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        let mut first = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
         let second = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        // No durable waiting proof means no unlock/promotion attempt.
+        assert!(
+            first
+                .promote_shared_with_gate(|| Err(invalid("not waiting")))
+                .is_err()
+        );
+        assert!(first.held && !first.exclusive);
+        // The actual second instance prevents promotion; original shared
+        // access must be restored, not silently dropped on failure.
+        assert!(first.promote_shared_with_gate(|| Ok(())).is_err());
+        assert!(first.held && !first.exclusive);
         assert!(WindowsInstallAccess::acquire(&target, &locks, true).is_err());
         assert!(first.require_exclusive(&target).is_err());
         drop(first);
@@ -268,6 +364,51 @@ mod tests {
         drop(independent);
         drop(exclusive);
         WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        let mut parent = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        let calls = std::cell::Cell::new(0);
+        parent
+            .promote_shared_with_gate(|| {
+                calls.set(calls.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(calls.get(), 2);
+        parent.require_exclusive(&target).unwrap();
+        assert!(WindowsInstallAccess::acquire(&target, &locks, false).is_err());
+        assert!(
+            parent
+                .promote_shared_with_gate(|| panic!("already promoted"))
+                .is_err()
+        );
+        assert!(
+            parent
+                .restore_shared_with_gate(|| Err(invalid("not cancelled")))
+                .is_err()
+        );
+        assert!(WindowsInstallAccess::acquire(&target, &locks, false).is_err());
+        parent.restore_shared_with_gate(|| Ok(())).unwrap();
+        assert!(parent.held && !parent.exclusive);
+        assert!(parent.require_exclusive(&target).is_err());
+        WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        parent.restore_shared_with_gate(|| Ok(())).unwrap();
+        drop(parent);
+        let mut parent = WindowsInstallAccess::acquire(&target, &locks, false).unwrap();
+        calls.set(0);
+        assert!(
+            parent
+                .promote_shared_with_gate(|| {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 2 {
+                        Err(invalid("waiting proof changed"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+        );
+        assert!(parent.held && parent.exclusive);
+        assert!(WindowsInstallAccess::acquire(&target, &locks, false).is_err());
+        drop(parent);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

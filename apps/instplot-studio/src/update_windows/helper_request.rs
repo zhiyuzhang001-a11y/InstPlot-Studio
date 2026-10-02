@@ -295,6 +295,27 @@ impl PreparedWindowsHelper {
     }
 
     #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_bound_parent_waiting(&self, target: &Path) -> io::Result<()> {
+        if fs::canonicalize(target)? != self.request.identity.installed_path {
+            return Err(invalid(
+                "parent installation lock belongs to another target",
+            ));
+        }
+        self.verify_running_parent()?;
+        confirm_waiting_request(&self.directory, &self.request)
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_bound_parent_cancelled(&self, target: &Path) -> io::Result<()> {
+        if fs::canonicalize(target)? != self.request.identity.installed_path {
+            return Err(invalid(
+                "parent installation lock belongs to another target",
+            ));
+        }
+        self.cancel_before_exit()
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
     fn verify_running_parent(&self) -> io::Result<()> {
         let installed = self.request.installation()?;
         if self.request.old_process_id != std::process::id()
