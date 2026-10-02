@@ -331,3 +331,5 @@ Windows Quality job `110632039722` 单项失败于 assets.rs 的非零退出证�
 `374b801` 修复后的 Windows audit 运行 `36942139416` 成功。附件 `11201056953` 已下载至 ignored target/windows-audit-374b801.0NqPh2，validation/summary.json 明确 formal-workspace-tests（cargo test --workspace --locked --all-targets）退出码 0/pass；附件没有单项 formal-workspace-tests.log，不能声称从此附件逐项读取了新断言。Linux/macOS Quality 同轮通过，Windows Quality 尚在运行，真实 Inno 附件仍须最终独立核验。PR #9 当前没有未解决 review thread。
 
 本机补跑 macOS 助手五项组件均通过：真实 ad-hoc bundle 版本/哈希/篡改拒绝、真实签名 bundle 交换恢复、真实只读 DMG 身份/正常卸载及拒绝路径、精确 ready 绑定和只读状态文件边界。使用隔离夹具，不替换用户应用，不等于下载按钮/重启/保存对话框的完整 GUI 验收；桌面解锁门槛与 Windows 实机门槛仍未解决。
+
+`374b801` 最终四项 CI 全通过。Windows Quality job `110635867340` 日志确认非零原生 Child 退出证明、助手写锁期间父窗口只读复核、安装前正常退出期限、已完成/外来阶段不关闭不恢复等新增断言通过；真实 Inno 两次运行通过。恢复附件 `11200684226` 下载至 ignored target/windows-recovery-374b801.HpayuQ：results.json 两例无 false 断言、production_version_unchanged=true；desktop-on/off-native-runner.json 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。范围明确 installer-recovery-prototype-not-GUI-updater，不代替 Windows 实机 GUI、父窗口启动助手或健康后实际保存验收。后续 `8834646` 的健康提交后项目 lease 释放仍须新 head 的 Windows CI。
