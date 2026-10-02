@@ -389,3 +389,7 @@ cancel_before_exit 只由匹配 PID/原生创建时间/实际 exe 的仍活跃�
 2026-10-02 00:59 UTC head `21cf096` Linux/Mac Quality 与 windows-audit 通过，Windows Quality 仍运行中；不持续监听、不取消该轮验收。后续本地改动继续保留待推送。
 
 2026-10-02 01:08 UTC 核验 `21cf096` 四项 CI 全部通过，无未解决 review thread。Windows job `110651660121` 明确候选启动前身份失败策略、原生 installer runner 和父窗口重复终结回执测试通过，Studio 库 264 通过/2 忽略，真实 Inno on/off 两次通过。恢复附件 `11203122796` 保存于 ignored target/windows-recovery-21cf096.jSbXC2，范围仍为 installer-recovery-prototype-not-GUI-updater；生产版本不变，desktop on/off 均 applied/restored/user_data_preserved=true，快捷方式分别 true/false。本轮仅证明远端既有改动；签名契约、预览助手 CLI 和扩展取消门三批本地提交将进入新一轮 CI，不借旧 head 声称新增断言已运行或 Windows GUI 验收完成。
+
+随后已推送 `f0dba8d`。本机对该 head 执行 `cargo test --locked -p instplot-studio --all-targets --all-features --quiet`，总计 349 通过、0 失败、1 忽略（库 221、主程序 120、集成 8）；包含实际 Mac 更新组件集成测试，但不等同完整下载/DMG/按钮重启 GUI 链。父窗口调用点仍明确阻止 Windows 启动助手，尚未接入保存确认后持有 Prepared/actual Child、就绪等待和取消后实际退出解冻；不以底层命令可用冒充界面已接通。不重复轮询或推送取消正在进行的新一轮 CI，本条本地证据留待下一批提交。
+
+2026-10-02 01:20 UTC 核验 `f0dba8d`：windows-audit 通过，三平台 Quality 在仓库规范阶段失败，未进入新代码编译。日志定位为 helper_command 测试内示例用户目录绝对路径被规范检查拒绝；改用运行时临时根构造，仍保留中文、空格、`&` 与固定字面参数/无自定义环境断言，不修改 CI 规则。本地仓库规范检查和 Windows 库/测试交叉 Clippy 通过；新 Windows 运行断言仍待修正后的 CI，不使用 audit 成功冒充这些测试已运行。

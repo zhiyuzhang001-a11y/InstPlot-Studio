@@ -1115,9 +1115,10 @@ mod tests {
     #[cfg(feature = "in-place-update-preview")]
     #[test]
     fn copied_helper_command_has_fixed_entry_and_one_literal_transaction_path() {
-        let executable = Path::new(r"C:\Users\example\private\instplot-update-helper.exe");
-        let directory = Path::new(r"C:\Users\example\私有 事务 & untouched");
-        let command = helper_command(executable, directory);
+        let root = std::env::temp_dir().join("helper-command-fixture");
+        let executable = root.join("private").join("instplot-update-helper.exe");
+        let directory = root.join("私有 事务 & untouched");
+        let command = helper_command(&executable, &directory);
         assert_eq!(command.get_program(), executable.as_os_str());
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
