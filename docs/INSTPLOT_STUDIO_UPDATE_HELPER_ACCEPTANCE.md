@@ -355,3 +355,5 @@ Windows Quality job `110632039722` 单项失败于 assets.rs 的非零退出证�
 Mac HelperReady 必须对应 LaunchingHelper，错阶段就绪不会关闭原窗口；准备失败和通道断线解除等待状态而不授权退出。合法就绪只产生一次 Close 请求，等待关闭期间仍锁住工作。通用异步更新 poll 在首个终结事件后立即消费 receiver，不允许排队的重复结果/后续进度覆盖终结状态；不增加后台监听。
 
 五项新增测试覆盖终结重复拒绝、等待期间冻结且不关闭、失败解除冻结、断线不退出、合法就绪单次关闭且保持冻结、错阶段就绪不退出（等待与失败在同一用例）。`cargo test --locked -p instplot-studio --bin instplot-studio --all-features app_update::tests --quiet` 本机 17 通过、0 失败；工作区全目标全特性 Clippy 通过。消息夹具不是实际按钮/原生助手身份验收，也不宣称 Windows UI 运行通过。2026-10-02 00:26 UTC 远端 `1b33d2d` Linux 通过、其余三项运行中；本地 `9777fc4` 及本批等待该轮最终证据后再推送，不取消运行中的验收。
+
+`1b33d2d` 四项 CI 已于 2026-10-02 00:36 UTC 核验全部通过，无未解决 review thread。Windows Quality job `110645188843` 明确新增 helper_runtime 两项策略、保存项目健康前后 lease 用例及原生 runner 用例通过，Studio 库 263 通过/2 忽略；真实 Inno 两次通过。恢复附件 `11202511045` 下载至 ignored target/windows-recovery-1b33d2d.H7RThh，两例无 false 断言、生产版本不变；desktop on/off 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。生命周期和项目 lease 组件由此有实际 Windows 运行证据，但仍不是 GUI 自动更新/实际重开后保存验收。后续 `9777fc4` 与 `077e546` 单独进入下一批 CI。
