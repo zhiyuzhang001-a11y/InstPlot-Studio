@@ -142,6 +142,13 @@ impl PreparedWindowsHelper {
         let recovery = prepared.installers().recovery.installer();
         candidate.revalidate()?;
         recovery.revalidate()?;
+        // Do not start a bootstrap update from legacy packages that cannot
+        // perform the required independent old/new GUI health handshakes.
+        if !cfg!(feature = "in-place-update-preview") {
+            return Err(invalid("this build has no Windows health entry points"));
+        }
+        candidate.require_supported_contract()?;
+        recovery.require_installed_files(installed.directory())?;
         let previous_license_sha256 = verified_license(installed.directory())?;
         let transaction = UpdateTransaction::new(UpdateIdentity {
             product: "instplot-studio".into(),
@@ -288,6 +295,9 @@ impl HelperRequest {
         )?;
         self.recovery.require(pair.recovery())?;
         self.candidate.require(pair.candidate())?;
+        pair.candidate().require_supported_contract()?;
+        pair.recovery()
+            .require_installed_files(installed.directory())?;
         pair.pin()
     }
 }
@@ -668,6 +678,10 @@ impl WindowsHelperSession {
             return Err(invalid("recovery installer has no durable successful exit"));
         }
         super::native::revalidate_installation(&self.installation)?;
+        self.installers
+            .recovery
+            .installer()
+            .require_installed_files(self.installation.directory())?;
         require_original_files(&self.installation, &self.request)
     }
 }

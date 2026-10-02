@@ -31,6 +31,7 @@ pub struct VerifiedWindowsInstallerManifest {
     version: Version,
     package: UpdatePackage,
     sequence: u64,
+    contract: Option<crate::WindowsInPlaceContract>,
 }
 
 impl VerifiedWindowsInstallerManifest {
@@ -95,6 +96,7 @@ impl VerifiedWindowsInstallerManifest {
             version,
             package,
             sequence: manifest.release_sequence,
+            contract: platform.windows_in_place.clone(),
         })
     }
 
@@ -124,6 +126,7 @@ pub struct VerifiedWindowsInstaller {
     version: Version,
     package: UpdatePackage,
     manifest_sha256: String,
+    contract: Option<crate::WindowsInPlaceContract>,
     #[cfg(windows)]
     enforce_private_acl: bool,
 }
@@ -184,6 +187,7 @@ impl VerifiedWindowsInstaller {
             version: metadata.version,
             package: metadata.package,
             manifest_sha256: format!("{:x}", Sha256::digest(&raw)),
+            contract: metadata.contract,
             #[cfg(windows)]
             enforce_private_acl: false,
         };
@@ -205,6 +209,79 @@ impl VerifiedWindowsInstaller {
     }
     pub fn size_bytes(&self) -> u64 {
         self.package.size_bytes
+    }
+
+    pub fn in_place_contract(&self) -> Option<&crate::WindowsInPlaceContract> {
+        self.contract.as_ref()
+    }
+
+    /// Signature-bound declaration, not a GUI acceptance result. Legacy and
+    /// future unsupported protocols remain manually downloadable only.
+    #[cfg(any(windows, test))]
+    pub(super) fn require_supported_contract(&self) -> io::Result<&crate::WindowsInPlaceContract> {
+        let contract = self
+            .contract
+            .as_ref()
+            .ok_or_else(|| invalid("legacy installer has no in-place compatibility contract"))?;
+        if contract.schema != 1
+            || contract.helper_protocol != 1
+            || contract.transaction_schema != 1
+            || contract.candidate_health_protocol != 1
+            || contract.recovery_health_protocol != 1
+        {
+            return Err(invalid(
+                "unsupported in-place update compatibility contract",
+            ));
+        }
+        Ok(contract)
+    }
+
+    /// Exact fixed-file contract. No execution, deletion, fallback or repair.
+    #[cfg(any(windows, test))]
+    pub(super) fn require_installed_files(&self, directory: &Path) -> io::Result<()> {
+        let contract = self.require_supported_contract()?;
+        for (name, expected) in [
+            ("instplot-studio.exe", &contract.executable_sha256),
+            ("LICENSE", &contract.license_sha256),
+        ] {
+            let path = directory.join(name);
+            reject_redirected_path(&path)?;
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0);
+            }
+            let file = options.open(&path)?;
+            let metadata = file.metadata()?;
+            let limit = if name == "LICENSE" {
+                1024 * 1024
+            } else {
+                MAX_INSTALLER_BYTES
+            };
+            if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
+                return Err(invalid("installed release file exceeds the fixed contract"));
+            }
+            let mut file = file.take(metadata.len() + 1);
+            let mut hash = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut total = 0_u64;
+            loop {
+                let read = file.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                total += read as u64;
+                hash.update(&buffer[..read]);
+            }
+            if total != metadata.len() || format!("{:x}", hash.finalize()) != *expected {
+                return Err(invalid(
+                    "installed file differs from signed release contract",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Repeat immediately before use, within the platform's private-cache lock.
@@ -487,6 +564,80 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.directory).unwrap();
         }
+    }
+
+    fn contract_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "schema":1,"helper_protocol":1,"transaction_schema":1,
+            "candidate_health_protocol":1,"recovery_health_protocol":1,
+            "executable_sha256":format!("{:x}", Sha256::digest(b"fixture executable")),
+            "license_sha256":format!("{:x}", Sha256::digest(b"fixture license")),
+        })
+    }
+
+    #[test]
+    fn legacy_assets_remain_downloadable_but_never_authorize_in_place_update() {
+        let fixture = Fixture::new();
+        let asset = fixture.verify().unwrap();
+        assert!(asset.in_place_contract().is_none());
+        assert!(asset.require_supported_contract().is_err());
+        assert!(asset.require_installed_files(&fixture.directory).is_err());
+    }
+
+    #[test]
+    fn signed_in_place_contract_binds_exact_files_and_supported_protocols() {
+        let mut fixture = Fixture::new();
+        fixture.raw["platforms"]["windows-x86_64"]["windows_in_place"] = contract_fixture();
+        fixture.save();
+        let asset = fixture.verify().unwrap();
+        let installed = fixture.directory.join("installed 中文");
+        fs::create_dir(&installed).unwrap();
+        fs::write(installed.join("instplot-studio.exe"), b"fixture executable").unwrap();
+        fs::write(installed.join("LICENSE"), b"fixture license").unwrap();
+        asset.require_installed_files(&installed).unwrap();
+        fs::write(installed.join("LICENSE"), b"foreign license").unwrap();
+        assert!(asset.require_installed_files(&installed).is_err());
+        fs::write(installed.join("LICENSE"), b"fixture license").unwrap();
+        fs::remove_file(installed.join("instplot-studio.exe")).unwrap();
+        assert!(asset.require_installed_files(&installed).is_err());
+
+        // Tampering with capabilities without a new signature is rejected.
+        fixture.raw["platforms"]["windows-x86_64"]["windows_in_place"]["helper_protocol"] =
+            2.into();
+        fs::write(
+            fixture.directory.join("manifest.json"),
+            serde_json::to_vec(&fixture.raw).unwrap(),
+        )
+        .unwrap();
+        assert!(fixture.verify().is_err());
+        fixture.save();
+        let future = fixture.verify().unwrap();
+        assert!(future.in_place_contract().is_some());
+        assert!(future.require_supported_contract().is_err());
+    }
+
+    #[test]
+    fn malformed_in_place_contract_is_rejected_even_with_a_valid_signature() {
+        let mut fixture = Fixture::new();
+        for (field, value) in [
+            ("schema", serde_json::json!(2)),
+            ("transaction_schema", serde_json::json!(0)),
+            ("candidate_health_protocol", serde_json::json!(0)),
+            ("executable_sha256", serde_json::json!("A".repeat(64))),
+            ("license_sha256", serde_json::json!("short")),
+            ("unknown_command", serde_json::json!("do-not-execute")),
+        ] {
+            let mut contract = contract_fixture();
+            contract[field] = value;
+            fixture.raw["platforms"]["windows-x86_64"]["windows_in_place"] = contract;
+            fixture.save();
+            assert!(fixture.verify().is_err(), "accepted invalid field {field}");
+        }
+        let mut assets = fixture.raw["platforms"]["windows-x86_64"].clone();
+        assets["windows_in_place"] = contract_fixture();
+        fixture.raw["platforms"] = serde_json::json!({"macos-arm64":assets});
+        fixture.save();
+        assert!(fixture.verify().is_err());
     }
 
     #[cfg(windows)]

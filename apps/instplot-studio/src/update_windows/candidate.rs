@@ -226,11 +226,13 @@ impl<'a> WindowsCandidateLaunch<'a> {
             ));
         }
         let installed = Self::verify_installed_candidate(previous, candidate)?;
-        let mut launch = Self::begin_with_resume(
+        let mut launch = Self::begin_with_purpose(
             store,
             transaction,
             installed.executable().into(),
             resume_project,
+            LaunchPurpose::Candidate,
+            Some(&candidate.require_supported_contract()?.executable_sha256),
         )?;
         launch._candidate_lease = Some(candidate_lease);
         Ok(launch)
@@ -240,6 +242,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
         previous: &WindowsInstallation,
         candidate: &super::VerifiedWindowsInstaller,
     ) -> io::Result<WindowsInstallation> {
+        candidate.require_installed_files(previous.directory())?;
         let installed = WindowsInstallation::bind(
             &super::WindowsInstallRecord {
                 app_id: super::STUDIO_APP_ID.into(),
@@ -264,6 +267,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
         Self::begin_with_resume(store, transaction, executable, None)
     }
 
+    #[cfg(test)]
     fn begin_with_resume(
         store: &'a TransactionStore,
         transaction: &UpdateTransaction,
@@ -276,6 +280,7 @@ impl<'a> WindowsCandidateLaunch<'a> {
             executable,
             resume_project,
             LaunchPurpose::Candidate,
+            None,
         )
     }
 
@@ -293,6 +298,14 @@ impl<'a> WindowsCandidateLaunch<'a> {
             helper.installation().executable().into(),
             helper.resume_project(),
             LaunchPurpose::Recovery,
+            Some(
+                &helper
+                    .installers()
+                    .recovery
+                    .installer()
+                    .require_supported_contract()?
+                    .executable_sha256,
+            ),
         )?;
         launch._candidate_lease = Some(&helper.installers().recovery);
         Ok(launch)
@@ -304,10 +317,16 @@ impl<'a> WindowsCandidateLaunch<'a> {
         executable: PathBuf,
         resume_project: Option<&super::WindowsResumeProject>,
         purpose: LaunchPurpose,
+        expected_binary_sha256: Option<&str>,
     ) -> io::Result<Self> {
         let persisted = store.read(transaction.identity())?;
         require_same(transaction, &persisted, purpose.startup_stage())?;
         let (binary_lease, binary_sha256) = pin_binary(&executable)?;
+        if expected_binary_sha256.is_some_and(|expected| expected != binary_sha256) {
+            return Err(invalid(
+                "pinned launch binary differs from signed release contract",
+            ));
+        }
         let resume_lease = resume_project
             .map(|project| project.pin(&transaction.identity().installed_path))
             .transpose()?;
@@ -1041,6 +1060,43 @@ mod tests {
     }
 
     #[test]
+    fn signed_binary_mismatch_is_rejected_before_any_launch_intent() {
+        let fixture = Fixture::new();
+        let store = TransactionStore::lock(&fixture.0).unwrap();
+        let state = fixture.transaction();
+        store.write(&state).unwrap();
+        let exe = executable();
+        assert!(
+            WindowsCandidateLaunch::begin_with_purpose(
+                &store,
+                &state,
+                exe.clone(),
+                None,
+                LaunchPurpose::Candidate,
+                Some(&"0".repeat(64)),
+            )
+            .is_err()
+        );
+        assert!(!fixture.0.join("candidate-launch.json").exists());
+        assert_eq!(
+            store.read(state.identity()).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        let (_, hash) = pin_binary(&exe).unwrap();
+        let launch = WindowsCandidateLaunch::begin_with_purpose(
+            &store,
+            &state,
+            exe,
+            None,
+            LaunchPurpose::Candidate,
+            Some(&hash),
+        )
+        .unwrap();
+        assert_eq!(launch.record.binary_sha256, hash);
+        assert!(fixture.0.join("candidate-launch.json").exists());
+    }
+
+    #[test]
     fn launch_requires_exact_persisted_transaction_and_strict_record() {
         let fixture = Fixture::new();
         let store = TransactionStore::lock(&fixture.0).unwrap();
@@ -1468,6 +1524,7 @@ mod tests {
             exe.clone(),
             None,
             LaunchPurpose::Recovery,
+            None,
         )
         .unwrap();
         assert!(WindowsCandidateLaunch::begin(&store, &state, exe.clone()).is_err());
@@ -1551,6 +1608,7 @@ mod tests {
                 exe,
                 None,
                 LaunchPurpose::Recovery,
+                None,
             )
             .is_err()
         );

@@ -357,3 +357,13 @@ Mac HelperReady 必须对应 LaunchingHelper，错阶段就绪不会关闭原窗
 五项新增测试覆盖终结重复拒绝、等待期间冻结且不关闭、失败解除冻结、断线不退出、合法就绪单次关闭且保持冻结、错阶段就绪不退出（等待与失败在同一用例）。`cargo test --locked -p instplot-studio --bin instplot-studio --all-features app_update::tests --quiet` 本机 17 通过、0 失败；工作区全目标全特性 Clippy 通过。消息夹具不是实际按钮/原生助手身份验收，也不宣称 Windows UI 运行通过。2026-10-02 00:26 UTC 远端 `1b33d2d` Linux 通过、其余三项运行中；本地 `9777fc4` 及本批等待该轮最终证据后再推送，不取消运行中的验收。
 
 `1b33d2d` 四项 CI 已于 2026-10-02 00:36 UTC 核验全部通过，无未解决 review thread。Windows Quality job `110645188843` 明确新增 helper_runtime 两项策略、保存项目健康前后 lease 用例及原生 runner 用例通过，Studio 库 263 通过/2 忽略；真实 Inno 两次通过。恢复附件 `11202511045` 下载至 ignored target/windows-recovery-1b33d2d.H7RThh，两例无 false 断言、生产版本不变；desktop on/off 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。生命周期和项目 lease 组件由此有实际 Windows 运行证据，但仍不是 GUI 自动更新/实际重开后保存验收。后续 `9777fc4` 与 `077e546` 单独进入下一批 CI。
+
+## 签名安装契约与兼容拒绝门（本地，尚未发布契约资产）
+
+可选 `platforms.windows-x86_64.windows_in_place` 完整包含在既有原始字节签名中，严格字段：schema、helper_protocol、transaction_schema、candidate_health_protocol、recovery_health_protocol、executable_sha256、license_sha256。其他平台带该字段、无效 schema/零协议、畸形/大写哈希及未知字段拒绝；未知正数协议可手动下载，但当前自动应用只支持全部为 1 的契约。缺字段的真实旧清单仍能验签下载，不能创建自动替换助手。尚未发布任何带契约的生产包或清单，不推测 rc.2 恢复安装器具备健康接口。
+
+复制助手创建与认证载入要求双方兼容契约，旧安装 exe/LICENSE 精确匹配可信恢复包的签名哈希；非预览构建没有 Windows 健康入口，拒绝创建助手。安装后和恢复后验签绑定固定文件，候选/恢复单次启动预留时在实际 exe 只读 lease 保持期间再次比对签名哈希，错哈希不写任何启动意图。文件读取固定路径、拒绝重定向、限制大小和实际读取量，不执行清单命令、修改用户数据或修复错误资产。
+
+新增三项跨平台测试：旧清单下载与自动应用隔离；签名契约匹配固定文件/文件篡改/缺失/未重签契约篡改/未来协议拒绝；有效签名下的畸形契约和跨平台错放拒绝。资产测试本机 9 通过，原签名更新测试 4 通过，工作区 Clippy 和 Windows 库/测试交叉 Clippy 通过。新增 Windows pinned-binary 用例要求错哈希在写意图前拒绝、匹配后预留一次，原生运行待后续 CI。
+
+发布生成/验证脚本目前仍只处理现行清单，不生成契约字段；必须在真实助手入口和兼容能力验收完成后同时接通，不能凭声明开放更新。旧 rc.2 客户端会拒绝未知字段，首次仍须手动迁入更新客户端，不能覆盖既有 rc.2 公共清单。此为计划内兼容门的接收规则，不代表 Windows GUI、父窗口或正式发布完成。
