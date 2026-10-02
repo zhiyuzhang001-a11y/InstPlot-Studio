@@ -411,3 +411,13 @@ WindowsParentHelper 预览接口在既有单次 spawn 后保留实际 Child 与 
 WindowsInstallAccess 新增 held 状态，未持有锁不能伪装 shared/exclusive。promotion 仅在真实同目标父进程和精确 WaitingForExit 请求复核后尝试原锁 shared → exclusive，不重复在已锁句柄上叠加不确定的锁操作；释放共享后真实非阻塞排他锁失败则恢复共享，恢复失败保持 held=false、报检查。拿到排他后再验证等待证明，证明失败保留排他而不授权关闭。WindowsParentHelper readiness 现在要求仍持有同目标父侧排他 guard，promotion 失败禁用就绪；取消真实 Child 退出且状态再次验证后，恢复同一 guard 的共享锁，才能释放项目租约，恢复失败保持冻结与 owner。没有枚举 PID、强杀或省略助手独立排他检查。
 
 扩展实际 Windows 安装锁组件用例：缺等待证明不释放原共享锁；第二实例阻止提升且共享锁恢复；唯一实例可提升并阻止新的 shared；重复提升拒绝；提升后证明变化仍保留排他；未取消不恢复共享；取消后恢复共享并可重复确认。该用例的状态门使用隔离闭包夹具，真实持久请求门由生产接口验证，不能将闭包当作端到端退出/取消证据。Windows 库/测试交叉 Clippy、工作区 Clippy 通过；新增原生运行断言待下一轮 CI。父窗口 GUI 尚未接入，未开放入口、未修改版本或发布。
+
+## 父窗口内部预览接通与退出边界（本地，GUI 实机仍待验）
+
+AppUpdateState 现保留实际 WindowsParentOwned，沿既有保存/草稿保护后 launch_helper 内部路径绑定 primary 项目、单次启动、父锁提升、250ms 就绪/取消轮询及冻结分支。不增加公开安装按钮。启动失败保留 Box<WindowsParentStartFailure> 与项目租约，只有精确 Prepared/Waiting 无执行意图及真实原进程/文件证明的持久取消成功、原 shared guard 验证、失败 owner 释放后才解冻；Active 则还要求真实 Child 已退出、锁恢复。解释错误、缺 owner、phase 异常不得覆盖成解冻的普通 Failed。取消或超时不授权 Close；即将发出 Close 时再次复核完整证明，单次派发后不提供迟到取消；状态撤销不能沿用缓存 allow_close。
+
+主窗口冻结分支原本对所有 close_requested 发 CancelClose，现只拦未授权关闭。新增实际 egui 主窗口 headless 用例验证提前关闭被取消、已获准关闭不被取消；仅模拟授权开关，不声称真实助手健康已运行。Mac app_update 测试 18 通过，保存/草稿 update_workflow 测试 4 通过；本轮全量回归 350 通过/0 失败/1 忽略（后续退出授权状态小补丁另跑 targeted 检查）。Windows 增加 missing owner/错误/重查不能解冻或退出测试，并扩展 Prepared 无 Child 持久取消拒绝原文件失败/执行阶段、成功到 FailedBeforeApply；新运行断言待 CI。
+
+Windows 库及实际 app_update 源码的隔离交叉 Clippy 类型检查、工作区全目标全特性 Clippy 通过。ignored target/windows-native-check 加入 UI wrapper，仅类型检查使用不带 TLS 特性的 ureq 以避开本机缺 Windows C SDK；不运行网络、不修改生产依赖/锁文件、不冒充 Windows 链接、TLS 安全或 GUI 运行验证。真正 Windows CI 继续使用生产 Rustls 和既定依赖。测试夹具初次 headless 输出未清理 texture delta，按 egui 测试契约清理后通过；未改生产渲染逻辑。
+
+2026-10-02 02:15 UTC（距上次核验超过 10 分钟）`2bac6b1` 四项 CI 全部通过，无未解决 review thread。Windows job `110669478773` 的 parent_helper 三项策略通过，真实 Inno 两次通过；附件 `11205930679` 在 ignored target/windows-recovery-2bac6b1.Pzeu2y，scope 仍为 installer-recovery-prototype-not-GUI-updater，无 false 断言、生产版本不变，on/off applied/restored/user_data_preserved=true、快捷方式分别 true/false。此次仅证明已推送 holder 策略，不借它宣称后续 `45e531e` 原生提升或本批 UI 实机通过。

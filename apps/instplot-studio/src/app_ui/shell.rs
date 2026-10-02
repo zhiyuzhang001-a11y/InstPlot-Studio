@@ -4,7 +4,9 @@ impl eframe::App for StudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = ui.ctx().clone();
         if self.update.is_launching() {
-            if context.input(|input| input.viewport().close_requested()) {
+            if (!self.allow_close || !self.update.allows_helper_close())
+                && context.input(|input| input.viewport().close_requested())
+            {
                 context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }
             ui.spinner();

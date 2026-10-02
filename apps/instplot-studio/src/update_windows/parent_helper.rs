@@ -7,6 +7,46 @@ use super::{PreparedWindowsHelper, WindowsInstallAccess};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A start failure never obtained a Child. Retain this owner in the frozen GUI
+/// until exact cancellation succeeds; then drop it before unfreezing work so
+/// its saved-project lease is actually released. Failure keeps inspection.
+#[must_use = "retain start failure resources until cancellation is verified"]
+pub struct WindowsParentStartFailure {
+    error: io::Error,
+    prepared: PreparedWindowsHelper,
+}
+
+impl WindowsParentStartFailure {
+    pub fn error(&self) -> &io::Error {
+        &self.error
+    }
+
+    pub fn cancel_before_any_child(&self) -> io::Result<()> {
+        self.prepared.cancel_unspawned_before_exit()
+    }
+}
+
+impl std::fmt::Debug for WindowsParentStartFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WindowsParentStartFailure")
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for WindowsParentStartFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for WindowsParentStartFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowsParentReadiness {
     Waiting,
@@ -32,8 +72,13 @@ impl WindowsParentHelper {
     /// Call only after user restart consent and successful work protection.
     /// A spawn error grants no permission to close the parent. The existing
     /// adapter persists cancellation or leaves inspection evidence on failure.
-    pub fn start_after_work_protection(prepared: PreparedWindowsHelper) -> io::Result<Self> {
-        let child = prepared.spawn_after_work_protection()?;
+    pub fn start_after_work_protection(
+        prepared: PreparedWindowsHelper,
+    ) -> Result<Self, Box<WindowsParentStartFailure>> {
+        let child = match prepared.spawn_after_work_protection() {
+            Ok(child) => child,
+            Err(error) => return Err(Box::new(WindowsParentStartFailure { error, prepared })),
+        };
         // No fallible operation after acquiring the actual Child.
         Ok(Self {
             owned: Some(OwnedHelper { prepared, child }),

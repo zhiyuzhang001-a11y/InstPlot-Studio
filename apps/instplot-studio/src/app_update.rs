@@ -80,6 +80,17 @@ enum UpdatePhase {
     },
     #[cfg(all(windows, feature = "in-place-update-preview"))]
     PreparedWindows(Arc<instplot_studio::update_windows::PreparedWindowsInstallers>),
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    WindowsHelper {
+        cancelling: bool,
+        explanation: Option<String>,
+    },
+}
+
+#[cfg(all(windows, feature = "in-place-update-preview"))]
+enum WindowsParentOwned {
+    Active(Box<instplot_studio::update_windows::WindowsParentHelper>),
+    FailedStart(Box<instplot_studio::update_windows::WindowsParentStartFailure>),
 }
 
 enum UpdateEvent {
@@ -115,7 +126,15 @@ pub(super) struct AppUpdateState {
     #[cfg(target_os = "macos")]
     instance_guard: Result<instplot_studio::update_bundle::BundleAccess, String>,
     #[cfg(all(windows, feature = "in-place-update-preview"))]
-    _windows_instance_guard: Result<instplot_studio::update_windows::WindowsInstallAccess, String>,
+    windows_instance_guard: Result<instplot_studio::update_windows::WindowsInstallAccess, String>,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    windows_parent: Option<WindowsParentOwned>,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    windows_parent_poll: std::time::Instant,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    windows_exit_requested: bool,
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    windows_close_dispatched: bool,
 }
 
 impl Default for AppUpdateState {
@@ -133,7 +152,15 @@ impl Default for AppUpdateState {
             #[cfg(target_os = "macos")]
             instance_guard: Err("尚未初始化安装进程锁。".into()),
             #[cfg(all(windows, feature = "in-place-update-preview"))]
-            _windows_instance_guard: Err("尚未初始化安装进程锁。".into()),
+            windows_instance_guard: Err("尚未初始化安装进程锁。".into()),
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            windows_parent: None,
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            windows_parent_poll: std::time::Instant::now(),
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            windows_exit_requested: false,
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            windows_close_dispatched: false,
         }
     }
 }
@@ -152,7 +179,7 @@ impl AppUpdateState {
     ) {
         // Lifetime ownership. Preview may prepare packages, but installation
         // and restart remain disabled pending full helper/health/recovery acceptance.
-        self._windows_instance_guard = guard;
+        self.windows_instance_guard = guard;
     }
 
     #[cfg(target_os = "macos")]
@@ -182,7 +209,11 @@ impl AppUpdateState {
         {
             matches!(self.phase, UpdatePhase::LaunchingHelper)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        {
+            self.windows_parent.is_some() || matches!(self.phase, UpdatePhase::WindowsHelper { .. })
+        }
+        #[cfg(not(any(target_os = "macos", all(windows, feature = "in-place-update-preview"))))]
         {
             false
         }
@@ -211,10 +242,67 @@ impl AppUpdateState {
         std::mem::take(&mut self.restart_requested)
     }
     pub(super) fn take_close_request(&mut self) -> bool {
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        if self.close_requested {
+            use instplot_studio::update_windows::WindowsParentReadiness;
+            let proof = (|| {
+                let guard = self.windows_instance_guard.as_ref().map_err(Clone::clone)?;
+                let Some(WindowsParentOwned::Active(owner)) = self.windows_parent.as_mut() else {
+                    return Err("缺少实际助手，不能请求退出。".to_owned());
+                };
+                match owner
+                    .poll_readiness(guard)
+                    .map_err(|error| error.to_string())?
+                {
+                    WindowsParentReadiness::Ready => Ok(()),
+                    WindowsParentReadiness::Waiting => {
+                        Err("助手尚未就绪，不能请求退出。".to_owned())
+                    }
+                }
+            })();
+            if let Err(error) = proof {
+                self.close_requested = false;
+                self.windows_exit_requested = false;
+                self.explain_blocked(error);
+                return false;
+            }
+            self.windows_close_dispatched = true;
+        }
         std::mem::take(&mut self.close_requested)
+    }
+
+    pub(super) fn allows_helper_close(&self) -> bool {
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        {
+            self.windows_close_dispatched
+                && self.windows_exit_requested
+                && matches!(
+                    self.phase,
+                    UpdatePhase::WindowsHelper {
+                        cancelling: false,
+                        ..
+                    }
+                )
+                && matches!(self.windows_parent, Some(WindowsParentOwned::Active(_)))
+        }
+        #[cfg(not(all(windows, feature = "in-place-update-preview")))]
+        {
+            true
+        }
     }
     pub(super) fn explain_blocked(&mut self, explanation: String) {
         self.open = true;
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        if self.is_launching() {
+            self.close_requested = false;
+            self.windows_exit_requested = false;
+            self.windows_close_dispatched = false;
+            self.phase = UpdatePhase::WindowsHelper {
+                cancelling: true,
+                explanation: Some(explanation),
+            };
+            return;
+        }
         self.phase = UpdatePhase::Failed { explanation };
     }
 
@@ -247,7 +335,11 @@ impl AppUpdateState {
                 let _ = sender.send(UpdateEvent::HelperReady(prepared.launch(project)));
             });
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        {
+            self.launch_windows_helper(project);
+        }
+        #[cfg(not(any(target_os = "macos", all(windows, feature = "in-place-update-preview"))))]
         {
             let _ = project;
             self.explain_blocked("该安装方式的安全原位升级尚未通过平台验证。".into());
@@ -314,6 +406,8 @@ impl AppUpdateState {
     }
 
     fn poll(&mut self, context: &egui::Context) {
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        self.poll_windows_parent(context);
         let Some(receiver) = self.receiver.take() else {
             return;
         };
@@ -434,6 +528,10 @@ impl AppUpdateState {
     pub(super) fn window(&mut self, context: &egui::Context, pending_drafts: &[String]) {
         self.start_background_check(context);
         self.poll(context);
+        #[cfg(all(windows, feature = "in-place-update-preview"))]
+        if self.is_launching() {
+            self.open = true;
+        }
         if self.receiver.is_some() {
             context.request_repaint_after(Duration::from_millis(100));
         }
@@ -453,6 +551,10 @@ impl AppUpdateState {
                 .frame(studio_card_frame(context.theme() == egui::Theme::Dark))
                 .show(context, |ui| self.fields(ui, pending_drafts));
             self.open = open;
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            if self.is_launching() {
+                self.open = true;
+            }
         } else {
             let builder = spec.viewport("检查更新");
             let close_requested = context.show_viewport_immediate(viewport_id, builder, |ui, _| {
@@ -469,12 +571,44 @@ impl AppUpdateState {
             });
             if close_requested {
                 self.open = false;
+                #[cfg(all(windows, feature = "in-place-update-preview"))]
+                if self.is_launching() {
+                    self.open = true;
+                }
             }
         }
     }
 
     fn fields(&mut self, ui: &mut egui::Ui, pending_drafts: &[String]) {
         match self.phase.clone() {
+            #[cfg(all(windows, feature = "in-place-update-preview"))]
+            UpdatePhase::WindowsHelper {
+                cancelling,
+                explanation,
+            } => {
+                ui.spinner();
+                ui.label(if cancelling {
+                    "正在取消更新并等待助手正常退出；当前工作保持锁定。"
+                } else {
+                    "正在确认唯一实例与更新助手；当前工作保持锁定。"
+                });
+                if let Some(explanation) = explanation {
+                    ui.colored_label(egui::Color32::LIGHT_RED, explanation);
+                }
+                if !cancelling
+                    && !self.windows_close_dispatched
+                    && ui.button("取消更新，返回当前工作").clicked()
+                {
+                    self.close_requested = false;
+                    self.windows_exit_requested = false;
+                    self.windows_close_dispatched = false;
+                    self.phase = UpdatePhase::WindowsHelper {
+                        cancelling: true,
+                        explanation: None,
+                    };
+                }
+                ui.weak("只有持久取消、真实助手退出及安装锁恢复全部确认后才解除锁定；不会强制终止进程。");
+            }
             #[cfg(target_os = "macos")]
             UpdatePhase::LaunchingHelper => {
                 ui.spinner();
@@ -598,7 +732,7 @@ impl AppUpdateState {
                 #[cfg(not(target_os = "macos"))]
                 ui.weak("该安装方式的安全原位升级尚在验证；可显示安装包手动升级。");
                 #[cfg(all(windows, feature = "in-place-update-preview"))]
-                if self._windows_instance_guard.is_ok()
+                if self.windows_instance_guard.is_ok()
                     && ui.button("准备可信恢复包（技术验证）").clicked()
                 {
                     self.start_windows_preparation(ui.ctx(), &path, &update.version);
@@ -664,6 +798,147 @@ impl AppUpdateState {
                     .open_url(egui::OpenUrl::new_tab(GITHUB_RELEASES_ROOT));
             }
         });
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    fn launch_windows_helper(&mut self, project: Option<PathBuf>) {
+        use instplot_studio::update_windows::{PreparedWindowsHelper, WindowsParentHelper};
+        let UpdatePhase::PreparedWindows(prepared) = &self.phase else {
+            return;
+        };
+        if self.windows_parent.is_some() {
+            return;
+        }
+        if let Err(error) = &self.windows_instance_guard {
+            self.explain_blocked(error.clone());
+            return;
+        }
+        // Called by the existing saved/discarded-drafts replacement flow, not
+        // from a new public button. No release capability is enabled here.
+        let prepared = PreparedWindowsHelper::create(prepared).and_then(|mut helper| {
+            helper.set_resume_project(project.as_deref())?;
+            Ok(helper)
+        });
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.explain_blocked(error.to_string());
+                return;
+            }
+        };
+        self.windows_exit_requested = false;
+        self.windows_close_dispatched = false;
+        self.close_requested = false;
+        self.receiver = None;
+        let (owned, cancelling, explanation) =
+            match WindowsParentHelper::start_after_work_protection(prepared) {
+                Ok(mut owner) => {
+                    let promoted = owner
+                        .promote_installation_access(self.windows_instance_guard.as_mut().unwrap());
+                    let explanation = promoted.err().map(|error| error.to_string());
+                    let cancelling = explanation.is_some();
+                    (
+                        WindowsParentOwned::Active(Box::new(owner)),
+                        cancelling,
+                        explanation,
+                    )
+                }
+                Err(failure) => {
+                    let explanation = Some(failure.to_string());
+                    (WindowsParentOwned::FailedStart(failure), true, explanation)
+                }
+            };
+        self.windows_parent = Some(owned);
+        self.windows_parent_poll = std::time::Instant::now();
+        self.phase = UpdatePhase::WindowsHelper {
+            cancelling,
+            explanation,
+        };
+        self.open = true;
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    fn poll_windows_parent(&mut self, context: &egui::Context) {
+        use instplot_studio::update_windows::WindowsParentReadiness;
+        if !self.is_launching() || self.windows_exit_requested {
+            return;
+        }
+        context.request_repaint_after(Duration::from_millis(250));
+        if self.windows_parent_poll.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        self.windows_parent_poll = std::time::Instant::now();
+        let UpdatePhase::WindowsHelper {
+            cancelling,
+            explanation,
+        } = self.phase.clone()
+        else {
+            // A lost phase must not drop an owned process or unlock work.
+            self.phase = UpdatePhase::WindowsHelper {
+                cancelling: true,
+                explanation: Some("更新阶段异常，保持锁定并尝试安全取消。".into()),
+            };
+            return;
+        };
+        let result = (|| {
+            let guard = self
+                .windows_instance_guard
+                .as_mut()
+                .map_err(|error| error.clone())?;
+            let parent = self
+                .windows_parent
+                .as_mut()
+                .ok_or_else(|| "缺失助手持有对象，需要人工检查；原窗口保持锁定。".to_owned())?;
+            if cancelling {
+                match parent {
+                    WindowsParentOwned::Active(owner) => owner
+                        .cancel_and_poll_exit(guard)
+                        .map_err(|error| error.to_string()),
+                    WindowsParentOwned::FailedStart(failure) => {
+                        failure
+                            .cancel_before_any_child()
+                            .map_err(|error| error.to_string())?;
+                        guard
+                            .require_idle_startup()
+                            .map_err(|error| error.to_string())?;
+                        Ok(true)
+                    }
+                }
+            } else {
+                match parent {
+                    WindowsParentOwned::Active(owner) => owner
+                        .poll_readiness(guard)
+                        .map(|readiness| readiness == WindowsParentReadiness::Ready)
+                        .map_err(|error| error.to_string()),
+                    WindowsParentOwned::FailedStart(_) => Err("助手未启动，不能请求退出。".into()),
+                }
+            }
+        })();
+        match result {
+            Ok(true) if cancelling => {
+                // Drop the start-failure project's lease BEFORE unfreezing.
+                self.windows_parent = None;
+                self.close_requested = false;
+                self.phase = match explanation {
+                    Some(explanation) => UpdatePhase::Failed {
+                        explanation: format!("更新未开始，原工作已恢复。\n{explanation}"),
+                    },
+                    None => UpdatePhase::Idle,
+                };
+            }
+            Ok(true) => {
+                self.windows_exit_requested = true;
+                self.close_requested = true;
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.close_requested = false;
+                self.phase = UpdatePhase::WindowsHelper {
+                    cancelling: true,
+                    explanation: Some(error),
+                };
+            }
+        }
     }
 
     #[cfg(all(windows, feature = "in-place-update-preview"))]
@@ -1338,6 +1613,89 @@ fn byte_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn frozen_shell_blocks_early_close_but_not_authorized_helper_exit() {
+        let context = egui::Context::default();
+        let creation = eframe::CreationContext::_new_kittest(context.clone());
+        let mut app = crate::StudioApp::new(&creation, std::time::Instant::now(), None);
+        app.update.phase = UpdatePhase::LaunchingHelper;
+        app.update.open = false;
+        let mut frame = eframe::Frame::_new_kittest();
+        let close_input = || {
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events
+                .push(egui::ViewportEvent::Close);
+            input
+        };
+        let mut output = context.run_ui(close_input(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut frame)
+        });
+        assert!(
+            output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .unwrap()
+                .commands
+                .contains(&egui::ViewportCommand::CancelClose)
+        );
+        assert!(!app.allow_close);
+        output.textures_delta.clear();
+        // Simulate only the already-authorized close gate, not a real helper or
+        // native health proof. The shell must not veto that normal exit.
+        app.allow_close = true;
+        let mut output = context.run_ui(close_input(), |ui| {
+            eframe::App::ui(&mut app, ui, &mut frame)
+        });
+        assert!(
+            !output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .unwrap()
+                .commands
+                .contains(&egui::ViewportCommand::CancelClose)
+        );
+        output.textures_delta.clear();
+    }
+
+    #[cfg(all(windows, feature = "in-place-update-preview"))]
+    #[test]
+    fn windows_missing_owner_and_failure_never_unlock_or_authorize_close() {
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::WindowsHelper {
+            cancelling: false,
+            explanation: None,
+        };
+        assert!(state.is_launching());
+        state.close_requested = true;
+        state.windows_exit_requested = true;
+        assert!(!state.take_close_request());
+        assert!(!state.windows_exit_requested);
+        assert!(!state.allows_helper_close());
+        assert!(state.is_launching());
+        state.explain_blocked("inspection".into());
+        assert!(matches!(
+            state.phase,
+            UpdatePhase::WindowsHelper {
+                cancelling: true,
+                ..
+            }
+        ));
+        assert!(state.is_launching());
+        let context = egui::Context::default();
+        state.request_check(&context);
+        assert!(matches!(state.phase, UpdatePhase::WindowsHelper { .. }));
+        assert!(state.receiver.is_none());
+        state.windows_parent_poll = std::time::Instant::now() - Duration::from_secs(1);
+        state.poll_windows_parent(&context);
+        assert!(state.is_launching());
+        assert!(!state.take_close_request());
+    }
 
     #[test]
     fn terminal_update_result_consumes_receiver_without_duplicate_replay() {

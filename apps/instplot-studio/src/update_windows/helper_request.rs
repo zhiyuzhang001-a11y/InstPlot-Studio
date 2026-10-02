@@ -294,6 +294,28 @@ impl PreparedWindowsHelper {
         Ok(())
     }
 
+    /// Only the start-failure owner (which never obtained a Child) calls this.
+    /// Preparation/arming failures may still be Prepared rather than Waiting.
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn cancel_unspawned_before_exit(&self) -> io::Result<()> {
+        let store = TransactionStore::lock(&self.directory)?;
+        let stage = store.read(&self.request.identity)?.stage();
+        if stage == UpdateStage::Prepared {
+            abort_before_apply(
+                &store,
+                &self.request,
+                UpdateStage::Prepared,
+                "helper never spawned",
+                || self.verify_running_parent(),
+            )?;
+        } else if !cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+            abort_waiting(&store, &self.request, "helper never spawned", || {
+                self.verify_running_parent()
+            })?;
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "in-place-update-preview")]
     pub(super) fn confirm_bound_parent_waiting(&self, target: &Path) -> io::Result<()> {
         if fs::canonicalize(target)? != self.request.identity.installed_path {
@@ -837,8 +859,32 @@ fn abort_waiting(
     reason: &str,
     verify_original: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<UpdateTransaction> {
+    abort_before_apply(
+        store,
+        request,
+        UpdateStage::WaitingForExit,
+        reason,
+        verify_original,
+    )
+}
+
+fn abort_before_apply(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    expected: UpdateStage,
+    reason: &str,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    if !matches!(
+        expected,
+        UpdateStage::Prepared | UpdateStage::WaitingForExit
+    ) {
+        return Err(invalid(
+            "unspawned cancellation cannot accept execution stages",
+        ));
+    }
     let mut state = store.read(&request.identity)?;
-    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    require_transaction(request, &state, expected)?;
     require_no_execution(store)?;
     verify_original()?;
     state.record_error(reason);
@@ -1414,6 +1460,39 @@ mod tests {
         let store = TransactionStore::lock(&root).unwrap();
         let request = request();
         let mut waiting = request.transaction().unwrap();
+        store.write(&waiting).unwrap();
+        assert!(
+            abort_before_apply(
+                &store,
+                &request,
+                UpdateStage::Prepared,
+                "unspawned",
+                || Err(invalid("original mismatch"))
+            )
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Prepared
+        );
+        assert!(
+            abort_before_apply(
+                &store,
+                &request,
+                UpdateStage::Applying,
+                "unsafe stage",
+                || panic!("not allowed")
+            )
+            .is_err()
+        );
+        let cancelled =
+            abort_before_apply(&store, &request, UpdateStage::Prepared, "unspawned", || {
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(cancelled.stage(), UpdateStage::FailedBeforeApply);
+        assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+        // Reset only the isolated fixture to test the separate armed branch.
         waiting.transition(UpdateStage::WaitingForExit).unwrap();
         store.write(&waiting).unwrap();
         assert!(!cancelled_waiting(&store, &request, || panic!("still waiting")).unwrap());
