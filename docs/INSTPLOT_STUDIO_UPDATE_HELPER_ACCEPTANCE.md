@@ -451,3 +451,11 @@ prepare_oss_release.py 目前不能生成/验证 windows_in_place，因此资产
 沿用成功链的当前源代码旧/新二进制，在 ignored target/macos-update-qa/run.99qpAI 的 health-write-failure 夹具中，仅预建 health.json 为目录以阻止真实回执写入，不修改二进制或伪造回执。原版实际窗口恢复 QA saved project；助手就绪 id/nonce/PID 匹配后，通过正常系统退出关闭原版。真实候选启动后不能确认健康，事务最终 rolled_back，自动单次重开 rc.2 原版，实际窗口与项目画面确认恢复。旧 binary 精确恢复、项目哈希未变、failed-candidate.app 保留、无有效候选健康回执，项目检查及 PNG/PDF 导出通过；机器本地证据 qa-export-result.json。该测试覆盖 post-verification helper 的真实健康失败恢复，不把手工构造已验证事务当作失败分支的下载/DMG UI 证据。
 
 Windows 附件 `11278031486` 已下载至 ignored target/windows-recovery-94f8b29.8W469z：两例布尔断言全部 true、production_version_unchanged=true；原生结果 on/off 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。scope 仍为 installer-recovery-prototype-not-GUI-updater，未完成 Windows 实机 GUI。
+
+### 2026-10-04 未保存取消、文字草稿拦截及保存后真实更新
+
+在恢复后的隔离原版增加曲线，确认标题带 *。准备升级后点击重启出现主窗口“尚未保存的更改”对话框，助手未启动，磁盘项目仍为 baseline 哈希；选择取消后原窗口、未保存曲线仍保留。输入无效文字 `${`，编辑器实际显示缺少结束 $，更新窗口列出“文字输入仍未应用”并禁用重启；没有自动丢弃输入或关闭。鼠标在更新子窗口操作曾未推进，键盘 Tab/Space 可推进，因此不判为下载实现失败；剪贴板调用虽报告超时，实际界面确认完整 `${` 已输入，结论以界面而非工具调用返回为准。
+
+修正为 QA saved annotation 后，再次重启仍需保存确认。选择保存后新事务 `531db08e…` completed，旧 PID 18371 正常退出，新 PID 18619 单次启动；真实 health 的 id/nonce/路径/版本/进程及 initialized/window_ready 全部匹配。候选 binary 哈希与签名测试包基准匹配，保存后的项目哈希为 0d6409d5dfd087a7d7cea2a1bec483aa7fba989b57c1c167998844ad4bf0e585，项目检查无警告，保存文件与新窗口均含新增文字/曲线，标题不再带 *，版本 rc.3。此为主动保存造成的预期内容变化，不声称仍等于保存前 baseline；原恢复测试证据不覆盖或删除。
+
+文字无效草稿与未保存取消/保存分支有实际 GUI 证据，其他数值/录入/工具草稿保护仍依赖既有针对性组件测试，不冒充逐项 GUI 输入。仍需正式生产信任配置的构建及安装核验，条件满足后方可按用户授权替换 Spotlight；Windows 门槛与未批准发布保持不变。
