@@ -70,8 +70,11 @@ def build_spec(asset_dir: Path, version: str, windows_contract_path: Path | None
         installer = asset_dir / f"InstPlot-Studio-{version}-windows-x86_64-setup.exe"
         if installer.is_symlink():
             raise ValueError("Windows installer must not be a symlink")
+        digest_state = hashlib.sha256()
         with installer.open("rb") as source:
-            digest = hashlib.file_digest(source, "sha256").hexdigest()
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                digest_state.update(block)
+        digest = digest_state.hexdigest()
         if evidence["installer_sha256"] != digest:
             raise ValueError("Windows contract evidence installer hash mismatch")
         # Reuse the publisher's exact schema instead of maintaining a looser

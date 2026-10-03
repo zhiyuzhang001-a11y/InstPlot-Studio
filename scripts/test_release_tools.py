@@ -12,6 +12,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,10 +85,12 @@ class ReleaseAssetSpecTests(unittest.TestCase):
             version = "0.1.2-rc.3"
             for suffix in ("linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-aarch64.dmg", "windows-x86_64-setup.exe"):
                 (assets / f"InstPlot-Studio-{version}-{suffix}").write_bytes(b"fixture")
+            installer_bytes = b"fixture" * 200000  # Cross the 1 MiB streaming boundary.
+            (assets / f"InstPlot-Studio-{version}-windows-x86_64-setup.exe").write_bytes(installer_bytes)
             proof = root / "evidence.json"
             evidence = {
                 "scope": "preview-components-not-accepted-updater", "version": version,
-                "installer_sha256": hashlib.sha256(b"fixture").hexdigest(),
+                "installer_sha256": hashlib.sha256(installer_bytes).hexdigest(),
                 "contract": {
                     "schema": 1, "helper_protocol": 1, "transaction_schema": 1,
                     "candidate_health_protocol": 1, "recovery_health_protocol": 1,
@@ -96,7 +99,8 @@ class ReleaseAssetSpecTests(unittest.TestCase):
             }
             proof.write_text(json.dumps(evidence))
             self.assertNotIn("windows_in_place", ASSET_MODULE.build_spec(assets, version)["platforms"]["windows-x86_64"])
-            self.assertEqual(ASSET_MODULE.build_spec(assets, version, proof)["platforms"]["windows-x86_64"]["windows_in_place"], evidence["contract"])
+            with patch.object(ASSET_MODULE.hashlib, "file_digest", side_effect=AssertionError("Python 3.11-only API must not be called"), create=True):
+                self.assertEqual(ASSET_MODULE.build_spec(assets, version, proof)["platforms"]["windows-x86_64"]["windows_in_place"], evidence["contract"])
             for field, value in (("installer_sha256", "0" * 64), ("version", "0.1.2-rc.2"), ("scope", "accepted"), ("contract", {"schema": 1})):
                 proof.write_text(json.dumps({**evidence, field: value}))
                 with self.subTest(field=field), self.assertRaises(ValueError):

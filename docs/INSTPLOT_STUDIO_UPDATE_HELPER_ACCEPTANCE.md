@@ -507,3 +507,5 @@ build_package.ps1 的 -InPlaceUpdatePreview 仅显式构建测试能力，核验
 既有 Windows 恢复原型改用同一隔离源码快照的两个 preview 版本，测试当前/下一公钥及 HTTPS 根只修改快照 trust.json，主仓库产品版本和生产信任未改。CI 临时生成独立私钥，不取生产密钥，不上传私钥或源码快照。preview-kit 保留两安装包、各自契约/安装器哈希、fixture-trust.json；签名测试核验当前测试私钥限于 RUNNER_TEMP 的指定名称与公钥匹配，再生成两版本不可变元数据/签名及独立测试 latest，并实际验签。所有 URL 为 .test 测试根，无公网发布。
 
 本机脚本回归 20 项通过，新增 Windows 实际测试包签名用例因无 Windows/CI 夹具跳过（21 项总计）；Windows 原型构建、PowerShell 与真实两包签名运行待这批 head 的 CI。该 kit 不是公开 Release，也不是已经部署的 HTTPS GUI 测试服务；不把元数据签名成功称作真实窗口升级通过。后续验收集中复用这些资产，不再要求用户先提供 Windows 电脑才能完成代码/自动化工作。
+
+`2977935` Linux CI 在脚本测试发现 Ubuntu Python 3.10 不提供 hashlib.file_digest；修为固定 1 MiB 流式 SHA-256，不改依赖或跳过检查。回归夹具增加超过 1 MiB 的真实输入，并显式禁止调用 3.11-only 接口；针对性测试和 20 项脚本回归通过（另 1 项 Windows 夹具待 CI）。修复后的跨平台证据仍等待新 head。
