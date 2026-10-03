@@ -4,7 +4,17 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Add durable update transactions, guarded restart and private verified-download caching.
+- Add a macOS in-place updater prototype behind the disabled-by-default
+  `in-place-update-preview` feature. Real GUI upgrade/rollback validation is still pending;
+  Windows in-place installation is not implemented or enabled.
+
+### Fixed
+
+- Embed the Studio product icon in Windows executables and installers, and explicitly use it
+  for Start Menu, optional desktop shortcuts and the uninstall entry.
 
 ## [0.1.2-rc.2] - 2026-10-01
 

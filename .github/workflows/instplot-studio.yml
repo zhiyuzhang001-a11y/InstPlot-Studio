@@ -39,7 +39,8 @@ jobs:
   quality:
     name: Quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows also builds two disposable versions and exercises installer recovery.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +66,7 @@ jobs:
         run: python3 scripts/check_repository_hygiene.py
 
       - name: Test release metadata tools
-        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py
+        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py scripts/test_install_studio_macos.py
 
       - name: Run all tests and examples
         run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast
@@ -89,6 +90,11 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked --package instplot-studio
+
+      - name: Verify embedded Windows product icon
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify_windows_icon.ps1 -Executable target/release/instplot-studio.exe
 
       - name: Read product version
         shell: bash
@@ -189,10 +195,12 @@ jobs:
           $installer = "target/packages/windows/InstPlot-Studio-$env:INSTPLOT_VERSION-windows-x86_64-setup.exe"
           $installRoot = Join-Path $env:RUNNER_TEMP "instplot-studio-ci"
           $installProcess = Start-Process -FilePath $installer -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot"
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=$installRoot"
           ) -Wait -PassThru
           if ($installProcess.ExitCode -ne 0) { throw "Installer failed with $($installProcess.ExitCode)" }
           $binary = Join-Path $installRoot "instplot-studio.exe"
+          $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
+          ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
           $actual = & $binary --product-info
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION") { throw "Unexpected installed identity: $actual" }
           $uninstallProcess = Start-Process -FilePath (Join-Path $installRoot "unins000.exe") -ArgumentList @(
@@ -201,3 +209,24 @@ jobs:
           if ($uninstallProcess.ExitCode -ne 0) { throw "Uninstaller failed with $($uninstallProcess.ExitCode)" }
           Start-Sleep -Seconds 2
           if (Test-Path $binary) { throw "Installed binary remains after uninstall" }
+
+      - name: Test Windows installer downgrade and recovery prototype
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test_windows_installer_recovery.ps1
+
+      - name: Verify signed metadata for both Windows preview installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:INSTPLOT_WINDOWS_PREVIEW_KIT = (Resolve-Path 'target/windows-update-recovery/preview-kit').Path
+          python3 -m unittest scripts.test_update_release.UpdateReleaseTests.test_real_preview_installers_have_verified_signed_fixture_metadata
+          if ($LASTEXITCODE -ne 0) { throw 'Windows preview fixture signing verification failed' }
+
+      - name: Upload Windows recovery prototype evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-update-recovery-prototype
+          path: target/windows-update-recovery/
+          if-no-files-found: warn

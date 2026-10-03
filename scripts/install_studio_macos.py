@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import plistlib
@@ -87,9 +88,38 @@ def build_icon(staging: Path, resources: Path) -> None:
     run("iconutil", "-c", "icns", str(iconset), "-o", str(resources / f"{ICON_NAME}.icns"))
 
 
+def build_command(enable_preview: bool) -> list[str]:
+    command = ["cargo", "build", "--release", "--locked", "-p", EXECUTABLE,
+               "--bin", EXECUTABLE]
+    if enable_preview:
+        command.extend(["--features", "in-place-update-preview"])
+    return command
+
+
+def recovery_root(applications: Path) -> Path:
+    root = applications / ".instplot-studio-recovery"
+    if root.is_symlink():
+        raise SystemExit("Refusing a redirected app recovery directory.")
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.stat()
+    if not root.is_dir() or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise SystemExit("App recovery directory must be private and owned by the current user.")
+    marker = root / ".metadata_never_index"
+    if marker.is_symlink() or (marker.exists() and not marker.is_file()):
+        raise SystemExit("Refusing an invalid recovery indexing marker.")
+    if not marker.exists():
+        with marker.open("x"):
+            pass
+    return root
+
+
 def main() -> int:
     if sys.platform != "darwin":
         raise SystemExit("This installer is for macOS only.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--in-place-update-preview", action="store_true",
+                        help="Enable the locally accepted Mac preview updater; does not publish assets.")
+    args = parser.parse_args()
 
     applications = Path.home() / "Applications"
     applications.mkdir(exist_ok=True)
@@ -104,17 +134,7 @@ def main() -> int:
     build_id = datetime.now().strftime("%Y%m%d%H%M")
     build_env = os.environ.copy()
     build_env["INSTPLOT_BUILD_ID"] = build_id
-    run(
-        "cargo",
-        "build",
-        "--release",
-        "--locked",
-        "-p",
-        EXECUTABLE,
-        "--bin",
-        EXECUTABLE,
-        env=build_env,
-    )
+    run(*build_command(args.in_place_update_preview), env=build_env)
     binary = ROOT / "target/release" / EXECUTABLE
     version = package_version()
 
@@ -168,15 +188,20 @@ def main() -> int:
         run("codesign", "--force", "--sign", "-", "--identifier", BUNDLE_ID, str(bundle))
         run("codesign", "--verify", "--strict", str(bundle))
 
-        previous = staging / "previous-app"
+        previous = None
         if destination.exists():
+            backup_directory = Path(tempfile.mkdtemp(prefix=f"{build_id}-", dir=recovery_root(applications)))
+            previous = backup_directory / "previous-app"
             destination.rename(previous)
         try:
             bundle.rename(destination)
         except Exception:
-            if previous.exists():
+            if previous is not None and previous.exists():
                 previous.rename(destination)
             raise
+
+        if previous is not None:
+            print(f"Previous application retained at {previous}")
 
     if LSREGISTER.is_file():
         run(str(LSREGISTER), "-f", str(destination))

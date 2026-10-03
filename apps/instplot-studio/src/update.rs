@@ -68,6 +68,40 @@ pub struct UpdatePackage {
 pub struct UpdatePlatform {
     pub packages: Vec<UpdatePackage>,
     pub preferred: String,
+    /// Absent on legacy releases: download remains supported, automatic
+    /// application must fail closed. Covered by the existing raw-byte signature.
+    #[serde(default)]
+    pub windows_in_place: Option<WindowsInPlaceContract>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WindowsInPlaceContract {
+    pub schema: u32,
+    pub helper_protocol: u32,
+    pub transaction_schema: u32,
+    pub candidate_health_protocol: u32,
+    pub recovery_health_protocol: u32,
+    pub executable_sha256: String,
+    pub license_sha256: String,
+}
+
+impl WindowsInPlaceContract {
+    fn structurally_valid(&self) -> bool {
+        self.schema == 1
+            && self.helper_protocol > 0
+            && self.transaction_schema > 0
+            && self.candidate_health_protocol > 0
+            && self.recovery_health_protocol > 0
+            && [&self.executable_sha256, &self.license_sha256]
+                .into_iter()
+                .all(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -320,6 +354,13 @@ fn validate_manifest(
         ));
     }
     for (platform, assets) in &manifest.platforms {
+        if let Some(contract) = &assets.windows_in_place
+            && (platform != "windows-x86_64" || !contract.structurally_valid())
+        {
+            return Err(SignedManifestError::Manifest(
+                "invalid Windows in-place installation contract".into(),
+            ));
+        }
         if assets.packages.is_empty() {
             return Err(SignedManifestError::Manifest(format!(
                 "platform {platform} has no packages"
