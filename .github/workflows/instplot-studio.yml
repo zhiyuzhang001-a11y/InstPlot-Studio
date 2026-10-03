@@ -66,7 +66,7 @@ jobs:
         run: python3 scripts/check_repository_hygiene.py
 
       - name: Test release metadata tools
-        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py
+        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py scripts/test_install_studio_macos.py
 
       - name: Run all tests and examples
         run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast

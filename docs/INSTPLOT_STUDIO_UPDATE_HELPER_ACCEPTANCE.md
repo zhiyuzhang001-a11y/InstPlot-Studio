@@ -459,3 +459,13 @@ Windows 附件 `11278031486` 已下载至 ignored target/windows-recovery-94f8b2
 修正为 QA saved annotation 后，再次重启仍需保存确认。选择保存后新事务 `531db08e…` completed，旧 PID 18371 正常退出，新 PID 18619 单次启动；真实 health 的 id/nonce/路径/版本/进程及 initialized/window_ready 全部匹配。候选 binary 哈希与签名测试包基准匹配，保存后的项目哈希为 0d6409d5dfd087a7d7cea2a1bec483aa7fba989b57c1c167998844ad4bf0e585，项目检查无警告，保存文件与新窗口均含新增文字/曲线，标题不再带 *，版本 rc.3。此为主动保存造成的预期内容变化，不声称仍等于保存前 baseline；原恢复测试证据不覆盖或删除。
 
 文字无效草稿与未保存取消/保存分支有实际 GUI 证据，其他数值/录入/工具草稿保护仍依赖既有针对性组件测试，不冒充逐项 GUI 输入。仍需正式生产信任配置的构建及安装核验，条件满足后方可按用户授权替换 Spotlight；Windows 门槛与未批准发布保持不变。
+
+### 2026-10-04 Mac 生产配置本地安装完成（非发布）
+
+当前仓库原生产 trust.json、版本 rc.2 未修改，release 构建显式启用 in-place-update-preview，仅用于已验收 Mac 本地安装；无 Windows 构建或入口启用。实际生产 binary 的 product-info、协议 1、arm64、隔离项目读取通过；Studio 全目标全特性回归 351 通过/1 忽略，工作区 Clippy、格式与规范通过，发布/安装脚本联合 17 项通过。
+
+安装脚本默认仍不启用 preview，新增显式参数及独立私有恢复目录。恢复目录拒绝符号链接/外来权限，不修补已有目录；旧应用移到持久非索引恢复目录，不随安装临时目录清理。三项安全测试覆盖显式开关、私有目录复用且不清理、符号链接及过宽权限拒绝，并已接入既有 CI 脚本测试步骤。
+
+正式应用原 rc.1 未运行，依据用户条件授权，以仓库脚本替换唯一正式 InstPlot Studio.app 至 rc.2。旧应用保留于用户 Applications 下 .instplot-studio-recovery/202610040023-izhfy652/previous-app，未清理任何 QA/更新恢复证据。新 bundle ID=com.instplot.studio，arm64，codesign deep/strict 通过；实际 GUI 启动、左下角仅产品名+rc.2、生产 OSS 检查更新“已经是最新版”通过。以正式名称 InstPlot Studio.app 加 bundle ID 的 Spotlight 查询仅返回用户 Applications 的安装；部分历史 QA 使用同 bundle ID，仍保留，不把全机 bundle-ID 查询的 QA 结果隐瞒或称为已删除。
+
+这一轮没有发布新版本或新包，OSS 仍为既有 rc.2，因此生产窗口的“最新版”只证明生产信任与入口查询，不代表未来公开包已端到端自动升级。未来发布迁移及 Windows 实机 GUI/契约发布门仍待后续批准/验收。Mac 本地替换授权已执行，合并、tag、Release、OSS 与恢复备份清理均未执行。
