@@ -435,3 +435,13 @@ prepare_oss_release.py 目前不能生成/验证 windows_in_place，因此资产
 2026-10-03 15:29 UTC 核验 `2a8242d` 四项 CI 全部通过，review threads 为空。Windows job `110676452251` 明确原生安装锁、扩展取消门、missing owner 不解冻/不授权关闭用例通过；真实 Inno on/off 两次通过。附件 `11206232389` 保存于 ignored target/windows-recovery-2a8242d.CSQblC，results 两例全部布尔断言为 true、production_version_unchanged=true，包含取消保留旧版、恢复、原路径、用户数据、注册表/快捷方式与卸载身份。scope 严格为 installer-recovery-prototype-not-GUI-updater；不把此证据当作多实例 GUI、实际按钮重启或完整健康恢复链验收。后续本地 `b1d6e2f` 能力探针及 `2766e14` 发布拒绝门仍需新 head CI，本地脚本九项测试与仓库规范已通过。
 
 2026-10-03 15:39 UTC `94f8b29` windows-audit 通过，三平台 Quality 运行中。桌面恢复可操作后，重新运行此前 ignored target/macos-update-chain.k5aYn3 的隔离旧快照：界面成功发现新版、下载验签、验证 DMG、进入可重启状态并启动复制助手。该快照仍含修复前 shell 冻结分支无条件 CancelClose，助手就绪后父窗口未退出；事务最终 failed_before_apply，错误“其他实例没有退出，尚未替换应用”。原二进制与保存项目哈希保持 baseline，不触碰正式应用。此失败不能归于当前 PR 的已修复关闭边界，也不能算当前代码 GUI 验收通过。保留旧事务、不强杀或清理恢复证据；下一步必须以当前提交重建独立夹具，再验证完整退出/替换/重开链。
+
+### 2026-10-03/04 当前源代码 Mac 完整成功链
+
+以 `8554c3a` archive 创建 ignored target/macos-update-current.K9yEVe，保留当前生产状态机/关闭逻辑，仅在夹具中替换 localhost HTTPS 地址、隔离测试公钥/CA、独立缓存/sequence 目录及 QA bundle ID。旧版与候选分别以测试版本 rc.2/rc.3 编译，生产版本不变。直接终端托管启动的首轮父窗口已退出，但助手未留下终态；随后测试工具 getApp 又打开旧版，结果不可采信，保留事务，不推断为产品缺陷。改用 start_new_session 的独立启动、绝对项目路径，并在终态确认之前不调用可能重新启动应用的 UI 选择 API。
+
+独立轮通过真实界面检查新版→下载验签→DMG 验证→准备→点击重启，旧 PID 17745 正常退出，复制助手完成原位替换并单次启动候选 PID 17985，事务 completed/无错误。真实候选写出的 health 与事务 id/nonce/安装路径/版本/进程身份全部一致，initialized/window_ready=true。实际窗口标题恢复 Saved chain project、左下角 rc.3，曲线/标注画面恢复。候选 binary 哈希匹配、原项目哈希不变、previous.app 哈希匹配旧 baseline，codesign strict 验证通过，项目检查及 PNG/PDF 导出通过；证据为夹具 completed-chain-evidence.json，未合成健康回执，未修改正式应用或发布对象。
+
+这证明当前源代码的隔离 Mac 完整成功路径；失败回滚、未保存/草稿保护 GUI 及最终正式构建仍需补齐，不因此启用默认入口或替换 Spotlight。用户另已条件授权：只有真实完整验收通过后可替换 Spotlight；未授权合并或 GitHub/OSS 发布。
+
+`94f8b29` 四项 CI 已全部通过，Windows job `111233216972` 明确 capability_probe 精确/不虚报能力测试通过，真实 Inno 恢复原型 PASS；附件 `11278031486` 尚待下载核验。本段 GUI 成功链不能替代 Windows 实机 GUI 验收。

@@ -271,3 +271,5 @@ AppUpdateState 已接入既有 RestartForUpdate 保存/草稿保护后的内部�
 预览 Windows x86_64 构建新增只读 `--windows-update-capabilities` 探针，报告已编译组件协议，同时明确 public_update_protocol=0、gui_acceptance_complete=false、public_apply_entry_enabled=false。它不是可发布安装契约或 GUI 验收声明；普通构建与其他平台拒绝此命令。发布脚本仍不得据此自动生成 windows_in_place 或开放更新。Windows 实际运行证据待该提交 CI，Mac 只验证拒绝分支。
 
 现行发布生成器显式拒绝资产规格中的 windows_in_place（包括 null 和错放其他平台），不再静默丢弃。拒绝在访问签名材料、替换 staging 之前发生。此为暂未支持契约发布的防误用门，不是契约生成实现；既有无此字段的发布流程不变，待实机验收及生成/验证配套完成后再协调启用。
+
+2026-10-04 Mac 当前源代码隔离成功链已实际走通：下载验签、DMG、用户重启、原进程正常退出、原位替换、单次候选启动、真实健康确认、保存项目恢复及原哈希/备份保护。详见配套验收记录。剩余 Mac 门槛为失败回滚、未保存/草稿 GUI 保护与最终正式构建核验；不能把成功路径当全部完成。用户条件批准仅在完整真实验收通过后替换 Spotlight，未批准合并/发布/OSS 或清理恢复备份。
