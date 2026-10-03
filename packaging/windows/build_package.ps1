@@ -1,5 +1,6 @@
 param(
-    [string]$OutputDirectory = "target/packages/windows"
+    [string]$OutputDirectory = "target/packages/windows",
+    [switch]$InPlaceUpdatePreview
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +20,9 @@ foreach ($Component in $VersionComponents) {
 while ($VersionComponents.Count -lt 4) { $VersionComponents += '0' }
 $VersionInfoVersion = $VersionComponents -join '.'
 
-& cargo build --release --locked --package instplot-studio --bin instplot-studio
+$BuildArguments = @("build", "--release", "--locked", "--package", "instplot-studio", "--bin", "instplot-studio")
+if ($InPlaceUpdatePreview) { $BuildArguments += @("--features", "in-place-update-preview") }
+& cargo @BuildArguments
 if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
 & ./scripts/verify_windows_icon.ps1 -Executable target/release/instplot-studio.exe
 
@@ -49,4 +52,31 @@ if ($LASTEXITCODE -ne 0) { throw "Inno Setup build failed" }
 
 $Installer = Join-Path $OutputRoot "InstPlot-Studio-$Version-windows-x86_64-setup.exe"
 if (-not (Test-Path $Installer)) { throw "Installer was not created: $Installer" }
+if ($InPlaceUpdatePreview) {
+    # Probe the exact packaged binary, not a separately compiled executable.
+    $Binary = Join-Path $SourceRoot "instplot-studio.exe"
+    $ProbeText = & $Binary --windows-update-capabilities
+    if ($LASTEXITCODE -ne 0) { throw "Preview capability probe failed" }
+    $Probe = ($ProbeText -join "`n") | ConvertFrom-Json
+    if ($Probe.product -ne "instplot-studio" -or $Probe.version -ne $Version -or
+        $Probe.platform -ne "windows-x86_64" -or
+        $Probe.scope -ne "preview-components-not-accepted-updater" -or
+        $Probe.public_update_protocol -ne 0 -or
+        $Probe.gui_acceptance_complete -ne $false -or
+        $Probe.public_apply_entry_enabled -ne $false) { throw "Unexpected preview capability scope" }
+    $Contract = [ordered]@{ schema = 1 }
+    foreach ($Name in @("helper_protocol", "transaction_schema", "candidate_health_protocol", "recovery_health_protocol")) {
+        if ($Probe.components.$Name -ne 1) { throw "Unsupported preview protocol: $Name" }
+        $Contract[$Name] = 1
+    }
+    $Contract["executable_sha256"] = (Get-FileHash -Algorithm SHA256 $Binary).Hash.ToLowerInvariant()
+    $Contract["license_sha256"] = (Get-FileHash -Algorithm SHA256 (Join-Path $SourceRoot "LICENSE")).Hash.ToLowerInvariant()
+    $Evidence = [ordered]@{
+        scope = "preview-components-not-accepted-updater"
+        version = $Version
+        installer_sha256 = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
+        contract = $Contract
+    }
+    $Evidence | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $OutputRoot "windows-in-place.json")
+}
 Write-Output $Installer

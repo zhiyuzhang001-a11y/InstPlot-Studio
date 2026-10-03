@@ -495,3 +495,15 @@ head `fde32cdc0e3496105d53008c72e65c30e9c87fc6` 四项 CI 全通过：Quality ru
 上述 GUI 项目前均为待执行；CI installer-recovery-prototype 只覆盖其已明确记录的原型断言，不能代填这些结果。尚无可交付的完整 GUI 测试包，完成后再给用户集中操作步骤。
 
 本批本地 Studio 全目标全特性回归 353 通过/1 原有忽略，新增两个控件测试通过；工作区全目标全特性 Clippy、格式、diff 检查通过。实际 Windows 库与 app_update 源码的隔离 x64 交叉 Clippy 通过（沿用无 TLS 的类型检查夹具，不代表生产网络/链接或 Windows 运行）。新增代码仍待该提交的 Windows CI，不声称实机验收完成。
+
+### Windows 打包、契约签名与双版本测试资产补齐（运行待 CI）
+
+`1abb4f5` 四项 CI 已全通过，恢复附件 `11279964794` 在 ignored target/windows-recovery-1abb4f5.SXU2pH 核验：scope=installer-recovery-prototype-not-GUI-updater，无 false 布尔断言，生产版本不变，desktop on/off 的 applied/restored/user_data_preserved=true，快捷方式分别 true/false。该证据不外推本批新脚本运行成功。
+
+prepare_oss_release.py 新增显式 --windows-in-place-metadata；默认仍拒绝任何兼容声明，不静默放行。opt-in 必须 windows-x86_64 + 首选 Inno，精确七字段、协议全部整数 1（拒绝 bool）、两个小写 SHA-256。契约写入原始签名字节，不丢弃；错误平台、协议、哈希或字段在读取签名材料/修改 staging 前拒绝。已有生产 workflow 不启用此参数，Windows 默认入口/公开协议仍关闭/0。
+
+build_package.ps1 的 -InPlaceUpdatePreview 仅显式构建测试能力，核验实际打包 exe 的产品/版本/平台与只读能力探针，输出精确 exe/LICENSE/安装器哈希证据。build_release_asset_spec.py 的可选证据必须匹配版本和实际安装器哈希，复用同一契约验证器；默认资产集合及发布不变。
+
+既有 Windows 恢复原型改用同一隔离源码快照的两个 preview 版本，测试当前/下一公钥及 HTTPS 根只修改快照 trust.json，主仓库产品版本和生产信任未改。CI 临时生成独立私钥，不取生产密钥，不上传私钥或源码快照。preview-kit 保留两安装包、各自契约/安装器哈希、fixture-trust.json；签名测试核验当前测试私钥限于 RUNNER_TEMP 的指定名称与公钥匹配，再生成两版本不可变元数据/签名及独立测试 latest，并实际验签。所有 URL 为 .test 测试根，无公网发布。
+
+本机脚本回归 20 项通过，新增 Windows 实际测试包签名用例因无 Windows/CI 夹具跳过（21 项总计）；Windows 原型构建、PowerShell 与真实两包签名运行待这批 head 的 CI。该 kit 不是公开 Release，也不是已经部署的 HTTPS GUI 测试服务；不把元数据签名成功称作真实窗口升级通过。后续验收集中复用这些资产，不再要求用户先提供 Windows 电脑才能完成代码/自动化工作。

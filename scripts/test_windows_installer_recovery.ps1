@@ -156,7 +156,32 @@ function NativeRunnerPrototype([string]$Directory, [bool]$Desktop, [string]$Name
 Push-Location $RepositoryRoot
 try {
     # Two real Studio builds; candidate version exists ONLY in a disposable snapshot.
-    Checked 'cargo' @('build', '--locked', '--package', 'instplot-studio')
+    $Snapshot = Join-Path $TaskRoot 'snapshot'
+    New-Item -ItemType Directory $Snapshot | Out-Null
+    $Archive = Join-Path $TaskRoot 'snapshot.tar'
+    Checked 'git' @('archive', '--format=tar', "--output=$Archive", 'HEAD')
+    Checked 'tar' @('-xf', $Archive, '-C', $Snapshot)
+    # Fixture trust is isolated to the snapshot. Never read production keys,
+    # change the checkout trust root, or export this private key in artifacts.
+    $FixtureKey = Join-Path $TaskRoot 'preview-fixture-key.pem'
+    Checked 'openssl' @('genpkey', '-algorithm', 'ED25519', '-out', $FixtureKey)
+    $FixturePublic = ((Checked 'cargo' @('run', '--locked', '--quiet', '--package', 'instplot-update-signature', '--', 'public-key-hex', $FixtureKey)) -join '').Trim()
+    if ($FixturePublic -notmatch '^[0-9a-f]{64}$') { throw 'Invalid isolated fixture public key.' }
+    $FixtureNextKey = Join-Path $TaskRoot 'preview-fixture-next-key.pem'
+    Checked 'openssl' @('genpkey', '-algorithm', 'ED25519', '-out', $FixtureNextKey)
+    $FixtureNextPublic = ((Checked 'cargo' @('run', '--locked', '--quiet', '--package', 'instplot-update-signature', '--', 'public-key-hex', $FixtureNextKey)) -join '').Trim()
+    if ($FixtureNextPublic -notmatch '^[0-9a-f]{64}$' -or $FixtureNextPublic -eq $FixturePublic) { throw 'Invalid next fixture public key.' }
+    $FixtureKeys = @(
+        @{ id = 'windows-preview-fixture'; public_key_hex = $FixturePublic },
+        @{ id = 'windows-preview-fixture-next'; public_key_hex = $FixtureNextPublic }
+    )
+    [ordered]@{
+        public_root = 'https://windows-update.example.test/instplot-studio'
+        keys = $FixtureKeys
+    } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $Snapshot 'packaging/update/trust.json')
+    $Manifest = Join-Path $Snapshot 'Cargo.toml'
+    Checked 'cargo' @('build', '--locked', '--offline', '--manifest-path', $Manifest,
+        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview')
     $OldSource = Join-Path $TaskRoot 'old-source'
     $NewSource = Join-Path $TaskRoot 'new-source'
     New-Item -ItemType Directory $OldSource, $NewSource | Out-Null
@@ -165,18 +190,12 @@ try {
         Copy-Item 'LICENSE' $Source
         Copy-Item 'apps/instplot-studio/assets/InstPlotStudio.ico' $Source
     }
-    $Snapshot = Join-Path $TaskRoot 'snapshot'
-    New-Item -ItemType Directory $Snapshot | Out-Null
-    $Archive = Join-Path $TaskRoot 'snapshot.tar'
-    Checked 'git' @('archive', '--format=tar', "--output=$Archive", 'HEAD')
-    Checked 'tar' @('-xf', $Archive, '-C', $Snapshot)
-    $Manifest = Join-Path $Snapshot 'Cargo.toml'
     $Content = [IO.File]::ReadAllText($Manifest)
     $Before = 'version = "' + $CurrentVersion + '"'
     if (([regex]::Matches($Content, [regex]::Escape($Before))).Count -ne 1) { throw 'Ambiguous workspace version.' }
     [IO.File]::WriteAllText($Manifest, $Content.Replace($Before, 'version = "' + $NextVersion + '"'))
     Checked 'cargo' @('build', '--offline', '--manifest-path', $Manifest,
-        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio')
+        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview')
     Copy-Item 'target/debug/instplot-studio.exe' $NewSource
     $OldBinary = Join-Path $OldSource 'instplot-studio.exe'
     $NewBinary = Join-Path $NewSource 'instplot-studio.exe'
@@ -197,6 +216,44 @@ try {
     $OldInstaller = CompileInstaller $OldSource $CurrentVersion $Definition (Join-Path $TaskRoot 'old-setup')
     $NewInstaller = CompileInstaller $NewSource $NextVersion $NewDefinition (Join-Path $TaskRoot 'new-setup')
     $FaultInstaller = CompileInstaller $NewSource $NextVersion $FaultDefinition (Join-Path $TaskRoot 'fault-setup')
+    # Preserve the two compatible preview installers and exact-file evidence.
+    # These are disposable test versions, not published/accepted releases.
+    $KitRoot = Join-Path $EvidenceRoot 'preview-kit'
+    New-Item -ItemType Directory $KitRoot | Out-Null
+    [ordered]@{
+        scope = 'signed-fixture-metadata-not-GUI-updater'
+        public_root = 'https://windows-update.example.test/instplot-studio'
+        keys = $FixtureKeys
+        binaries_use_fixture_trust = $true
+    } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot 'fixture-trust.json')
+    $env:INSTPLOT_WINDOWS_PREVIEW_FIXTURE_KEY = $FixtureKey
+    Add-Content -LiteralPath $env:GITHUB_ENV -Value "INSTPLOT_WINDOWS_PREVIEW_FIXTURE_KEY=$FixtureKey"
+    foreach ($Item in @(
+        @{ Version = $CurrentVersion; Source = $OldSource; Installer = $OldInstaller },
+        @{ Version = $NextVersion; Source = $NewSource; Installer = $NewInstaller }
+    )) {
+        $Binary = Join-Path $Item.Source 'instplot-studio.exe'
+        $Probe = ((& $Binary --windows-update-capabilities) -join "`n") | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or $Probe.product -ne 'instplot-studio' -or
+            $Probe.version -ne $Item.Version -or $Probe.platform -ne 'windows-x86_64' -or
+            $Probe.scope -ne 'preview-components-not-accepted-updater' -or
+            $Probe.public_update_protocol -ne 0 -or $Probe.gui_acceptance_complete -ne $false -or
+            $Probe.public_apply_entry_enabled -ne $false) { throw 'Invalid preview kit identity/capability scope.' }
+        $Contract = [ordered]@{ schema = 1 }
+        foreach ($Name in @('helper_protocol', 'transaction_schema', 'candidate_health_protocol', 'recovery_health_protocol')) {
+            if ($Probe.components.$Name -ne 1) { throw "Invalid preview kit protocol: $Name" }
+            $Contract[$Name] = 1
+        }
+        $Contract['executable_sha256'] = (Get-FileHash -Algorithm SHA256 $Binary).Hash.ToLowerInvariant()
+        $Contract['license_sha256'] = (Get-FileHash -Algorithm SHA256 (Join-Path $Item.Source 'LICENSE')).Hash.ToLowerInvariant()
+        Copy-Item $Item.Installer $KitRoot
+        [ordered]@{
+            scope = 'preview-components-not-accepted-updater'
+            version = $Item.Version
+            installer_sha256 = (Get-FileHash -Algorithm SHA256 $Item.Installer).Hash.ToLowerInvariant()
+            contract = $Contract
+        } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot ($Item.Version + '-windows-in-place.json'))
+    }
     # Disposable fault installers only. AfterInstall/Win32 DLL declarations use
     # Inno's documented script interfaces; none enter the product definition.
     # https://jrsoftware.org/ishelp/topic_scriptinstall.htm

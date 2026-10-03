@@ -215,6 +215,14 @@ jobs:
         shell: pwsh
         run: ./scripts/test_windows_installer_recovery.ps1
 
+      - name: Verify signed metadata for both Windows preview installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:INSTPLOT_WINDOWS_PREVIEW_KIT = (Resolve-Path 'target/windows-update-recovery/preview-kit').Path
+          python3 -m unittest scripts.test_update_release.UpdateReleaseTests.test_real_preview_installers_have_verified_signed_fixture_metadata
+          if ($LASTEXITCODE -ne 0) { throw 'Windows preview fixture signing verification failed' }
+
       - name: Upload Windows recovery prototype evidence
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
