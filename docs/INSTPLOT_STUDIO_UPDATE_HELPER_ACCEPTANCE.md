@@ -431,3 +431,5 @@ Windows 库及实际 app_update 源码的隔离交叉 Clippy 类型检查、工�
 ## 发布契约防静默丢弃门（仅本地脚本）
 
 prepare_oss_release.py 目前不能生成/验证 windows_in_place，因此资产规格显式带该字段时立即拒绝，不静默签发一个缺契约清单。null、空对象、示例 schema 和错放 Linux 都拒绝；在访问签名材料与重建 staging 之前验证。测试使用隔离临时夹具，验证不存在私钥仍得到契约拒绝、verify_private_key 未调用、既有 staging 哨兵内容保持不变。既有无契约签名/指针测试继续执行。没有访问生产私钥、实际发布目录或 OSS；此门不表示发布契约已实现或可开放更新。
+
+2026-10-03 15:29 UTC 核验 `2a8242d` 四项 CI 全部通过，review threads 为空。Windows job `110676452251` 明确原生安装锁、扩展取消门、missing owner 不解冻/不授权关闭用例通过；真实 Inno on/off 两次通过。附件 `11206232389` 保存于 ignored target/windows-recovery-2a8242d.CSQblC，results 两例全部布尔断言为 true、production_version_unchanged=true，包含取消保留旧版、恢复、原路径、用户数据、注册表/快捷方式与卸载身份。scope 严格为 installer-recovery-prototype-not-GUI-updater；不把此证据当作多实例 GUI、实际按钮重启或完整健康恢复链验收。后续本地 `b1d6e2f` 能力探针及 `2766e14` 发布拒绝门仍需新 head CI，本地脚本九项测试与仓库规范已通过。
