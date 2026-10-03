@@ -445,3 +445,9 @@ prepare_oss_release.py 目前不能生成/验证 windows_in_place，因此资产
 这证明当前源代码的隔离 Mac 完整成功路径；失败回滚、未保存/草稿保护 GUI 及最终正式构建仍需补齐，不因此启用默认入口或替换 Spotlight。用户另已条件授权：只有真实完整验收通过后可替换 Spotlight；未授权合并或 GitHub/OSS 发布。
 
 `94f8b29` 四项 CI 已全部通过，Windows job `111233216972` 明确 capability_probe 精确/不虚报能力测试通过，真实 Inno 恢复原型 PASS；附件 `11278031486` 尚待下载核验。本段 GUI 成功链不能替代 Windows 实机 GUI 验收。
+
+### 2026-10-04 Mac 当前源代码真实健康失败回滚
+
+沿用成功链的当前源代码旧/新二进制，在 ignored target/macos-update-qa/run.99qpAI 的 health-write-failure 夹具中，仅预建 health.json 为目录以阻止真实回执写入，不修改二进制或伪造回执。原版实际窗口恢复 QA saved project；助手就绪 id/nonce/PID 匹配后，通过正常系统退出关闭原版。真实候选启动后不能确认健康，事务最终 rolled_back，自动单次重开 rc.2 原版，实际窗口与项目画面确认恢复。旧 binary 精确恢复、项目哈希未变、failed-candidate.app 保留、无有效候选健康回执，项目检查及 PNG/PDF 导出通过；机器本地证据 qa-export-result.json。该测试覆盖 post-verification helper 的真实健康失败恢复，不把手工构造已验证事务当作失败分支的下载/DMG UI 证据。
+
+Windows 附件 `11278031486` 已下载至 ignored target/windows-recovery-94f8b29.8W469z：两例布尔断言全部 true、production_version_unchanged=true；原生结果 on/off 均 applied/restored/user_data_preserved=true，desktop_shortcut 分别 true/false。scope 仍为 installer-recovery-prototype-not-GUI-updater，未完成 Windows 实机 GUI。
