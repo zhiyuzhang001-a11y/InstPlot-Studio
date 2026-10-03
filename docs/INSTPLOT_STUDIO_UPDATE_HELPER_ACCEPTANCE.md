@@ -469,3 +469,29 @@ Windows 附件 `11278031486` 已下载至 ignored target/windows-recovery-94f8b2
 正式应用原 rc.1 未运行，依据用户条件授权，以仓库脚本替换唯一正式 InstPlot Studio.app 至 rc.2。旧应用保留于用户 Applications 下 .instplot-studio-recovery/202610040023-izhfy652/previous-app，未清理任何 QA/更新恢复证据。新 bundle ID=com.instplot.studio，arm64，codesign deep/strict 通过；实际 GUI 启动、左下角仅产品名+rc.2、生产 OSS 检查更新“已经是最新版”通过。以正式名称 InstPlot Studio.app 加 bundle ID 的 Spotlight 查询仅返回用户 Applications 的安装；部分历史 QA 使用同 bundle ID，仍保留，不把全机 bundle-ID 查询的 QA 结果隐瞒或称为已删除。
 
 这一轮没有发布新版本或新包，OSS 仍为既有 rc.2，因此生产窗口的“最新版”只证明生产信任与入口查询，不代表未来公开包已端到端自动升级。未来发布迁移及 Windows 实机 GUI/契约发布门仍待后续批准/验收。Mac 本地替换授权已执行，合并、tag、Release、OSS 与恢复备份清理均未执行。
+
+### 2026-10-04 最新 CI 与 Windows 恢复附件复核
+
+head `fde32cdc0e3496105d53008c72e65c30e9c87fc6` 四项 CI 全通过：Quality run `37136853531`，windows-audit run `37136852341`。无未解决 review thread。恢复附件 `11280025101` 留存于 ignored `target/windows-recovery-fde32cd.z7r9zO`；results.json 无 false 布尔断言，production_version_unchanged=true。两个 native-runner 记录的 applied/restored/user_data_preserved 均 true，desktop_shortcut 分别 true/false。
+
+证据 scope 仍为 installer-recovery-prototype-not-GUI-updater，不表示 Windows 按钮、正常退出、候选 GUI 首画布及失败恢复已通过端到端实机验收。PreparedWindows 当前仅提供结束准备，没有重启按钮；后续须补受控测试入口与可信新旧包夹具，沿用现有保存/草稿、父侧锁、就绪/取消及健康保护，不以 CI 通过直接开放默认入口。签名发布契约生成与未来公开版本迁移也仍未完成，PR 未合并，未发布或更新 OSS。
+
+### Windows 受控重启入口与后续实机清单（2026-10-04）
+
+用户同意在缺 Windows 电脑期间继续实现与自动化验证。PreparedWindows 的“重启并更新（测试）”仅编译进 preview；按钮只设置 restart_requested，复用 PendingAction::RestartForUpdate 与工作保护，未直接启动助手或发 Close。草稿存在、安装访问锁未初始化/失败、已有助手时禁用；结束准备也不得丢弃活跃助手。创建/就绪/取消、退出前再证明及候选/恢复健康链未降低校验。正常构建入口、Windows public protocol=0 和发布权限不变。
+
+新增 headless 控件测试遍历八种草稿/锁/助手组合，检查按钮禁用及实际 pointer press/release 不绕过禁用；它们不创建真实 Windows 安装或伪造健康回执。Mac 既有按钮实现未更改。此批本地与远端验证结果随后记录，不借上一 head 全绿外推新增代码。
+
+实机验收前须先提供独立测试签名源、两个兼容 preview 版本的 Inno 包、可信旧恢复清单及双方 windows_in_place 契约；当前公开 rc.2 不满足，发布脚本的契约拒绝门仍保留。未准备完整测试包时不让用户反复安装，也不使用生产私钥或替换生产 latest。
+
+准备就绪后在一次性账户/VM 执行以下矩阵，保留日志/事务终态/版本与哈希/实际窗口截图；桌面图标有、无两种安装分别执行，路径含中文与空格：
+
+1. 打开保存项目并留未保存修改，点击测试更新：取消后旧 GUI 与修改保持；保存成功后只正常退出一次，新版只启动一次，原路径/卸载身份/快捷方式选择不变，项目与设置正确。
+2. 录入、数值、无效文字和绘图工具各留未应用草稿，按钮不可用；修正或明确取消草稿后才可继续。保存取消、写盘失败不能启动助手。
+3. 第二实例保持打开时更新不得关闭第一实例或安装；关闭第二实例后重新执行完整证明，不沿用旧就绪授权。
+4. 仅在测试事务注入首画布健康回执失败，新版正常退出、旧版恢复并只启动一次，项目/设置保留；恢复再次失败须保留资产并停止，不无限重试。
+5. 测试取消下载/准备、离线、坏签名/哈希、缺旧恢复包或缺兼容契约：旧 GUI 保持运行，不安装，不放宽信任规则。
+
+上述 GUI 项目前均为待执行；CI installer-recovery-prototype 只覆盖其已明确记录的原型断言，不能代填这些结果。尚无可交付的完整 GUI 测试包，完成后再给用户集中操作步骤。
+
+本批本地 Studio 全目标全特性回归 353 通过/1 原有忽略，新增两个控件测试通过；工作区全目标全特性 Clippy、格式、diff 检查通过。实际 Windows 库与 app_update 源码的隔离 x64 交叉 Clippy 通过（沿用无 TLS 的类型检查夹具，不代表生产网络/链接或 Windows 运行）。新增代码仍待该提交的 Windows CI，不声称实机验收完成。

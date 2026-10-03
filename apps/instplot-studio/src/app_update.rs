@@ -780,8 +780,26 @@ impl AppUpdateState {
                     prepared.installation().version(),
                     prepared.installers().candidate.installer().version()
                 ));
-                ui.weak("仅完成准备组件验证，外置助手与健康恢复尚未验收；不会请求重启或执行安装。");
-                if ui.button("结束准备，保留缓存").clicked() {
+                ui.weak("仅用于受控测试，尚未通过 Windows 实机验收；默认发布构建不开放此入口。");
+                ui.label("更新原安装位置，未保存项目将在退出前确认；失败时保留恢复证据。");
+                for draft in pending_drafts {
+                    ui.label(draft);
+                }
+                if let Err(error) = &self.windows_instance_guard {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                let (restart, end) = windows_preview_restart_controls(
+                    ui,
+                    pending_drafts,
+                    self.windows_instance_guard.is_ok(),
+                    self.windows_parent.is_some(),
+                );
+                if restart.clicked() {
+                    // Only request the existing saved/draft-protected flow;
+                    // the button itself never spawns a helper or closes work.
+                    self.restart_requested = true;
+                } else if end.clicked() {
+                    self.restart_requested = false;
                     self.phase = UpdatePhase::Idle;
                 }
             }
@@ -813,8 +831,8 @@ impl AppUpdateState {
             self.explain_blocked(error.clone());
             return;
         }
-        // Called by the existing saved/discarded-drafts replacement flow, not
-        // from a new public button. No release capability is enabled here.
+        // Called only after the existing saved/draft-protected replacement
+        // flow. The preview control does not enable public release capability.
         let prepared = PreparedWindowsHelper::create(prepared).and_then(|mut helper| {
             helper.set_resume_project(project.as_deref())?;
             Ok(helper)
@@ -1600,6 +1618,26 @@ fn reveal_in_folder(path: &Path) -> Result<(), String> {
         .map_err(|_| "cannot reveal downloaded file".to_owned())
 }
 
+// Also compiled for platform-independent headless control tests. Production
+// Windows builds without the preview feature cannot display these controls.
+#[cfg(any(all(windows, feature = "in-place-update-preview"), test))]
+fn windows_preview_restart_controls(
+    ui: &mut egui::Ui,
+    pending_drafts: &[String],
+    installation_ready: bool,
+    helper_active: bool,
+) -> (egui::Response, egui::Response) {
+    ui.horizontal_wrapped(|ui| {
+        let restart = ui.add_enabled(
+            pending_drafts.is_empty() && installation_ready && !helper_active,
+            egui::Button::new("重启并更新（测试）"),
+        );
+        let end = ui.add_enabled(!helper_active, egui::Button::new("结束准备，保留缓存"));
+        (restart, end)
+    })
+    .inner
+}
+
 fn byte_count(value: u64) -> String {
     if value >= 1024 * 1024 {
         format!("{:.1} MB", value as f64 / (1024.0 * 1024.0))
@@ -1613,6 +1651,93 @@ fn byte_count(value: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_preview_restart_controls_require_clean_drafts_guard_and_no_helper() {
+        // Control behavior only; no native Windows installation is simulated.
+        for has_drafts in [false, true] {
+            for installation_ready in [false, true] {
+                for helper_active in [false, true] {
+                    let context = egui::Context::default();
+                    let drafts = if has_drafts {
+                        vec!["unapplied".into()]
+                    } else {
+                        vec![]
+                    };
+                    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                        let (restart, end) = windows_preview_restart_controls(
+                            ui,
+                            &drafts,
+                            installation_ready,
+                            helper_active,
+                        );
+                        assert_eq!(
+                            restart.enabled(),
+                            !has_drafts && installation_ready && !helper_active
+                        );
+                        assert_eq!(end.enabled(), !helper_active);
+                        assert!(!restart.clicked());
+                        assert!(!end.clicked());
+                    });
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn windows_preview_restart_clicks_cannot_bypass_disabled_controls() {
+        for has_drafts in [false, true] {
+            for installation_ready in [false, true] {
+                for helper_active in [false, true] {
+                    let context = egui::Context::default();
+                    let drafts = if has_drafts {
+                        vec!["unapplied".into()]
+                    } else {
+                        vec![]
+                    };
+                    let mut center = egui::Pos2::ZERO;
+                    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                        let (restart, _) = windows_preview_restart_controls(
+                            ui,
+                            &drafts,
+                            installation_ready,
+                            helper_active,
+                        );
+                        center = restart.rect.center();
+                    });
+                    output.textures_delta.clear();
+                    for pressed in [true, false] {
+                        let input = egui::RawInput {
+                            events: vec![
+                                egui::Event::PointerMoved(center),
+                                egui::Event::PointerButton {
+                                    pos: center,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                            ..Default::default()
+                        };
+                        let mut output = context.run_ui(input, |ui| {
+                            let (restart, _) = windows_preview_restart_controls(
+                                ui,
+                                &drafts,
+                                installation_ready,
+                                helper_active,
+                            );
+                            assert_eq!(
+                                restart.clicked(),
+                                !pressed && !has_drafts && installation_ready && !helper_active
+                            );
+                        });
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
