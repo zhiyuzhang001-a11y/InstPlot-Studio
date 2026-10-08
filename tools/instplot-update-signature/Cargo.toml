@@ -8,3 +8,12 @@ publish = false
 
 [dependencies]
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8"] }
+percent-encoding.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+
+[build-dependencies]
+serde_json.workspace = true

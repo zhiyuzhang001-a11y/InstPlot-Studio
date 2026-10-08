@@ -67,6 +67,8 @@ def stage(kit: Path, output: Path, identity: str, source_sha: str, private_key: 
     for proof in proofs:
         if proof.get("scope") != "preview-components-not-accepted-updater" or not re.fullmatch(r"\d+\.\d+\.\d+-rc\.\d+", proof.get("version", "")):
             raise ValueError("invalid preview proof")
+        if proof.get("windows_gui_subsystem") != 2:
+            raise ValueError("preview installer lacks GUI-subsystem build evidence")
         PREPARE.validate_windows_contract(proof["contract"])
         installer = kit / f"InstPlot-Studio-{proof['version']}-windows-x86_64-setup.exe"
         if installer.is_symlink() or PREPARE.sha256(installer) != proof.get("installer_sha256"):
@@ -91,7 +93,7 @@ def stage(kit: Path, output: Path, identity: str, source_sha: str, private_key: 
             asset_spec_path=spec, version=version, release_sequence=sequence,
             product="instplot-studio", public_root=endpoint, private_key=private_key,
             public_key_hex=current_key, key_id="windows-preview-fixture",
-            notes_url=f"https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/commit/{source_sha}",
+            notes_url="https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/",
             published_at=now.isoformat().replace("+00:00", "Z"),
             expires_at=(now + timedelta(days=30)).isoformat().replace("+00:00", "Z"),
             output=output / f"signed-{sequence}", allow_windows_in_place=True,
@@ -146,6 +148,10 @@ def validate(output: Path, identity: str) -> dict:
         expected.update({f"{prefix}/{name}", f"{prefix}/metadata/{sequence}/manifest.json", f"{prefix}/metadata/{sequence}/manifest.json.sig"})
         key_id = VERIFY.verify_signature(manifest, signature, keys, output)
         data = VERIFY.parse_json(manifest.read_bytes())
+        subprocess.run(PREPARE.signature_tool(
+            "verify-manifest", key_id, keys[key_id], endpoint,
+            str(manifest), str(signature), version,
+        ), check=True)
         if data.get("version") != version or data.get("release_sequence") != sequence or data.get("product") != "instplot-studio" or data.get("channel") != "prerelease" or data.get("key_id") != key_id:
             raise ValueError("signed preview identity differs")
         if datetime.fromisoformat(data["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):

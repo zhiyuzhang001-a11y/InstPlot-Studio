@@ -50,6 +50,7 @@ class WindowsGuiQaTests(unittest.TestCase):
             installer = self.kit / f"InstPlot-Studio-{version}-windows-x86_64-setup.exe"
             installer.write_bytes(f"fake installer for guard tests only {version}".encode())
             proof = {"scope": "preview-components-not-accepted-updater", "version": version,
+                     "windows_gui_subsystem": 2,
                      "installer_sha256": QA.PREPARE.sha256(installer),
                      "contract": {"schema": 1, "helper_protocol": 1, "transaction_schema": 1,
                                   "candidate_health_protocol": 1, "recovery_health_protocol": 1,
@@ -90,6 +91,32 @@ class WindowsGuiQaTests(unittest.TestCase):
         self.trust["public_root"] = "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio"
         (self.kit / "fixture-trust.json").write_text(json.dumps(self.trust))
         with self.assertRaisesRegex(ValueError, "snapshot trust"):
+            self.stage()
+        self.assertFalse(self.output.exists())
+
+    def test_real_client_rejects_correct_signature_with_commit_notes_url(self):
+        self.stage()
+        manifest = self.output / "public/releases/0.1.2-rc.2/metadata/1/manifest.json"
+        signature = manifest.with_name("manifest.json.sig")
+        payload = json.loads(manifest.read_bytes())
+        payload["notes_url"] = "https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/commit/" + "a" * 40
+        manifest.write_bytes(QA.PREPARE.deterministic_json(payload))
+        subprocess.run(QA.PREPARE.signature_tool("sign", str(self.key), str(manifest), str(signature)), check=True)
+        # Raw cryptography passes, but the exact GUI validator MUST reject it.
+        subprocess.run(QA.PREPARE.signature_tool("verify", self.public, str(manifest), str(signature)), check=True)
+        result = subprocess.run(QA.PREPARE.signature_tool(
+            "verify-manifest", "windows-preview-fixture", self.public,
+            QA.public_root(self.identity), str(manifest), str(signature), "0.1.2-rc.2",
+        ), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the allowed root", result.stderr)
+
+    def test_console_build_evidence_is_rejected(self):
+        proof_path = self.kit / "0.1.2-rc.2-windows-in-place.json"
+        proof = json.loads(proof_path.read_bytes())
+        proof["windows_gui_subsystem"] = 3
+        proof_path.write_text(json.dumps(proof))
+        with self.assertRaisesRegex(ValueError, "GUI-subsystem"):
             self.stage()
         self.assertFalse(self.output.exists())
 

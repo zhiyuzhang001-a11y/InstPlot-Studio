@@ -230,6 +230,13 @@ def verify_public_release(
         for field, value in expected.items():
             if manifest.get(field) != value:
                 raise ValueError(f"unexpected {field}: {manifest.get(field)!r}")
+        # Signature-only success is insufficient: run the GUI's exact Rust
+        # schema, channel, validity-window, notes URL and platform validation.
+        subprocess.run([
+            "cargo", "run", "--locked", "--quiet", "--package", "instplot-update-signature", "--",
+            "verify-manifest", successful_key, keys[successful_key], allowed_prefix,
+            str(manifest_path), str(signature_path), expected_version,
+        ], check=True)
         platforms = manifest.get("platforms")
         if not isinstance(platforms, dict) or not platforms:
             raise ValueError("manifest platforms are missing")

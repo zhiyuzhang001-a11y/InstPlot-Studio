@@ -1996,6 +1996,12 @@ name = "instplot-update-signature"
 version = "0.1.2-rc.2"
 dependencies = [
  "ed25519-dalek",
+ "percent-encoding",
+ "semver",
+ "serde",
+ "serde_json",
+ "time",
+ "url",
 ]
 
 [[package]]

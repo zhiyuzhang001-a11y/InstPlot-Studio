@@ -5,11 +5,17 @@ use std::path::Path;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
+// Compile the SAME validator the GUI calls; do not duplicate its URL/date/schema rules.
+#[allow(dead_code)]
+#[path = "../../../apps/instplot-studio/src/update.rs"]
+mod studio_manifest;
+
 fn usage() -> ! {
     eprintln!(
         "usage: instplot-update-signature public-key-hex PRIVATE.pem\n\
          or: instplot-update-signature sign PRIVATE.pem INPUT OUTPUT\n\
-         or: instplot-update-signature verify PUBLIC_KEY_HEX INPUT SIGNATURE"
+         or: instplot-update-signature verify PUBLIC_KEY_HEX INPUT SIGNATURE\n\
+         or: instplot-update-signature verify-manifest KEY_ID PUBLIC_KEY_HEX ROOT INPUT SIGNATURE EXPECTED_VERSION"
     );
     std::process::exit(2);
 }
@@ -42,6 +48,30 @@ fn public_key_hex(key: &SigningKey) -> String {
 fn run() -> Result<(), String> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
+        [command, key_id, public_key, root, input, signature, version]
+            if command == "verify-manifest" =>
+        {
+            let expected = semver::Version::parse(version).map_err(|error| error.to_string())?;
+            let key = studio_manifest::TrustedUpdateKey {
+                id: Box::leak(key_id.clone().into_boxed_str()),
+                bytes: decode_public_key(public_key)?,
+            };
+            let allowed = studio_manifest::AllowedUpdateRoot::parse(root)
+                .map_err(|error| error.to_string())?;
+            let manifest = studio_manifest::verify_signed_manifest(
+                &fs::read(input).map_err(|error| error.to_string())?,
+                &fs::read(signature).map_err(|error| error.to_string())?,
+                &[key],
+                &allowed,
+                studio_manifest::UpdateChannel::for_version(&expected),
+            )
+            .map_err(|error| error.to_string())?;
+            if manifest.version != *version {
+                return Err("signed manifest version differs from expected version".into());
+            }
+            println!("Studio client manifest validation: PASS ({version})");
+            Ok(())
+        }
         [command, private_key] if command == "public-key-hex" => {
             println!(
                 "{}",

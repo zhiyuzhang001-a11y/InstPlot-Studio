@@ -525,3 +525,11 @@ results.json scope 仍 installer-recovery-prototype-not-GUI-updater，无 false 
 windows_gui_qa.py 生成两版真实包的测试签名清单；初始 latest 固定旧版，先由真实旧 GUI 检查更新保留可信恢复记录，再经明确操作切换候选版本。阶段脚本验证 exact source SHA、run-attempt 独立根、双测试公钥、签名、两版包哈希及精确公共文件集合；不上传私钥、资产规格里的机器路径或额外文件。默认生产工作流/产品版本/公开协议未改。
 
 上传只允许 reviewed main 和现有受保护 Environment，不降低保护策略。版本化对象禁止覆盖，续传只接受同哈希原对象；候选激活只替换单个 QA latest 并核验公网新旧资产。测试源尚未部署、未交付下载 URL；main 工作流授权和 OSS 子目录权限仍是实际部署门槛。所有新增脚本单元测试为控制/签名证据，不是 Windows 实机 GUI 验收。
+
+### 2026-10-08 首次实机反馈与客户端语义校验修复
+
+独立工作流 PR #10 合并为 054def8，部署 run 37796114996 成功；初始 QA 根对应构建 37791183672-1，签名与包哈希核验通过。但用户实机检查更新失败：notes_url 被生成成 GitHub commit URL，不在客户端固定 releases URL 根内。用客户端实际 verify_signed_manifest 实现复核旧清单，准确返回 URL outside allowed root；密码学验签成功不能替代完整客户端语义校验。旧对象不改、不覆盖、不绕过规则。
+
+修复生成器使用允许的 releases 根；签名工具直接编译同一 Studio update.rs，新增 verify-manifest 命令，QA stage 与公网 verifier 均调用它检查签名、schema、通道、有效期、说明链接及平台字段。新增正确签名但 commit notes URL 被真实客户端拒绝的回归。保留临时私钥不上传/不恢复原则，新包新根重新构建并签名。
+
+用户同时观察到 FIRST_CANVAS 控制台窗口：此前测试 exe 为默认 console 子系统。Windows 主程序改为 GUI 子系统，构建脚本检查实际 x64 PE 头 Subsystem=2；同一次真实 Windows 构建仍要验证产品身份/能力命令输出和图标。PE 检查不冒充用户再次打开软件后的 GUI 验收。Mac 正式安装、产品版本、生产 trust 与生产指针不改。本地签名工具 5 项 Rust 测试/Clippy 通过，脚本 33 通过/1 原有 Windows 夹具跳过；修正版 Windows 构建与实机重试待执行。

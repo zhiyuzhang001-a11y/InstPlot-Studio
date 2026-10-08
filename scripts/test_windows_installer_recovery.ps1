@@ -53,6 +53,21 @@ function ProductIdentity([string]$Binary, [string]$Version) {
     }
 }
 
+function VerifyGuiSubsystem([string]$Binary) {
+    $Bytes = [IO.File]::ReadAllBytes($Binary)
+    if ($Bytes.Length -lt 64 -or [BitConverter]::ToUInt16($Bytes, 0) -ne 0x5A4D) {
+        throw 'Not a Windows executable.'
+    }
+    $Pe = [BitConverter]::ToInt32($Bytes, 60)
+    if ($Pe -lt 64 -or $Pe -gt $Bytes.Length - 94 -or
+        [BitConverter]::ToUInt32($Bytes, $Pe) -ne 0x4550 -or
+        [BitConverter]::ToUInt16($Bytes, $Pe + 4) -ne 0x8664 -or
+        [BitConverter]::ToUInt16($Bytes, $Pe + 24) -ne 0x20B -or
+        [BitConverter]::ToUInt16($Bytes, $Pe + 92) -ne 2) {
+        throw 'Preview executable must be x64 GUI subsystem, not a console application.'
+    }
+}
+
 function CompileInstaller([string]$Source, [string]$Version, [string]$Definition, [string]$Output) {
     New-Item -ItemType Directory -Force $Output | Out-Null
     Checked $IsccPath @("/DMyVersion=$Version", "/DMyVersionInfoVersion=$FileVersion",
@@ -250,6 +265,7 @@ try {
         if ($KitOnly) {
             & (Join-Path $RepositoryRoot 'scripts/verify_windows_icon.ps1') -Executable $Binary
         }
+        VerifyGuiSubsystem $Binary
         $Probe = ((& $Binary --windows-update-capabilities) -join "`n") | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $Probe.product -ne 'instplot-studio' -or
             $Probe.version -ne $Item.Version -or $Probe.platform -ne 'windows-x86_64' -or
@@ -268,6 +284,7 @@ try {
             scope = 'preview-components-not-accepted-updater'
             version = $Item.Version
             installer_sha256 = (Get-FileHash -Algorithm SHA256 $Item.Installer).Hash.ToLowerInvariant()
+            windows_gui_subsystem = 2
             contract = $Contract
         } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot ($Item.Version + '-windows-in-place.json'))
     }
