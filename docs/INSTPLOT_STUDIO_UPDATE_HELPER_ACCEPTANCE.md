@@ -509,3 +509,19 @@ build_package.ps1 的 -InPlaceUpdatePreview 仅显式构建测试能力，核验
 本机脚本回归 20 项通过，新增 Windows 实际测试包签名用例因无 Windows/CI 夹具跳过（21 项总计）；Windows 原型构建、PowerShell 与真实两包签名运行待这批 head 的 CI。该 kit 不是公开 Release，也不是已经部署的 HTTPS GUI 测试服务；不把元数据签名成功称作真实窗口升级通过。后续验收集中复用这些资产，不再要求用户先提供 Windows 电脑才能完成代码/自动化工作。
 
 `2977935` Linux CI 在脚本测试发现 Ubuntu Python 3.10 不提供 hashlib.file_digest；修为固定 1 MiB 流式 SHA-256，不改依赖或跳过检查。回归夹具增加超过 1 MiB 的真实输入，并显式禁止调用 3.11-only 接口；针对性测试和 20 项脚本回归通过（另 1 项 Windows 夹具待 CI）。修复后的跨平台证据仍等待新 head。
+
+### 本轮代码与自动化收尾完成（2026-10-04）
+
+head `c6c9ce1ec165838e945c5fcd40fc98cb1681f6dc` 四项 CI 全绿，Quality run `37142149369`、audit run `37142149393`，无未解决 review thread。Windows job `111258638096` 的两次真实 native Inno 升级/恢复通过；实际双包签名用例运行 1 项通过，并非 skip。恢复附件 `11281346478` 在 ignored target/windows-recovery-c6c9ce1.qu7WKT 已下载复核。
+
+results.json scope 仍 installer-recovery-prototype-not-GUI-updater，无 false 布尔断言，production_version_unchanged=true；native on/off 的 applied/restored/user_data_preserved 均 true，桌面快捷方式分别 true/false。preview-kit 的 rc.2/rc.3 两个测试安装包真实存在（13,395,520 / 13,386,519 bytes），本地再次用测试公钥实际验签；每个原包与签名暂存副本的大小/SHA-256、证据版本、七字段兼容契约、原始 manifest 与测试 latest 的字节一致性全部通过。公钥两把、快照绑定标识 true、附件不含 PEM 私钥。
+
+这完成用户在无 Windows 电脑条件下批准的本轮代码、打包/签名与自动化收尾。真实桌面/按钮端到端仍待环境，测试 HTTPS 根未部署，不冒充已完成 GUI 验收；Windows 默认入口仍关闭，公开协议 0。生产 trust/版本未修改，没有合并、tag、Release、OSS 或再次替换 Spotlight。收尾证据先留本地计划，与未来经批准的发布准备统一提交，避免纯记录改动再触发整轮构建；停止本轮监控，之后需要实机验收或发布时另行推进。
+
+### 2026-10-08 隔离 Windows GUI QA 源（准备，未冒充上线）
+
+用户提供 Windows x64 实机，已装公开 rc.1。另明确批准独立 windows-gui-qa OSS 目录及临时测试签名；原安装与生产信任不改。新增 kit-only 构建选项复用已有快照构建、能力探针及产品 Inno 定义，不带恢复原型注入的新文件/故障安装器，不自动安装用户应用。
+
+windows_gui_qa.py 生成两版真实包的测试签名清单；初始 latest 固定旧版，先由真实旧 GUI 检查更新保留可信恢复记录，再经明确操作切换候选版本。阶段脚本验证 exact source SHA、run-attempt 独立根、双测试公钥、签名、两版包哈希及精确公共文件集合；不上传私钥、资产规格里的机器路径或额外文件。默认生产工作流/产品版本/公开协议未改。
+
+上传只允许 reviewed main 和现有受保护 Environment，不降低保护策略。版本化对象禁止覆盖，续传只接受同哈希原对象；候选激活只替换单个 QA latest 并核验公网新旧资产。测试源尚未部署、未交付下载 URL；main 工作流授权和 OSS 子目录权限仍是实际部署门槛。所有新增脚本单元测试为控制/签名证据，不是 Windows 实机 GUI 验收。

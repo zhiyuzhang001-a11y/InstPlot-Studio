@@ -1,9 +1,19 @@
-param()
+param(
+    [string]$FixturePublicRoot = 'https://windows-update.example.test/instplot-studio',
+    [switch]$KitOnly
+)
 # Disposable CI-only installer recovery prototype. Does NOT implement the updater.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
     throw 'Run only on a disposable Windows GitHub Actions runner, never on a user installation.'
+}
+if ($FixturePublicRoot -ne 'https://windows-update.example.test/instplot-studio') {
+    $ExpectedRoot = "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+    if (-not $KitOnly -or $env:GITHUB_RUN_ID -notmatch '^[0-9]+$' -or
+        $env:GITHUB_RUN_ATTEMPT -notmatch '^[0-9]+$' -or $FixturePublicRoot -cne $ExpectedRoot) {
+        throw 'Public GUI fixture must use this run-specific isolated OSS root in kit-only mode.'
+    }
 }
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
@@ -176,11 +186,11 @@ try {
         @{ id = 'windows-preview-fixture-next'; public_key_hex = $FixtureNextPublic }
     )
     [ordered]@{
-        public_root = 'https://windows-update.example.test/instplot-studio'
+        public_root = $FixturePublicRoot
         keys = $FixtureKeys
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $Snapshot 'packaging/update/trust.json')
     $Manifest = Join-Path $Snapshot 'Cargo.toml'
-    Checked 'cargo' @('build', '--locked', '--offline', '--manifest-path', $Manifest,
+    Checked 'cargo' @('build', '--locked', '--manifest-path', $Manifest,
         '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview')
     $OldSource = Join-Path $TaskRoot 'old-source'
     $NewSource = Join-Path $TaskRoot 'new-source'
@@ -214,15 +224,19 @@ try {
     [IO.File]::WriteAllText($FaultDefinition, [IO.File]::ReadAllText($NewDefinition) + "`n[Code]`n" +
         "function InitializeSetup(): Boolean;`nbegin`n  Result := False;`nend;`n")
     $OldInstaller = CompileInstaller $OldSource $CurrentVersion $Definition (Join-Path $TaskRoot 'old-setup')
-    $NewInstaller = CompileInstaller $NewSource $NextVersion $NewDefinition (Join-Path $TaskRoot 'new-setup')
-    $FaultInstaller = CompileInstaller $NewSource $NextVersion $FaultDefinition (Join-Path $TaskRoot 'fault-setup')
+    # GUI kit uses only the unmodified product installer (no injected extra file).
+    $CandidateDefinition = if ($KitOnly) { $Definition } else { $NewDefinition }
+    $NewInstaller = CompileInstaller $NewSource $NextVersion $CandidateDefinition (Join-Path $TaskRoot 'new-setup')
+    if (-not $KitOnly) {
+        $FaultInstaller = CompileInstaller $NewSource $NextVersion $FaultDefinition (Join-Path $TaskRoot 'fault-setup')
+    }
     # Preserve the two compatible preview installers and exact-file evidence.
     # These are disposable test versions, not published/accepted releases.
     $KitRoot = Join-Path $EvidenceRoot 'preview-kit'
     New-Item -ItemType Directory $KitRoot | Out-Null
     [ordered]@{
         scope = 'signed-fixture-metadata-not-GUI-updater'
-        public_root = 'https://windows-update.example.test/instplot-studio'
+        public_root = $FixturePublicRoot
         keys = $FixtureKeys
         binaries_use_fixture_trust = $true
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot 'fixture-trust.json')
@@ -233,6 +247,9 @@ try {
         @{ Version = $NextVersion; Source = $NewSource; Installer = $NewInstaller }
     )) {
         $Binary = Join-Path $Item.Source 'instplot-studio.exe'
+        if ($KitOnly) {
+            & (Join-Path $RepositoryRoot 'scripts/verify_windows_icon.ps1') -Executable $Binary
+        }
         $Probe = ((& $Binary --windows-update-capabilities) -join "`n") | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $Probe.product -ne 'instplot-studio' -or
             $Probe.version -ne $Item.Version -or $Probe.platform -ne 'windows-x86_64' -or
@@ -253,6 +270,10 @@ try {
             installer_sha256 = (Get-FileHash -Algorithm SHA256 $Item.Installer).Hash.ToLowerInvariant()
             contract = $Contract
         } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot ($Item.Version + '-windows-in-place.json'))
+    }
+    if ($KitOnly) {
+        Write-Output 'Windows isolated GUI kit built; no user installation or GUI acceptance performed.'
+        return
     }
     # Disposable fault installers only. AfterInstall/Win32 DLL declarations use
     # Inno's documented script interfaces; none enter the product definition.
