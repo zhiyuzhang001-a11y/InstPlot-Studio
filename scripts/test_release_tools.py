@@ -47,7 +47,7 @@ class WindowsProbeTests(unittest.TestCase):
     def test_windows_call_sites_explicitly_wait(self) -> None:
         for path in (".github/workflows/instplot-studio.yml", ".github/workflows/release.yml",
                      "scripts/test_windows_installer_recovery.ps1"):
-            text = (ROOT / path).read_text()
+            text = (ROOT / path).read_text(encoding="utf-8")
             self.assertNotRegex(text, r"&\s+(?:\$[Bb]inary|target/release/instplot-studio.exe)\s+--")
             self.assertIn("invoke_studio_probe.ps1", text)
 
