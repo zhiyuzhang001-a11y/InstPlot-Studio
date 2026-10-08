@@ -29,11 +29,11 @@ jobs:
       actions: read
       id-token: write
     concurrency:
-      group: studio-windows-gui-qa-37800811356-1
+      group: studio-windows-gui-qa-37801465723-1
       cancel-in-progress: false
     env:
-      QA_IDENTITY: 37800811356-1
-      QA_SOURCE_SHA: eb1b74c7adae136b8c581c7c5a32f0c6beaae790
+      QA_IDENTITY: 37801465723-1
+      QA_SOURCE_SHA: 357b3f9cfea4c9ee94bc88d530ce867addb3034f
       QA_ACTION: ${{ inputs.action || 'publish' }}
       GH_TOKEN: ${{ github.token }}
       ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
@@ -42,7 +42,7 @@ jobs:
       - name: Check out frozen and already tested QA tools, not an arbitrary branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: eb1b74c7adae136b8c581c7c5a32f0c6beaae790
+          ref: 357b3f9cfea4c9ee94bc88d530ce867addb3034f
           persist-credentials: false
       - name: Verify frozen build provenance and exact public artifact
         shell: bash
