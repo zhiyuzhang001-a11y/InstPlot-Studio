@@ -50,6 +50,8 @@ class WindowsProbeTests(unittest.TestCase):
             text = (ROOT / path).read_text(encoding="utf-8")
             self.assertNotRegex(text, r"&\s+(?:\$[Bb]inary|target/release/instplot-studio.exe)\s+--")
             self.assertIn("invoke_studio_probe.ps1", text)
+        recovery = (ROOT / "scripts/test_windows_installer_recovery.ps1").read_text(encoding="utf-8")
+        self.assertNotRegex(recovery, r"Checked\s+[^\n]*instplot-studio\.exe")
 
     @unittest.skipUnless(os.name == "nt", "Runs with native PowerShell on Windows CI")
     def test_waits_and_drains_both_streams(self) -> None:

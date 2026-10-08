@@ -434,7 +434,7 @@ end;
         Copy-Item (Join-Path $NewSource 'update-added.bin') $AddedFile
         RemoveAddedFile $InstallRoot $AddedHash
         if ((Get-FileHash -Algorithm SHA256 $UserFile).Hash -ne $UserHash) { throw 'User file was modified.' }
-        Checked (Join-Path $InstallRoot 'instplot-studio.exe') @('--export-fixed-png', (Join-Path $EvidenceRoot "$Name-restored.png"))
+        Invoke-StudioProbe (Join-Path $InstallRoot 'instplot-studio.exe') @('--export-fixed-png', (Join-Path $EvidenceRoot "$Name-restored.png")) | Out-Host
         $Uninstaller = Start-Process (Join-Path $InstallRoot 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru
         if ($Uninstaller.ExitCode -ne 0) { throw 'Uninstall failed after recovery.' }
         if ((Test-Path $Registration) -or (Test-Path $DesktopShortcut) -or (Test-Path $MenuShortcut) -or
