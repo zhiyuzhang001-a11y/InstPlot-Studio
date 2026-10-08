@@ -134,23 +134,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $actual = & target/release/instplot-studio.exe --product-info
+          . ./scripts/invoke_studio_probe.ps1
+          $actual = Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--product-info')
           $expected = "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION"
           if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }
-          & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--export-fixed-pdf', 'target/b1-fixed.pdf') | Out-Host
           if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
           if ((Get-Item target/b1-fixed.pdf).Length -lt 1000) { throw "Headless PDF is unexpectedly small" }
-          & target/release/instplot-studio.exe --export-fixed-png target/b3-fixed.png
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--export-fixed-png', 'target/b3-fixed.png') | Out-Host
           if (-not (Test-Path target/b3-fixed.png)) { throw "Headless PNG was not created" }
           if ((Get-Item target/b3-fixed.png).Length -lt 1000) { throw "Headless PNG is unexpectedly small" }
-          & target/release/instplot-studio.exe --create-project target/b2-ci.instplot
-          & target/release/instplot-studio.exe --check-project target/b2-ci.instplot
-          & target/release/instplot-studio.exe --publication-check target/b2-ci.instplot | Out-File -Encoding utf8 target/b4-publication-check.json
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--create-project', 'target/b2-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--check-project', 'target/b2-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--publication-check', 'target/b2-ci.instplot') | Out-File -Encoding utf8 target/b4-publication-check.json
           if (-not (Test-Path target/b4-publication-check.json)) { throw "Publication Check report was not created" }
           if ((Get-Item target/b4-publication-check.json).Length -lt 1000) { throw "Publication Check report is unexpectedly small" }
-          & target/release/instplot-studio.exe --create-handoff apps/instplot-studio/tests/fixtures/lite-source-fit.txt target/b5-ci.instplot-handoff
-          & target/release/instplot-studio.exe --import-handoff target/b5-ci.instplot-handoff target/b5-ci.instplot
-          & target/release/instplot-studio.exe --check-project target/b5-ci.instplot
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--create-handoff', 'apps/instplot-studio/tests/fixtures/lite-source-fit.txt', 'target/b5-ci.instplot-handoff') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--import-handoff', 'target/b5-ci.instplot-handoff', 'target/b5-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--check-project', 'target/b5-ci.instplot') | Out-Host
 
       - name: Build, install, and remove Linux packages
         if: runner.os == 'Linux'
@@ -212,7 +213,8 @@ jobs:
           $binary = Join-Path $installRoot "instplot-studio.exe"
           $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
           ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
-          $actual = & $binary --product-info
+          . ./scripts/invoke_studio_probe.ps1
+          $actual = Invoke-StudioProbe $binary @('--product-info')
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION") { throw "Unexpected installed identity: $actual" }
           $uninstallProcess = Start-Process -FilePath (Join-Path $installRoot "unins000.exe") -ArgumentList @(
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
@@ -249,7 +251,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify isolated publishing guards
-        run: python3 -m unittest scripts.test_windows_gui_qa
+        run: python3 -m unittest scripts.test_windows_gui_qa scripts.test_release_tools.WindowsProbeTests
       - name: Build both isolated preview installers (no installed app changed)
         shell: pwsh
         run: |

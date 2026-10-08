@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,6 +41,37 @@ class ExtractChangelogTests(unittest.TestCase):
             MODULE.extract_section("## [1.0.0]\n", "1.0.0")
         with self.assertRaises(ValueError):
             MODULE.extract_section("## [1.0.0]\n- ok\n", "2.0.0")
+
+
+class WindowsProbeTests(unittest.TestCase):
+    def test_windows_call_sites_explicitly_wait(self) -> None:
+        for path in (".github/workflows/instplot-studio.yml", ".github/workflows/release.yml",
+                     "scripts/test_windows_installer_recovery.ps1"):
+            text = (ROOT / path).read_text()
+            self.assertNotRegex(text, r"&\s+(?:\$[Bb]inary|target/release/instplot-studio.exe)\s+--")
+            self.assertIn("invoke_studio_probe.ps1", text)
+
+    @unittest.skipUnless(os.name == "nt", "Runs with native PowerShell on Windows CI")
+    def test_waits_and_drains_both_streams(self) -> None:
+        result = self.probe("import sys,time; time.sleep(0.2); sys.stderr.write('e'*100000); print('ready')")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ready")
+
+    @unittest.skipUnless(os.name == "nt", "Runs with native PowerShell on Windows CI")
+    def test_nonzero_exit_is_not_accepted(self) -> None:
+        result = self.probe("import sys; print('wrong'); sys.stderr.write('probe failure'); sys.exit(7)")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("exited with 7", result.stderr)
+
+    def probe(self, program: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory(prefix="Studio probe space ") as temporary:
+            script = Path(temporary) / "probe.py"
+            script.write_text(program)
+            quote = lambda value: str(value).replace("'", "''")
+            command = ("$ErrorActionPreference='Stop'; . '" + quote(ROOT / "scripts/invoke_studio_probe.ps1")
+                       + "'; Invoke-StudioProbe '" + quote(sys.executable) + "' @('" + quote(script) + "')")
+            return subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", command],
+                                  capture_output=True, text=True, timeout=45)
 
 
 class ReleaseDispatchTests(unittest.TestCase):

@@ -16,6 +16,7 @@ if ($FixturePublicRoot -ne 'https://windows-update.example.test/instplot-studio'
     }
 }
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'invoke_studio_probe.ps1')
 $Registration = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
 $MachineRegistration = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
 $MachineRegistration32 = 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{F5A7E98E-2AFB-4E58-8DF8-C20DB09D42A2}_is1'
@@ -47,8 +48,8 @@ function Checked([string]$Program, [string[]]$Arguments) {
 }
 
 function ProductIdentity([string]$Binary, [string]$Version) {
-    $Actual = & $Binary --product-info
-    if ($LASTEXITCODE -ne 0 -or $Actual -ne "InstPlot Studio`tinstplot-studio`t$Version") {
+    $Actual = Invoke-StudioProbe $Binary @('--product-info')
+    if ($Actual -ne "InstPlot Studio`tinstplot-studio`t$Version") {
         throw "Wrong product identity: $Actual"
     }
 }
@@ -110,8 +111,8 @@ function VerifyInstallation([string]$Directory, [string]$Version, [string]$Hash,
     }
     if ((Test-Path $MachineRegistration) -or (Test-Path $MachineRegistration32)) { throw 'Installer changed to machine scope.' }
     # Exercise production read-only native registry/Shell discovery, not a mock.
-    $Discovery = & $Binary --check-update-installation | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or $Discovery.product -ne 'instplot-studio' -or
+    $Discovery = Invoke-StudioProbe $Binary @('--check-update-installation') | ConvertFrom-Json
+    if ($Discovery.product -ne 'instplot-studio' -or
         $Discovery.version -ne $Version -or $Discovery.scope -ne 'current_user' -or
         -not $Discovery.running_path_matches -or $Discovery.desktop_shortcut -ne $Desktop) {
         throw 'Native update discovery failed to bind the actual installed executable.'
@@ -266,7 +267,7 @@ try {
             & (Join-Path $RepositoryRoot 'scripts/verify_windows_icon.ps1') -Executable $Binary
         }
         VerifyGuiSubsystem $Binary
-        $Probe = ((& $Binary --windows-update-capabilities) -join "`n") | ConvertFrom-Json
+        $Probe = Invoke-StudioProbe $Binary @('--windows-update-capabilities') | ConvertFrom-Json
         if ($LASTEXITCODE -ne 0 -or $Probe.product -ne 'instplot-studio' -or
             $Probe.version -ne $Item.Version -or $Probe.platform -ne 'windows-x86_64' -or
             $Probe.scope -ne 'preview-components-not-accepted-updater' -or

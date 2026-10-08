@@ -209,9 +209,10 @@ jobs:
           $binary = Join-Path $installRoot "instplot-studio.exe"
           $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
           ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
-          $actual = & $binary --product-info
+          . ./scripts/invoke_studio_probe.ps1
+          $actual = Invoke-StudioProbe $binary @('--product-info')
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$version") { throw "Unexpected identity: $actual" }
-          & $binary --export-fixed-png target/windows-installed.png
+          Invoke-StudioProbe $binary @('--export-fixed-png', 'target/windows-installed.png') | Out-Host
           if (-not (Test-Path target/windows-installed.png)) { throw "Installed export failed" }
           $uninstaller = Join-Path $installRoot "unins000.exe"
           $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(

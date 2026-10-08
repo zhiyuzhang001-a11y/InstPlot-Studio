@@ -533,3 +533,5 @@ windows_gui_qa.py 生成两版真实包的测试签名清单；初始 latest 固
 修复生成器使用允许的 releases 根；签名工具直接编译同一 Studio update.rs，新增 verify-manifest 命令，QA stage 与公网 verifier 均调用它检查签名、schema、通道、有效期、说明链接及平台字段。新增正确签名但 commit notes URL 被真实客户端拒绝的回归。保留临时私钥不上传/不恢复原则，新包新根重新构建并签名。
 
 用户同时观察到 FIRST_CANVAS 控制台窗口：此前测试 exe 为默认 console 子系统。Windows 主程序改为 GUI 子系统，构建脚本检查实际 x64 PE 头 Subsystem=2；同一次真实 Windows 构建仍要验证产品身份/能力命令输出和图标。PE 检查不冒充用户再次打开软件后的 GUI 验收。Mac 正式安装、产品版本、生产 trust 与生产指针不改。本地签名工具 5 项 Rust 测试/Clippy 通过，脚本 33 通过/1 原有 Windows 夹具跳过；修正版 Windows 构建与实机重试待执行。
+
+构建 37799095360 的两版 Windows exe 编译成功，但产品身份探针失败：PowerShell 用 `&` 运行 GUI 子系统 exe 未等待结束，stdout 管道提前关闭（os error 232），结果为空。新增显式 Process 等待、双流异步读取、非零退出拒绝与超时保护；统一替换原型、Quality 与 Release 的 Windows 身份/导出探针，不恢复控制台子系统。回归覆盖有空格路径、延迟输出、大 stderr 与失败退出；Windows 原生运行证据须由新构建取得。失败构建不得部署，工作流 PR #11 必须重新绑定成功的新 source/run 后才可合并。
