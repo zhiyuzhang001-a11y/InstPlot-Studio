@@ -1,6 +1,9 @@
 name: Deploy isolated Windows GUI QA endpoint
 
 on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/windows-gui-qa-deploy.yml"]
   workflow_dispatch:
     inputs:
       action:
@@ -31,7 +34,7 @@ jobs:
     env:
       QA_IDENTITY: 37791183672-1
       QA_SOURCE_SHA: 96430fc97111be14bad508ceb309bfb183afbb22
-      QA_ACTION: ${{ inputs.action }}
+      QA_ACTION: ${{ inputs.action || 'publish' }}
       GH_TOKEN: ${{ github.token }}
       ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
       ALIYUN_ROLE_ARN: ${{ vars.ALIYUN_ROLE_ARN }}
