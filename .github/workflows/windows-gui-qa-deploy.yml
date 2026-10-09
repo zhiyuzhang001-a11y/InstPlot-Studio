@@ -17,7 +17,8 @@ permissions:
 
 # This narrow bridge does NOT merge updater implementation into main, create a
 # release or build another package. It consumes one frozen, successful QA build.
-# Changing this source/artifact pair requires another reviewed workflow change.
+# Package provenance stays frozen. A separately reviewed transport-only tools
+# commit may differ ONLY in the two QA publication files checked below.
 jobs:
   deploy:
     if: ${{ github.ref == 'refs/heads/main' }}
@@ -34,21 +35,27 @@ jobs:
     env:
       QA_IDENTITY: 37898949787-1
       QA_SOURCE_SHA: 4f50e72fc0b94f308ccbbdf0ccac3a3978ce84db
+      QA_TOOLS_SHA: eeff5d16207763e0f64df07de05a905898a08758
       QA_ACTION: ${{ inputs.action || 'publish' }}
       GH_TOKEN: ${{ github.token }}
       ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
       ALIYUN_ROLE_ARN: ${{ vars.ALIYUN_ROLE_ARN }}
     steps:
-      - name: Check out frozen and already tested QA tools, not an arbitrary branch
+      - name: Check out frozen reviewed QA transport tools, not an arbitrary branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 4f50e72fc0b94f308ccbbdf0ccac3a3978ce84db
+          ref: eeff5d16207763e0f64df07de05a905898a08758
+          fetch-depth: 2
           persist-credentials: false
       - name: Verify frozen build provenance and exact public artifact
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${QA_SOURCE_SHA}"
+          test "$(git rev-parse HEAD)" = "${QA_TOOLS_SHA}"
+          # Reject any changed package/build/trust/validation inputs. Only the
+          # explicit ossutil argv fix and its regression may differ.
+          git diff --exit-code "${QA_SOURCE_SHA}" "${QA_TOOLS_SHA}" -- . \
+            ':!scripts/windows_gui_qa.py' ':!scripts/test_windows_gui_qa.py'
           run_id=${QA_IDENTITY%-*}
           source_sha=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
             --jq 'select(.conclusion == "success" and .event == "workflow_dispatch" and .path == ".github/workflows/instplot-studio.yml") | .head_sha')
@@ -67,6 +74,12 @@ jobs:
           echo "3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a  ${archive}" | sha256sum --check --strict
           unzip -q "${archive}" -d "${RUNNER_TEMP}"
           install -m 0755 "${RUNNER_TEMP}/ossutil-2.3.0-linux-amd64/ossutil" "${RUNNER_TEMP}/ossutil"
+      - name: Verify native ossutil overwrite headers against loopback before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          export QA_OSSUTIL="${RUNNER_TEMP}/ossutil"
+          python3 -m unittest scripts.test_windows_gui_qa.WindowsGuiQaTests.test_real_ossutil_transmits_boolean_overwrite_headers
       - name: Use existing protected OIDC role without a production signing secret
         uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1
         with:
