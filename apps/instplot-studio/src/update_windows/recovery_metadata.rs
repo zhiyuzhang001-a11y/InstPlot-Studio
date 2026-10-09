@@ -21,7 +21,24 @@ struct MetadataPointer {
 }
 
 fn version_directory(root: &Path, version: &str) -> PathBuf {
-    root.join(format!("{:x}", Sha256::digest(version.as_bytes())))
+    let source = crate::AllowedUpdateRoot::parse(crate::PRODUCTION_PUBLIC_ROOT)
+        .expect("build-validated update root");
+    version_directory_for_source(root, &source, version)
+}
+
+fn version_directory_for_source(
+    root: &Path,
+    source: &crate::AllowedUpdateRoot,
+    version: &str,
+) -> PathBuf {
+    // Production retains its old recovery paths. Isolated feeds cannot clash
+    // with another signed record for the same version/sequence in that cache.
+    let identity = if source.owns_legacy_state() {
+        version.to_owned()
+    } else {
+        format!("{}|{version}", source.state_namespace())
+    };
+    root.join(format!("{:x}", Sha256::digest(identity.as_bytes())))
 }
 
 fn pointer_at(directory: &Path, version: &str) -> io::Result<MetadataPointer> {
@@ -188,6 +205,28 @@ mod tests {
             version,
             OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
         )
+    }
+
+    #[test]
+    fn recovery_paths_are_source_scoped_and_preserve_production_layout() {
+        let root = Path::new("fixture");
+        let production = crate::AllowedUpdateRoot::parse(
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio",
+        )
+        .unwrap();
+        let qa = crate::AllowedUpdateRoot::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/123-1").unwrap();
+        let other_qa = crate::AllowedUpdateRoot::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/456-1").unwrap();
+        let old_path = root.join(format!("{:x}", Sha256::digest(b"0.1.2-rc.2")));
+        assert_eq!(
+            version_directory_for_source(root, &production, "0.1.2-rc.2"),
+            old_path
+        );
+        let qa_path = version_directory_for_source(root, &qa, "0.1.2-rc.2");
+        assert_ne!(qa_path, old_path);
+        assert_ne!(
+            qa_path,
+            version_directory_for_source(root, &other_qa, "0.1.2-rc.2")
+        );
     }
 
     #[test]

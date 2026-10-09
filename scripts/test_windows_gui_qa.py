@@ -79,6 +79,8 @@ class WindowsGuiQaTests(unittest.TestCase):
         index = self.stage()
         self.assertEqual(index["baseline"], "0.1.2-rc.2")
         self.assertEqual(index["candidate"], "0.1.2-rc.3")
+        self.assertTrue(index["update_state_is_source_scoped"])
+        self.assertFalse(index["install_only_in_separate_windows_account"])
         tree = self.output / "public"
         self.assertEqual((tree / "channels/prerelease/latest.json").read_bytes(),
                          (tree / "releases/0.1.2-rc.2/metadata/1/manifest.json").read_bytes())

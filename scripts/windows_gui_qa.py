@@ -110,7 +110,8 @@ def stage(kit: Path, output: Path, identity: str, source_sha: str, private_key: 
         "identity": identity, "source_sha": source_sha, "public_root": endpoint,
         "keys": keys, "baseline": old, "candidate": new,
         "initial_latest": old, "candidate_requires_explicit_activation": True,
-        "install_only_in_separate_windows_account": True,
+        "install_only_in_separate_windows_account": False,
+        "update_state_is_source_scoped": True,
     }
     (tree / "qa-index.json").write_bytes(PREPARE.deterministic_json(index))
     (output / "inventory.json").write_bytes(PREPARE.deterministic_json({
@@ -126,7 +127,7 @@ def validate(output: Path, identity: str) -> dict:
     index = json.loads((tree / "qa-index.json").read_bytes())
     if index.get("identity") != identity or index.get("public_root") != endpoint or index.get("scope") != "windows-gui-qa-not-production-not-GUI-accepted":
         raise ValueError("QA staging identity mismatch")
-    if not re.fullmatch(r"[0-9a-f]{40}", index.get("source_sha", "")) or index.get("candidate_requires_explicit_activation") is not True or index.get("install_only_in_separate_windows_account") is not True or index.get("initial_latest") != index.get("baseline"):
+    if not re.fullmatch(r"[0-9a-f]{40}", index.get("source_sha", "")) or index.get("candidate_requires_explicit_activation") is not True or index.get("install_only_in_separate_windows_account") is not False or index.get("update_state_is_source_scoped") is not True or index.get("initial_latest") != index.get("baseline"):
         raise ValueError("invalid QA source or bootstrap policy")
     inventory = json.loads((output / "inventory.json").read_bytes())
     if any(path.is_symlink() for path in tree.rglob("*")):

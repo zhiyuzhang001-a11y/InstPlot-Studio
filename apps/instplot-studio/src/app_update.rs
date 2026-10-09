@@ -1060,7 +1060,7 @@ fn check_for_update() -> Result<CheckOutcome, String> {
     let manifest =
         verify_signed_manifest(&raw, &signature, &PRODUCTION_TRUSTED_KEYS, &root, channel)
             .map_err(|_| "更新清单未通过签名或安全校验。".to_owned())?;
-    enforce_sequence(channel, manifest.release_sequence)?;
+    enforce_sequence(&root, channel, manifest.release_sequence)?;
     let remote = Version::parse(&manifest.version).map_err(|_| "更新版本号无效。".to_owned())?;
     if remote < current {
         return Err("服务器返回了旧版本，已拒绝降级。".to_owned());
@@ -1369,15 +1369,20 @@ struct SequenceState {
     channels: BTreeMap<String, u64>,
 }
 
-fn enforce_sequence(channel: UpdateChannel, sequence: u64) -> Result<(), String> {
+fn enforce_sequence(
+    source: &AllowedUpdateRoot,
+    channel: UpdateChannel,
+    sequence: u64,
+) -> Result<(), String> {
     let Some(project) = ProjectDirs::from("com", "InstPlot", "InstPlot Studio") else {
         return Err("无法确定应用配置目录。".to_owned());
     };
-    enforce_sequence_at(project.config_dir(), channel, sequence)
+    enforce_sequence_at(project.config_dir(), source, channel, sequence)
 }
 
 fn enforce_sequence_at(
     directory: &Path,
+    source: &AllowedUpdateRoot,
     channel: UpdateChannel,
     sequence: u64,
 ) -> Result<(), String> {
@@ -1398,18 +1403,27 @@ fn enforce_sequence_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => SequenceState::default(),
         Err(_) => return Err("无法读取更新状态。".to_owned()),
     };
-    let key = channel.as_str().to_owned();
-    if state
-        .channels
-        .get(&key)
-        .is_some_and(|highest| sequence < *highest)
-    {
+    let legacy_key = channel.as_str();
+    let key = format!("{}|{legacy_key}", source.state_namespace());
+    let mut highest = state.channels.get(&key).copied().unwrap_or_default();
+    if source.owns_legacy_state() {
+        highest = highest.max(state.channels.get(legacy_key).copied().unwrap_or_default());
+    }
+    if sequence < highest {
         return Err("检测到更新清单序列回退，已拒绝使用。".to_owned());
     }
-    if state.channels.get(&key).copied().unwrap_or_default() == sequence {
+    if state.channels.get(&key).copied() == Some(sequence)
+        && (!source.owns_legacy_state()
+            || state.channels.get(legacy_key).copied() == Some(sequence))
+    {
         return Ok(());
     }
     state.channels.insert(key, sequence);
+    // Keep old production clients protected too; never lower or delete the
+    // legacy watermark and never import it into an isolated fixture feed.
+    if source.owns_legacy_state() {
+        state.channels.insert(legacy_key.to_owned(), sequence);
+    }
     let bytes = serde_json::to_vec(&state).map_err(|_| "无法保存更新状态。".to_owned())?;
     AtomicFile::new(&path, AllowOverwrite)
         .write(|file| {
@@ -2228,7 +2242,9 @@ mod tests {
             .map(|sequence| {
                 let root = root.clone();
                 std::thread::spawn(move || {
-                    let _ = enforce_sequence_at(&root, UpdateChannel::Prerelease, sequence);
+                    let source = AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).unwrap();
+                    let _ =
+                        enforce_sequence_at(&root, &source, UpdateChannel::Prerelease, sequence);
                 })
             })
             .collect::<Vec<_>>();
@@ -2237,9 +2253,53 @@ mod tests {
         }
         let state: SequenceState =
             serde_json::from_slice(&fs::read(root.join("update-sequences.json")).unwrap()).unwrap();
-        assert_eq!(state.channels.get("prerelease"), Some(&16));
-        assert!(enforce_sequence_at(&root, UpdateChannel::Prerelease, 15).is_err());
+        let source = AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).unwrap();
+        let key = format!("{}|prerelease", source.state_namespace());
+        assert_eq!(state.channels.get(&key), Some(&16));
+        assert!(enforce_sequence_at(&root, &source, UpdateChannel::Prerelease, 15).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sequence_sources_are_isolated_without_resetting_legacy_protection() {
+        let directory = std::env::temp_dir().join(format!(
+            "studio-sequence-sources-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("update-sequences.json");
+        fs::write(&path, br#"{"channels":{"prerelease":20,"stable":9}}"#).unwrap();
+        let production = AllowedUpdateRoot::parse(
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio",
+        )
+        .unwrap();
+        let qa = AllowedUpdateRoot::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/123-1").unwrap();
+        let other_qa = AllowedUpdateRoot::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/456-1").unwrap();
+        enforce_sequence_at(&directory, &qa, UpdateChannel::Prerelease, 1).unwrap();
+        enforce_sequence_at(&directory, &qa, UpdateChannel::Prerelease, 2).unwrap();
+        let before_rejection = fs::read(&path).unwrap();
+        assert!(enforce_sequence_at(&directory, &qa, UpdateChannel::Prerelease, 1).is_err());
+        assert!(
+            enforce_sequence_at(&directory, &production, UpdateChannel::Prerelease, 19).is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before_rejection);
+        enforce_sequence_at(&directory, &other_qa, UpdateChannel::Prerelease, 1).unwrap();
+        enforce_sequence_at(&directory, &qa, UpdateChannel::Stable, 1).unwrap();
+        enforce_sequence_at(&directory, &production, UpdateChannel::Prerelease, 20).unwrap();
+        enforce_sequence_at(&directory, &production, UpdateChannel::Prerelease, 21).unwrap();
+        let state: SequenceState = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(state.channels.get("prerelease"), Some(&21));
+        assert_eq!(state.channels.get("stable"), Some(&9));
+        let canonical_qa = AllowedUpdateRoot::parse("https://INSTPLOT-RELEASE.oss-cn-beijing.aliyuncs.com:443/instplot-studio/windows-gui-qa/123-1/").unwrap();
+        assert!(
+            enforce_sequence_at(&directory, &canonical_qa, UpdateChannel::Prerelease, 1).is_err()
+        );
+        enforce_sequence_at(&directory, &canonical_qa, UpdateChannel::Prerelease, 2).unwrap();
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -2251,7 +2311,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::write(root.join("update-sequences.json"), b"not json").unwrap();
-        assert!(enforce_sequence_at(&root, UpdateChannel::Stable, 1).is_err());
+        let source = AllowedUpdateRoot::parse(PRODUCTION_PUBLIC_ROOT).unwrap();
+        assert!(enforce_sequence_at(&root, &source, UpdateChannel::Stable, 1).is_err());
         assert_eq!(
             fs::read(root.join("update-sequences.json")).unwrap(),
             b"not json"

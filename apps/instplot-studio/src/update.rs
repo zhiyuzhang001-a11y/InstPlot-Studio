@@ -137,6 +137,23 @@ pub struct AllowedUpdateRoot {
 }
 
 impl AllowedUpdateRoot {
+    /// Canonical identity for persistent state; trust-key rotation keeps the
+    /// same namespace, while another host, port or path gets its own state.
+    pub fn state_namespace(&self) -> String {
+        format!(
+            "{}://{}:{}{}",
+            self.scheme, self.host, self.port, self.path_prefix
+        )
+    }
+
+    /// Legacy channel-only records came from the original production feed.
+    /// This identity must not follow the fixture-overridden build constant.
+    pub fn owns_legacy_state(&self) -> bool {
+        *self
+            == Self::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio")
+                .expect("fixed legacy production root")
+    }
+
     pub fn parse(value: &str) -> Result<Self, SignedManifestError> {
         let parsed = Url::parse(value)
             .map_err(|error| SignedManifestError::InvalidUrl(error.to_string()))?;
@@ -601,6 +618,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(manifest.version, "0.1.2-rc.1");
+    }
+
+    #[test]
+    fn state_namespace_is_canonical_and_source_specific() {
+        let production = AllowedUpdateRoot::parse(
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio",
+        )
+        .unwrap();
+        let equivalent = AllowedUpdateRoot::parse(
+            "https://INSTPLOT-RELEASE.oss-cn-beijing.aliyuncs.com:443/instplot-studio/",
+        )
+        .unwrap();
+        assert_eq!(production.state_namespace(), equivalent.state_namespace());
+        assert!(equivalent.owns_legacy_state());
+        for value in [
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/123-1",
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com:444/instplot-studio",
+            "https://another.example/instplot-studio",
+        ] {
+            let other = AllowedUpdateRoot::parse(value).unwrap();
+            assert_ne!(other.state_namespace(), production.state_namespace());
+            assert!(!other.owns_legacy_state());
+        }
     }
 
     #[test]
