@@ -36,7 +36,7 @@ on:
         description: Isolated Windows GUI QA only (never a production release)
         type: choice
         default: "off"
-        options: ["off", build, publish, activate]
+        options: ["off", build, publish, activate, desktop-smoke]
       windows_gui_qa_identity:
         description: Existing QA artifact identity RUN_ID-ATTEMPT (publish/activate only)
         type: string
@@ -243,6 +243,24 @@ jobs:
           name: windows-update-recovery-prototype
           path: target/windows-update-recovery/
           if-no-files-found: warn
+
+  windows-desktop-smoke:
+    # Diagnostic only: consume existing exact QA packages, never rebuild/publish.
+    if: ${{ inputs.windows_gui_qa_action == 'desktop-smoke' }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify real desktop windows for the frozen preview packages
+        shell: pwsh
+        run: ./scripts/test_windows_desktop_smoke.ps1
+      - name: Preserve native window evidence and screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-desktop-smoke-${{ github.run_id }}
+          path: target/windows-desktop-smoke/
+          if-no-files-found: error
 
   windows-gui-qa-build:
     if: ${{ inputs.windows_gui_qa_action == 'build' }}
