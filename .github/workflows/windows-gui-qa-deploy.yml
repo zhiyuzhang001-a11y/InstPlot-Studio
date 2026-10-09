@@ -17,8 +17,10 @@ permissions:
 
 # This narrow bridge does NOT merge updater implementation into main, create a
 # release or build another package. It consumes one frozen, successful QA build.
-# Readiness/startup preview: publish rc.2 baseline; rc.3 activation still needs
+# Visible-restart preview: publish rc.2 baseline; rc.3 activation still needs
 # fresh baseline GUI confirmation. Source and tools are the same reviewed SHA.
+# The isolated TLS desktop GUI run 37965535242 passed at this exact source;
+# public exact-binary verification remains a separate deployment gate.
 # Package provenance stays frozen. A separately reviewed transport-only tools
 # commit may differ ONLY in the two QA publication files checked below.
 jobs:
@@ -32,12 +34,12 @@ jobs:
       actions: read
       id-token: write
     concurrency:
-      group: studio-windows-gui-qa-37938590122-1
+      group: studio-windows-gui-qa-37965541633-1
       cancel-in-progress: false
     env:
-      QA_IDENTITY: 37938590122-1
-      QA_SOURCE_SHA: d44895d5e0956f3b1e8e862bba1be54e1d2e4c85
-      QA_TOOLS_SHA: d44895d5e0956f3b1e8e862bba1be54e1d2e4c85
+      QA_IDENTITY: 37965541633-1
+      QA_SOURCE_SHA: be5da81119ae8ef45c7ae1638f9bed86f9e86a8e
+      QA_TOOLS_SHA: be5da81119ae8ef45c7ae1638f9bed86f9e86a8e
       QA_ACTION: ${{ inputs.action || 'publish' }}
       GH_TOKEN: ${{ github.token }}
       ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
@@ -46,7 +48,7 @@ jobs:
       - name: Check out frozen reviewed QA transport tools, not an arbitrary branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: d44895d5e0956f3b1e8e862bba1be54e1d2e4c85
+          ref: be5da81119ae8ef45c7ae1638f9bed86f9e86a8e
           fetch-depth: 2
           persist-credentials: false
       - name: Verify frozen build provenance and exact public artifact
@@ -65,7 +67,8 @@ jobs:
           gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" \
             --name "windows-gui-qa-${QA_IDENTITY}" --dir target/windows-gui-qa
           test "$(python3 -c 'import json; print(json.load(open("target/windows-gui-qa/public/qa-index.json"))["source_sha"])')" = "${QA_SOURCE_SHA}"
-          python3 scripts/windows_gui_qa.py validate --output target/windows-gui-qa --identity "${QA_IDENTITY}"
+          python3 scripts/windows_gui_qa.py validate --output target/windows-gui-qa \
+            --identity "${QA_IDENTITY}" --source-sha "${QA_SOURCE_SHA}"
       - name: Install checksum-pinned ossutil
         shell: bash
         run: |
