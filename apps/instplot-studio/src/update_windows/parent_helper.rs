@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 
 use super::{PreparedWindowsHelper, WindowsInstallAccess};
 
-const READY_TIMEOUT: Duration = Duration::from_secs(10);
+// This bounds waiting for the helper's acknowledgement, not the duration of
+// the parent's subsequent full validation. Cold process startup/AV scanning
+// must not consume a ten-second allowance before the helper can report ready.
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A start failure never obtained a Child. Retain this owner in the frozen GUI
 /// until exact cancellation succeeds; then drop it before unfreezing work so
@@ -108,9 +111,14 @@ impl WindowsParentHelper {
         if owned.child.try_wait()?.is_some() {
             return Err(invalid("owned helper exited before GUI close"));
         }
-        parent_access.require_parent_exit_access(&owned.prepared)?;
-        let proof = owned.prepared.confirm_ready(&owned.child);
-        let readiness = readiness_result(self.started.elapsed(), proof)?;
+        // No expensive installation/shortcut/hash validation while no receipt
+        // exists. A receipt alone NEVER grants close permission: all previous
+        // access and full validation gates still run once it is present.
+        let receipt = owned.prepared.confirm_ready_receipt(&owned.child);
+        let readiness = validate_after_receipt(self.started.elapsed(), receipt, || {
+            parent_access.require_parent_exit_access(&owned.prepared)?;
+            owned.prepared.confirm_ready(&owned.child)
+        })?;
         self.last_ready = (readiness == WindowsParentReadiness::Ready).then(Instant::now);
         Ok(readiness)
     }
@@ -196,15 +204,26 @@ impl Drop for WindowsParentHelper {
     }
 }
 
+fn validate_after_receipt(
+    elapsed: Duration,
+    receipt: io::Result<()>,
+    validate: impl FnOnce() -> io::Result<()>,
+) -> io::Result<WindowsParentReadiness> {
+    let readiness = readiness_result(elapsed, receipt)?;
+    if readiness == WindowsParentReadiness::Ready {
+        validate()?;
+    }
+    Ok(readiness)
+}
+
 fn readiness_result(
     elapsed: Duration,
     proof: io::Result<()>,
 ) -> io::Result<WindowsParentReadiness> {
-    // A delayed acknowledgement cannot grant an unbounded close permission.
     if elapsed >= READY_TIMEOUT {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "helper readiness timed out; cancel or inspect",
+            "helper readiness timed out; cancel or inspect helper-preflight.json",
         ));
     }
     match proof {
@@ -316,6 +335,41 @@ mod tests {
                 io::ErrorKind::TimedOut
             );
         }
+    }
+
+    #[test]
+    fn waiting_receipt_does_not_repeat_expensive_parent_validation() {
+        assert_eq!(
+            validate_after_receipt(
+                Duration::ZERO,
+                Err(io::ErrorKind::NotFound.into()),
+                || panic!("no receipt: no hashing/shortcut discovery")
+            )
+            .unwrap(),
+            WindowsParentReadiness::Waiting
+        );
+        assert!(
+            validate_after_receipt(READY_TIMEOUT, Ok(()), || panic!(
+                "late acknowledgement never grants exit"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn timely_receipt_still_requires_full_validation_and_preserves_its_error() {
+        assert_eq!(
+            validate_after_receipt(Duration::from_secs(99), Ok(()), || Ok(())).unwrap(),
+            WindowsParentReadiness::Ready
+        );
+        assert_eq!(
+            validate_after_receipt(Duration::ZERO, Ok(()), || Err(
+                io::ErrorKind::PermissionDenied.into()
+            ))
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]

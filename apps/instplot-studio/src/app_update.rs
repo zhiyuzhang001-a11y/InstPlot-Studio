@@ -687,6 +687,10 @@ impl AppUpdateState {
             UpdatePhase::StartingWindowsHelper => {
                 ui.spinner();
                 ui.label("正在后台校验并准备更新助手；当前工作已保护，请稍候。");
+                ui.weak(format!(
+                    "本次交接已等待 {} 秒。",
+                    self.windows_parent_poll.elapsed().as_secs()
+                ));
             }
             #[cfg(all(windows, feature = "in-place-update-preview"))]
             UpdatePhase::WindowsHelper {
@@ -967,6 +971,7 @@ impl AppUpdateState {
         self.windows_close_dispatched = false;
         self.close_requested = false;
         self.phase = UpdatePhase::StartingWindowsHelper;
+        self.windows_parent_poll = std::time::Instant::now();
         self.open = true;
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
@@ -1445,7 +1450,10 @@ fn reserve_background_check() -> Result<bool, String> {
 }
 
 fn background_check_due(previous: Option<u64>, now: u64) -> bool {
-    previous.is_none_or(|last| now >= last && now - last >= 24 * 60 * 60)
+    // Reopening Studio should discover a newly activated release that day.
+    // Keep a short cross-instance throttle to avoid repeated requests/popups
+    // when the user immediately relaunches several times.
+    previous.is_none_or(|last| now >= last && now - last >= 5 * 60)
 }
 
 #[derive(Clone, Copy)]
@@ -2253,8 +2261,8 @@ mod tests {
         assert!(background_check_due(None, 10));
         assert!(!background_check_due(Some(100), 50));
         assert!(!background_check_due(Some(100), 100));
-        assert!(!background_check_due(Some(100), 100 + 86_399));
-        assert!(background_check_due(Some(100), 100 + 86_400));
+        assert!(!background_check_due(Some(100), 100 + 299));
+        assert!(background_check_due(Some(100), 100 + 300));
     }
 
     #[test]
@@ -2268,6 +2276,40 @@ mod tests {
         state.poll(&egui::Context::default());
         assert!(matches!(state.phase, UpdatePhase::Idle));
         assert!(!state.open);
+    }
+
+    #[test]
+    fn background_available_update_opens_and_focuses_without_starting_installation() {
+        let mut state = AppUpdateState::default();
+        state.background_started = true;
+        state.background_check = true;
+        state.phase = UpdatePhase::Checking;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender
+            .send(UpdateEvent::Checked(Ok(CheckOutcome::Available(Box::new(
+                AvailableUpdate {
+                    version: "0.1.2-rc.3".into(),
+                    notes_url: String::new(),
+                    package: UpdatePackage {
+                        id: "inno-setup".into(),
+                        package_type: "exe-installer".into(),
+                        file_name: "fixture.exe".into(),
+                        minimum_system: None,
+                        sha256: "00".repeat(32),
+                        size_bytes: 1,
+                        url: String::new(),
+                    },
+                    signed_manifest: Vec::new(),
+                    manifest_signature: Vec::new(),
+                },
+            )))))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(state.open && state.focus);
+        assert!(matches!(state.phase, UpdatePhase::Available(_)));
+        assert!(!state.take_restart_request());
+        assert!(!state.take_close_request());
     }
 
     #[test]

@@ -19,6 +19,39 @@ use super::{
 
 const HELPER_NAME: &str = "instplot-update-helper.exe";
 
+/// Diagnostic only: never read to authorize readiness, installation or exit.
+/// Preserve phase boundaries so a slow cold start is not confused with a lock
+/// or package-validation delay. No keys, nonce or project contents are logged.
+struct HelperPreflightTrace {
+    started: std::time::Instant,
+    phases: std::cell::RefCell<Vec<(&'static str, u128)>>,
+}
+
+impl HelperPreflightTrace {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            phases: Default::default(),
+        }
+    }
+
+    fn phase(&self, directory: &Path, name: &'static str) {
+        self.phases
+            .borrow_mut()
+            .push((name, self.started.elapsed().as_millis()));
+        if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "scope": "diagnostic-only-not-readiness-proof",
+            "process_id": std::process::id(),
+            "phases": &*self.phases.borrow(),
+        })) {
+            // Diagnostics cannot weaken gates or turn a valid transaction into
+            // a failure merely because the diagnostic write was unavailable.
+            let _ = super::write_private_atomic(&directory.join("helper-preflight.json"), &bytes);
+        }
+    }
+}
+
 /// Separate parent-owned signal: the helper is the sole journal writer while
 /// alive. Never acquire its journal lock to request cancellation.
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +311,15 @@ impl PreparedWindowsHelper {
         require_original_files(&installation, &self.request)?;
         // Re-observe the owned native helper after potentially slow file checks.
         // The parent must not close based only on a stale ready file.
+        // The helper may have timed out while we hashed: its terminal journal
+        // must also veto close even if the actual process has not exited yet.
+        confirm_waiting_request(&self.directory, &self.request)?;
+        confirm_process_ready(&self.directory, &self.request, child)
+    }
+
+    /// Cheap authenticated acknowledgement probe. This is NOT a close gate.
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_ready_receipt(&self, child: &std::process::Child) -> io::Result<()> {
         confirm_process_ready(&self.directory, &self.request, child)
     }
 
@@ -514,6 +556,7 @@ pub struct WindowsHelperSession {
     old_process: TrackedWindowsProcess,
     _helper_lease: File,
     _resume_lease: std::cell::Cell<Option<File>>,
+    preflight_trace: HelperPreflightTrace,
 }
 
 impl WindowsHelperSession {
@@ -534,9 +577,12 @@ impl WindowsHelperSession {
                 "foreign helper path, transaction directory or source version",
             ));
         }
+        let preflight_trace = HelperPreflightTrace::new();
+        preflight_trace.phase(&directory, "request-and-transaction");
         let store = TransactionStore::lock(&directory)?;
         let transaction = store.read(&request.identity)?;
         require_transaction(&request, &transaction, UpdateStage::WaitingForExit)?;
+        preflight_trace.phase(&directory, "installation-identity");
         let installation = request.installation()?;
         super::native::revalidate_installation(&installation)?;
         let old_process = TrackedWindowsProcess::bind(
@@ -547,18 +593,19 @@ impl WindowsHelperSession {
         if old_process.wait_for_exit(std::time::Duration::ZERO)? {
             return Err(invalid("old GUI exited before helper acknowledgement"));
         }
-        if digest_file(installation.executable())? != request.previous_binary_sha256 {
-            return Err(invalid(
-                "old application changed before helper acknowledgement",
-            ));
-        }
+        preflight_trace.phase(&directory, "original-release-files");
+        // This authenticates both the same executable hash and the license;
+        // do not hash the executable a second time immediately beforehand.
         require_original_files(&installation, &request)?;
+        preflight_trace.phase(&directory, "helper-copy");
         let helper = directory.join(HELPER_NAME);
         let helper_lease = open_read_lease(&helper)?;
         if digest_file(&helper)? != request.previous_binary_sha256 {
             return Err(invalid("helper copy does not match original binary"));
         }
+        preflight_trace.phase(&directory, "installer-pair-signature-hash-and-pin");
         let installers = request.verify_installers()?;
+        preflight_trace.phase(&directory, "resume-project");
         let resume_lease = request
             .resume_project
             .as_ref()
@@ -574,21 +621,26 @@ impl WindowsHelperSession {
             old_process,
             _helper_lease: helper_lease,
             _resume_lease: std::cell::Cell::new(resume_lease),
+            preflight_trace,
         })
     }
 
     /// Acknowledgement only. Not permission to apply, launch, or report health.
     pub fn acknowledge_ready(&self) -> io::Result<()> {
+        self.preflight_trace
+            .phase(&self.directory, "ready-installation-revalidation");
         if self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
             return Err(invalid("old GUI exited before helper acknowledgement"));
         }
         super::native::revalidate_installation(&self.installation)?;
         require_original_files(&self.installation, &self.request)?;
+        self.preflight_trace
+            .phase(&self.directory, "ready-installer-revalidation");
         self.installers.recovery.installer().revalidate()?;
         self.installers.candidate.installer().revalidate()?;
         let state = self.store.read(self.transaction.identity())?;
         require_transaction(&self.request, &state, UpdateStage::WaitingForExit)?;
-        write_new_json(
+        let result = publish_ready_json(
             &self.directory.join("helper-ready.json"),
             &HelperReady {
                 transaction_id: state.id().into(),
@@ -596,7 +648,12 @@ impl WindowsHelperSession {
                 process_id: std::process::id(),
                 process_created: super::current_process_created()?,
             },
-        )
+        );
+        if result.is_ok() {
+            self.preflight_trace
+                .phase(&self.directory, "ready-published");
+        }
+        result
     }
 
     pub fn transaction(&self) -> &UpdateTransaction {
@@ -1206,6 +1263,16 @@ fn write_new_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     file.sync_all()
 }
 
+fn publish_ready_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(invalid)?;
+    if bytes.len() > 4096 {
+        return Err(invalid("oversized helper readiness"));
+    }
+    // The parent's frequent read-only probe must see either absence or the
+    // complete receipt, never a create-then-write partially serialized file.
+    super::cache::write_private_atomic_new(path, &bytes)
+}
+
 fn open_read_lease(path: &Path) -> io::Result<File> {
     super::validate_private_file(path)?;
     let file = fs::OpenOptions::new()
@@ -1261,6 +1328,69 @@ fn copy_helper(source: &Path, destination: &Path) -> io::Result<(File, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_publication_is_complete_private_and_never_overwrites() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-ready-publication-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let path = root.join("helper-ready.json");
+        assert!(!path.exists());
+        let request = request();
+        let ready = HelperReady {
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            process_id: 123,
+            process_created: 456,
+        };
+        publish_ready_json(&path, &ready).unwrap();
+        super::super::validate_private_file(&path).unwrap();
+        let observed: HelperReady =
+            serde_json::from_slice(&read_private(&path, 4096).unwrap()).unwrap();
+        assert!(observed.matches(&request, 123, 456));
+        assert!(publish_ready_json(&path, &ready).is_err());
+        assert!(publish_ready_json(&root.join("oversized.json"), &"x".repeat(4096)).is_err());
+        let trace = HelperPreflightTrace::new();
+        trace.phase(&root, "installation-identity");
+        trace.phase(&root, "ready-published");
+        let diagnostic: serde_json::Value = serde_json::from_slice(
+            &read_private(&root.join("helper-preflight.json"), 4096).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(diagnostic["scope"], "diagnostic-only-not-readiness-proof");
+        assert_eq!(diagnostic["phases"].as_array().unwrap().len(), 2);
+        assert!(serde_json::from_value::<HelperReady>(diagnostic).is_err());
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
+    }
+
+    #[test]
+    fn terminal_journal_after_slow_validation_vetoes_parent_ready() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-ready-terminal-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        write_new_json(&root.join("request.json"), &request).unwrap();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        confirm_waiting_request(&root, &request).unwrap();
+        // The actual helper still holds its writer lease, but has cancelled
+        // while parent validation ran. Process liveness cannot grant exit.
+        state.transition(UpdateStage::FailedBeforeApply).unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        drop(store);
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
+    }
 
     #[test]
     fn cancellation_signal_is_atomic_bound_and_does_not_need_journal_lock() {
