@@ -73,14 +73,22 @@ fn read_private(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
 /// running, registered installation must exactly match the signed manifest.
 /// This stores a description, NOT a ready-to-use recovery installer.
 pub fn remember_installed_manifest(raw: &[u8], signature: &[u8]) -> io::Result<()> {
-    let installed = super::discover_current_installation()?;
+    let installed = super::discover_current_installation()
+        .map_err(|error| recovery_error("安装身份检查", error))?;
     let metadata = VerifiedWindowsInstallerManifest::from_raw(
         raw,
         signature,
         &installed.version().to_string(),
-    )?;
-    let root = super::private_download_root()?.join("recovery-metadata");
-    retain_at(&root, &metadata)
+    )
+    .map_err(|error| recovery_error("恢复清单校验", error))?;
+    let root = super::private_download_root()
+        .map_err(|error| recovery_error("私有下载目录检查/创建", error))?
+        .join("recovery-metadata");
+    retain_at(&root, &metadata).map_err(|error| recovery_error("恢复记录保存", error))
+}
+
+fn recovery_error(stage: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{stage}：{error}"))
 }
 
 fn retain_at(root: &Path, metadata: &VerifiedWindowsInstallerManifest) -> io::Result<()> {
@@ -193,6 +201,19 @@ mod tests {
     use super::*;
     use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
+
+    #[test]
+    fn recovery_diagnostic_preserves_stage_kind_and_underlying_error() {
+        let error = recovery_error(
+            "私有下载目录检查/创建",
+            io::Error::new(io::ErrorKind::PermissionDenied, "native access denied"),
+        );
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            error.to_string(),
+            "私有下载目录检查/创建：native access denied"
+        );
+    }
 
     fn verify_fixture(
         raw: &[u8],
