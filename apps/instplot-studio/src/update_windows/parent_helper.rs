@@ -60,12 +60,13 @@ struct OwnedHelper {
 
 /// Keep this owner in the frozen parent until normal GUI exit, or until
 /// `cancel_and_poll_exit` returns true. Errors never authorize close/unfreeze.
-/// No background thread, process killing, or installer execution is performed.
+/// This owner may move to a worker; it never kills processes or runs installers.
 #[must_use = "retain the helper owner while the parent is frozen"]
 pub struct WindowsParentHelper {
     owned: Option<OwnedHelper>,
     started: Instant,
     cancellation_requested: bool,
+    last_ready: Option<Instant>,
 }
 
 impl WindowsParentHelper {
@@ -84,6 +85,7 @@ impl WindowsParentHelper {
             owned: Some(OwnedHelper { prepared, child }),
             started: Instant::now(),
             cancellation_requested: false,
+            last_ready: None,
         })
     }
 
@@ -108,7 +110,25 @@ impl WindowsParentHelper {
         }
         parent_access.require_parent_exit_access(&owned.prepared)?;
         let proof = owned.prepared.confirm_ready(&owned.child);
-        readiness_result(self.started.elapsed(), proof)
+        let readiness = readiness_result(self.started.elapsed(), proof)?;
+        self.last_ready = (readiness == WindowsParentReadiness::Ready).then(Instant::now);
+        Ok(readiness)
+    }
+
+    /// GUI's final cheap close gate after full background verification. The
+    /// actual owned child must still be alive; a stale proof never closes GUI.
+    pub fn confirm_recent_ready(&mut self) -> io::Result<()> {
+        recent_ready_gate(
+            self.cancellation_requested,
+            self.last_ready.map(|when| when.elapsed()),
+            || {
+                let owned = self
+                    .owned
+                    .as_mut()
+                    .ok_or_else(|| invalid("missing helper owner"))?;
+                owned.child.try_wait().map(|status| status.is_some())
+            },
+        )
     }
 
     /// Promote the parent's original shared guard only after the helper's
@@ -133,9 +153,9 @@ impl WindowsParentHelper {
         result
     }
 
-    /// Commit exact cancellation before observing exit. Keep work frozen on
+    /// Publish exact cancellation before observing exit. Keep work frozen on
     /// false OR error. Only true means the actual helper exited, cancellation
-    /// was revalidated afterwards, and parent project leases were released.
+    /// journal was committed/revalidated afterwards, and leases were released.
     pub fn cancel_and_poll_exit(
         &mut self,
         parent_access: &mut WindowsInstallAccess,
@@ -196,6 +216,20 @@ fn readiness_result(
     }
 }
 
+fn recent_ready_gate(
+    cancelling: bool,
+    proof_age: Option<Duration>,
+    observe_owned_exit: impl FnOnce() -> io::Result<bool>,
+) -> io::Result<()> {
+    if cancelling || proof_age.is_none_or(|age| age > Duration::from_millis(500)) {
+        return Err(invalid("helper readiness proof is stale"));
+    }
+    if observe_owned_exit()? {
+        return Err(invalid("owned helper exited before GUI close"));
+    }
+    Ok(())
+}
+
 fn cancelled_exit(
     mut commit_or_verify: impl FnMut() -> io::Result<()>,
     observe_owned_exit: impl FnOnce() -> io::Result<bool>,
@@ -204,7 +238,9 @@ fn cancelled_exit(
     if !observe_owned_exit()? {
         return Ok(false);
     }
-    // No helper can mutate the journal after its actual owned process exited.
+    // Revalidate the immutable signal after actual exit. The caller must still
+    // finalize/verify journal cancellation via restore_parent_shared_access;
+    // this signal/exit check alone never authorizes unfreezing work.
     commit_or_verify()?;
     Ok(true)
 }
@@ -221,6 +257,36 @@ fn invalid(message: &str) -> io::Error {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn final_close_requires_fresh_proof_and_live_owned_child() {
+        for age in [Duration::ZERO, Duration::from_millis(500)] {
+            assert!(recent_ready_gate(false, Some(age), || Ok(false)).is_ok());
+            assert!(recent_ready_gate(false, Some(age), || Ok(true)).is_err());
+            assert!(
+                recent_ready_gate(false, Some(age), || Err(io::ErrorKind::Other.into())).is_err()
+            );
+        }
+        for age in [None, Some(Duration::from_millis(501))] {
+            assert!(recent_ready_gate(false, age, || panic!("stale proof")).is_err());
+        }
+        assert!(recent_ready_gate(true, Some(Duration::ZERO), || panic!("cancelled")).is_err());
+    }
+
+    #[test]
+    fn final_close_observes_real_exited_child() {
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "exit", "0"])
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(
+            recent_ready_gate(false, Some(Duration::ZERO), || {
+                child.try_wait().map(|status| status.is_some())
+            })
+            .is_err()
+        );
+    }
 
     #[test]
     fn readiness_is_bounded_and_only_exact_success_grants_ready() {

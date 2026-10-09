@@ -19,6 +19,45 @@ use super::{
 
 const HELPER_NAME: &str = "instplot-update-helper.exe";
 
+/// Separate parent-owned signal: the helper is the sole journal writer while
+/// alive. Never acquire its journal lock to request cancellation.
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParentCancellation {
+    schema: u32,
+    transaction_id: String,
+    nonce: String,
+    identity: UpdateIdentity,
+    process_id: u32,
+    process_created: u64,
+}
+
+impl ParentCancellation {
+    fn for_request(request: &HelperRequest) -> Self {
+        Self {
+            schema: 1,
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            identity: request.identity.clone(),
+            process_id: request.old_process_id,
+            process_created: request.old_process_created,
+        }
+    }
+}
+
+fn cancellation_requested(directory: &Path, request: &HelperRequest) -> io::Result<bool> {
+    let bytes = match read_private(&directory.join("parent-cancel.json"), 4096) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let signal: ParentCancellation = serde_json::from_slice(&bytes).map_err(invalid)?;
+    if signal != ParentCancellation::for_request(request) {
+        return Err(invalid("foreign parent cancellation signal"));
+    }
+    Ok(true)
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AssetBinding {
@@ -274,24 +313,32 @@ impl PreparedWindowsHelper {
         store.write(&state)
     }
 
-    /// Commit cancellation while the parent is still frozen/open. Afterwards
+    /// Persist a cancellation request while the parent is still frozen/open.
+    /// The live helper owns the journal lock and commits the terminal state.
+    /// Afterwards
     /// keep the owned helper Child and this object until the helper has exited;
     /// only then drop project leases and unfreeze editing/saving. Ok alone is
     /// not proof those leases were released. Matching durable cancellation is
     /// verified read-only on a lost-ack retry.
     #[cfg(feature = "in-place-update-preview")]
     pub fn cancel_before_exit(&self) -> io::Result<()> {
-        let store = TransactionStore::lock(&self.directory)?;
-        if cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+        self.verify_running_parent()?;
+        let state = crate::update_transaction::read_validated_snapshot(&self.directory)?;
+        require_transaction(&self.request, &state, state.stage())?;
+        if !matches!(
+            state.stage(),
+            UpdateStage::WaitingForExit | UpdateStage::FailedBeforeApply
+        ) {
+            return Err(invalid("cannot cancel after installation began"));
+        }
+        if cancellation_requested(&self.directory, &self.request)? {
             return Ok(());
         }
-        abort_waiting(
-            &store,
-            &self.request,
-            "user cancelled before application exit",
-            || self.verify_running_parent(),
-        )?;
-        Ok(())
+        super::cache::write_private_atomic_new(
+            &self.directory.join("parent-cancel.json"),
+            &serde_json::to_vec(&ParentCancellation::for_request(&self.request))
+                .map_err(invalid)?,
+        )
     }
 
     /// Only the start-failure owner (which never obtained a Child) calls this.
@@ -334,7 +381,22 @@ impl PreparedWindowsHelper {
                 "parent installation lock belongs to another target",
             ));
         }
-        self.cancel_before_exit()
+        self.verify_running_parent()?;
+        if !cancellation_requested(&self.directory, &self.request)? {
+            return Err(invalid("missing durable parent cancellation"));
+        }
+        // Called only after the owned Child has exited. The writer lock is now
+        // available; also cover a helper that exited before consuming signal.
+        let store = TransactionStore::lock(&self.directory)?;
+        if !cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+            abort_waiting(
+                &store,
+                &self.request,
+                "parent cancelled before apply",
+                || self.verify_running_parent(),
+            )?;
+        }
+        Ok(())
     }
 
     #[cfg(feature = "in-place-update-preview")]
@@ -557,6 +619,24 @@ impl WindowsHelperSession {
     }
 
     pub(super) fn cancelled_before_apply(&self) -> io::Result<bool> {
+        if cancellation_requested(&self.directory, &self.request)?
+            && !cancelled_waiting(&self.store, &self.request, || {
+                require_original_files(&self.installation, &self.request)
+            })?
+        {
+            abort_waiting(
+                &self.store,
+                &self.request,
+                "parent cancelled before apply",
+                || {
+                    if self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+                        return Err(invalid("cancelling parent already exited"));
+                    }
+                    super::native::revalidate_installation(&self.installation)?;
+                    require_original_files(&self.installation, &self.request)
+                },
+            )?;
+        }
         cancelled_waiting(&self.store, &self.request, || {
             super::native::revalidate_installation(&self.installation)?;
             self.installers
@@ -585,6 +665,9 @@ impl WindowsHelperSession {
         access: &super::WindowsInstallAccess,
     ) -> io::Result<UpdateTransaction> {
         access.require_exclusive(self.installation.directory())?;
+        if cancellation_requested(&self.directory, &self.request)? {
+            return Err(invalid("parent cancellation forbids installation"));
+        }
         begin_applying(&self.store, &self.request, || {
             if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
                 return Err(invalid("old application has not exited normally"));
@@ -1178,6 +1261,73 @@ fn copy_helper(source: &Path, destination: &Path) -> io::Result<(File, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_signal_is_atomic_bound_and_does_not_need_journal_lock() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-cancel-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let request = request();
+        let store = TransactionStore::lock(&root).unwrap();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(!cancellation_requested(&root, &request).unwrap());
+        let signal = ParentCancellation::for_request(&request);
+        let bytes = serde_json::to_vec(&signal).unwrap();
+        let path = root.join("parent-cancel.json");
+        super::super::cache::write_private_atomic_new(&path, &bytes).unwrap();
+        assert!(
+            TransactionStore::lock(&root).is_err(),
+            "helper still owns journal"
+        );
+        assert!(cancellation_requested(&root, &request).unwrap());
+        assert!(super::super::cache::write_private_atomic_new(&path, b"wrong").is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        for invalid_bytes in [
+            b"{".to_vec(),
+            vec![b' '; 4097],
+            {
+                let mut value = serde_json::to_value(&signal).unwrap();
+                value["schema"] = serde_json::json!(2);
+                serde_json::to_vec(&value).unwrap()
+            },
+            {
+                let mut value = serde_json::to_value(&signal).unwrap();
+                value["extra"] = serde_json::json!(true);
+                serde_json::to_vec(&value).unwrap()
+            },
+        ] {
+            super::super::write_private_atomic(&path, &invalid_bytes).unwrap();
+            assert!(cancellation_requested(&root, &request).is_err());
+        }
+        super::super::write_private_atomic(&path, &bytes).unwrap();
+        for change in 0..5 {
+            let mut foreign = request.clone();
+            match change {
+                0 => foreign.nonce = "9".repeat(64),
+                1 => foreign.transaction_id = "9".repeat(32),
+                2 => foreign.old_process_id += 1,
+                3 => foreign.old_process_created += 1,
+                _ => foreign.identity.installed_path = root.join("other"),
+            }
+            assert!(cancellation_requested(&root, &foreign).is_err());
+        }
+        // Only the journal owner acknowledges; the request alone is not an
+        // installation-cancellation terminal state.
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        abort_waiting(&store, &request, "test cancellation", || Ok(())).unwrap();
+        assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(feature = "in-place-update-preview")]
     #[test]

@@ -208,6 +208,15 @@ pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
 /// Durable bounded metadata replacement in one private directory. On failure
 /// retain this transaction's temporary evidence, never overwrite foreign ACLs.
 pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_private_atomic_impl(path, bytes, true)
+}
+
+/// Publish a complete immutable signal; an existing target is never replaced.
+pub(super) fn write_private_atomic_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_private_atomic_impl(path, bytes, false)
+}
+
+fn write_private_atomic_impl(path: &Path, bytes: &[u8], replace: bool) -> io::Result<()> {
     if bytes.len() > 256 * 1024 {
         return Err(error("private update metadata is too large"));
     }
@@ -235,7 +244,11 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         MoveFileExW(
             PCWSTR(from.as_ptr()),
             PCWSTR(to.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            if replace {
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+            } else {
+                MOVEFILE_WRITE_THROUGH
+            },
         )
     }
     .map_err(error)?;
