@@ -72,6 +72,23 @@ if ($InputDesktop -eq [IntPtr]::Zero -or -not [Environment]::UserInteractive) {
 $TaskRoot = Join-Path $env:RUNNER_TEMP ('studio-desktop-' + [guid]::NewGuid())
 New-Item -ItemType Directory $TaskRoot | Out-Null
 $InstallRoot = Join-Path $TaskRoot 'installation'
+# The hosted VM only supplies legacy OpenGL. Deploy a pinned software renderer
+# to THIS disposable installation, never System32, the package or a user app.
+$MesaArchive = Join-Path $TaskRoot 'mesa.7z'
+$MesaRoot = Join-Path $TaskRoot 'mesa'
+$MesaUrl = 'https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z'
+$MesaSha = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+Invoke-WebRequest $MesaUrl -OutFile $MesaArchive
+if ((Get-Item -LiteralPath $MesaArchive).Length -ne 70257286 -or
+    (Get-FileHash -LiteralPath $MesaArchive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $MesaSha) {
+    throw 'Pinned software OpenGL distribution size/hash mismatch.'
+}
+& 7z.exe x $MesaArchive "-o$MesaRoot" 'x64/opengl32.dll' 'x64/libgallium_wgl.dll' -y
+if ($LASTEXITCODE -ne 0) { throw 'Could not extract pinned x64 OpenGL runtime.' }
+$env:GALLIUM_DRIVER = 'llvmpipe'
+@{ scope='temporary-VM-per-application-software-OpenGL-not-production';
+   url=$MesaUrl; sha256=$MesaSha; driver=$env:GALLIUM_DRIVER
+} | ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $Evidence 'graphics-environment.json')
 $PublicRoot = 'https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/37938590122-1'
 $Packages = @(
     @{ version='0.1.2-rc.2'; sha='8e9a7605ebdc04690db85298e9eb23d597cd1f3379cccf435320819a45d13e0c'; size=13410099 },
@@ -96,8 +113,23 @@ foreach ($Package in $Packages) {
     if ($Registered.DisplayVersion -cne $Version -or $Registered.InstallLocation.TrimEnd('\') -cne $InstallRoot) {
         throw 'Wrong installed version or directory.'
     }
+    $Binary = Join-Path $InstallRoot 'instplot-studio.exe'
+    $BinaryHash = (Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash
+    foreach ($Dll in @('opengl32.dll', 'libgallium_wgl.dll')) {
+        $SourceDll = Join-Path $MesaRoot "x64/$Dll"
+        $TargetDll = Join-Path $InstallRoot $Dll
+        if (-not (Test-Path -LiteralPath $SourceDll)) { throw 'Pinned renderer dependency missing.' }
+        if (Test-Path -LiteralPath $TargetDll) {
+            if ((Get-FileHash -LiteralPath $SourceDll).Hash -cne (Get-FileHash -LiteralPath $TargetDll).Hash) {
+                throw 'Refusing to overwrite a foreign renderer dependency.'
+            }
+        } else { Copy-Item -LiteralPath $SourceDll -Destination $TargetDll }
+    }
+    if ((Get-FileHash -LiteralPath $Binary -Algorithm SHA256).Hash -cne $BinaryHash) {
+        throw 'Installing the test renderer changed the product executable.'
+    }
     $Clock = [Diagnostics.Stopwatch]::StartNew()
-    $Gui = Start-Process -FilePath (Join-Path $InstallRoot 'instplot-studio.exe') -PassThru `
+    $Gui = Start-Process -FilePath $Binary -PassThru `
         -RedirectStandardError (Join-Path $Evidence "$Version-startup.log")
     $Window = $null
     while ($Clock.Elapsed.TotalSeconds -lt 30) {

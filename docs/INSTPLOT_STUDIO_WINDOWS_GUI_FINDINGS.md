@@ -25,3 +25,7 @@
 首次仅确认普通GUI窗口和截图能力，**不是完整更新验收**。随后增加真实GUI自动更新端到端：旧版启动发现更新/弹窗，原路径安装，旧PID正常退出，新PID窗口可见且持续存活，项目/快捷方式正常，事务完成；保存截图和每阶段时间。发现桌面不可用时报告环境限制，不标为通过或让用户继续重复测试。
 
 所有新产品源码修复须新source/new build/exact artifact；源码包绑定不能借用旧包。保留现有必需CI及保护门，PR9不合并。新独立QA发布前必须先通过本批原生GUI验收；不能自动根据旧QA确认激活新QA。
+
+首次虚拟机 run37948572097（diagnostic source8d6d7df）已实际安装baseline并尝试启动：session2/user_interactive=true/readable_input_desktop=true；GUI exit2，日志`egui_glow requires opengl 2.0+`。因此不是桌面不存在，而是该runner图形能力不足。此run失败，不计普通GUI或更新通过。后续先在临时runner配置可核验来源的软件OpenGL或其他适配图形环境（仅测试环境，不改变用户包/签名/生产配置），再运行；不能通过删去真实窗口断言变绿。此图形环境问题与用户FIRST_CANVAS/窗口不可见问题不同。
+
+测试环境补充：使用维护者pal1000/mesa-dist-win 26.2.4 MSVC x64发行包，固定70257286 bytes / SHA256 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695（GitHub发行资产digest）。仅临时测试安装目录增加opengl32.dll/libgallium_wgl.dll并设进程级GALLIUM_DRIVER=llvmpipe；不替换System32、不改安装包/产品EXE、不分发给用户。证据须标明软件渲染测试环境，不声称验证了用户GPU。
