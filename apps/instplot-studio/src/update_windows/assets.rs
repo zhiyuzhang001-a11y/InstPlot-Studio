@@ -83,7 +83,7 @@ impl VerifiedWindowsInstallerManifest {
             .ok_or_else(|| invalid("preferred Windows installer is missing"))?
             .clone();
         if package.id != "inno-setup"
-            || package.package_type != "inno-setup"
+            || package.package_type != "exe-installer"
             || package.file_name
                 != format!("InstPlot-Studio-{expected_version}-windows-x86_64-setup.exe")
             || package.size_bytes > MAX_INSTALLER_BYTES
@@ -525,7 +525,7 @@ mod tests {
                 "notes_url":format!("https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v{VERSION}"),
                 "signature_url":format!("{ROOT}/releases/{VERSION}/metadata/2/manifest.json.sig"),
                 "platforms":{"windows-x86_64":{"preferred":"inno-setup","packages":[{
-                    "id":"inno-setup","package_type":"inno-setup","file_name":name,
+                    "id":"inno-setup","package_type":"exe-installer","file_name":name,
                     "minimum_system":"Windows 10","size_bytes":bytes.len(),
                     "sha256":format!("{:x}",Sha256::digest(bytes)),"url":format!("{ROOT}/releases/{VERSION}/{name}")
                 }]}}
@@ -573,6 +573,44 @@ mod tests {
             "executable_sha256":format!("{:x}", Sha256::digest(b"fixture executable")),
             "license_sha256":format!("{:x}", Sha256::digest(b"fixture license")),
         })
+    }
+
+    #[test]
+    fn signed_release_installer_metadata_uses_distinct_id_and_package_type() {
+        let mut fixture = Fixture::new();
+        fixture.raw["platforms"]["windows-x86_64"]["windows_in_place"] = contract_fixture();
+        fixture.save();
+        let package = &fixture.raw["platforms"]["windows-x86_64"]["packages"][0];
+        assert_eq!(package["id"], "inno-setup");
+        assert_eq!(package["package_type"], "exe-installer");
+        fs::remove_file(
+            fixture
+                .directory
+                .join(package["file_name"].as_str().unwrap()),
+        )
+        .unwrap();
+        // Current-version recovery metadata must be accepted BEFORE its package
+        // is downloaded. This is the same signed descriptor parser used by GUI
+        // recovery retention, not just the general update-manifest validator.
+        let raw = fs::read(fixture.directory.join("manifest.json")).unwrap();
+        let signature = fs::read(fixture.directory.join("manifest.json.sig")).unwrap();
+        let metadata = VerifiedWindowsInstallerManifest::verify_at(
+            &raw,
+            &signature,
+            VERSION,
+            &[TrustedUpdateKey {
+                id: "fixture",
+                bytes: fixture.signing.verifying_key().to_bytes(),
+            }],
+            &AllowedUpdateRoot::parse(ROOT).unwrap(),
+            OffsetDateTime::parse("2026-10-01T00:00:00Z", &Rfc3339).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(metadata.package().package_type, "exe-installer");
+        assert!(
+            fixture.verify().is_err(),
+            "metadata alone is not an installer"
+        );
     }
 
     #[test]
@@ -679,7 +717,7 @@ mod tests {
         assert_eq!(proof.signature(), signature);
         fs::remove_file(fixture.directory.join(&proof.package().file_name)).unwrap();
         assert!(fixture.verify().is_err());
-        assert_eq!(proof.package().package_type, "inno-setup");
+        assert_eq!(proof.package().package_type, "exe-installer");
         let mut bad_signature = signature.clone();
         bad_signature[0] ^= 1;
         assert!(
@@ -746,6 +784,10 @@ mod tests {
                 "../setup.exe",
             ),
             ("/platforms/windows-x86_64/packages/0/package_type", "zip"),
+            (
+                "/platforms/windows-x86_64/packages/0/package_type",
+                "inno-setup",
+            ),
         ];
         for (pointer, value) in cases {
             let mut fixture = Fixture::new();

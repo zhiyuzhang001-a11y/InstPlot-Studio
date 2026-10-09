@@ -56,7 +56,7 @@ fn signed_installer(source: &Path, directory: &Path, version: &str) -> VerifiedW
         "notes_url":format!("https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v{version}"),
         "signature_url":format!("{ROOT}/releases/{version}/metadata/2/manifest.json.sig"),
         "platforms":{"windows-x86_64":{"preferred":"inno-setup","packages":[{
-            "id":"inno-setup","package_type":"inno-setup","file_name":name,
+            "id":"inno-setup","package_type":"exe-installer","file_name":name,
             "minimum_system":"Windows 10","size_bytes":package_size,
             "sha256":hash(&destination),"url":format!("{ROOT}/releases/{version}/{name}")
         }]}}
