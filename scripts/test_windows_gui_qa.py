@@ -9,7 +9,9 @@ import subprocess
 import tempfile
 import unittest
 import urllib.error
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 from scripts import windows_gui_qa as QA
@@ -175,7 +177,8 @@ class WindowsGuiQaTests(unittest.TestCase):
             for command in commands:
                 key = command[command.index("--key") + 1]
                 self.assertTrue(key.startswith("instplot-studio/windows-gui-qa/123-1/"))
-                self.assertEqual(command[command.index("--forbid-overwrite") + 1], "true")
+                self.assertIn("--forbid-overwrite=true", command)
+                self.assertNotIn("--forbid-overwrite", command)
             self.assertEqual(commands[-1][commands[-1].index("--key") + 1], "instplot-studio/windows-gui-qa/123-1/channels/prerelease/latest.json")
             self.assertEqual(verify.call_count, 3)
 
@@ -211,7 +214,8 @@ class WindowsGuiQaTests(unittest.TestCase):
             command = execute.call_args.args[0]
             self.assertEqual(execute.call_count, 1)
             self.assertEqual(command[command.index("--key") + 1], "instplot-studio/windows-gui-qa/123-1/channels/prerelease/latest.json")
-            self.assertEqual(command[command.index("--forbid-overwrite") + 1], "false")
+            self.assertIn("--forbid-overwrite=false", command)
+            self.assertNotIn("--forbid-overwrite", command)
 
         def observed_new(url, destination, **kwargs):
             shutil.copyfile(self.output / "public/releases/0.1.2-rc.3/metadata/2/manifest.json", destination)
@@ -222,6 +226,57 @@ class WindowsGuiQaTests(unittest.TestCase):
             with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}), patch.object(QA, "validate", return_value=index), patch.object(QA, "verify_public"), patch.object(QA.VERIFY, "download", side_effect=observed_new), patch.object(QA.subprocess, "run") as execute:
                 QA.publish(extracted, self.identity, "ossutil", True)
                 execute.assert_not_called()
+
+    @unittest.skipUnless(os.environ.get("QA_OSSUTIL"), "requires pinned native ossutil")
+    def test_real_ossutil_transmits_boolean_overwrite_headers(self):
+        """Exercise generated argv against a loopback server, never a real bucket."""
+        self.stage()
+        index = json.loads((self.output / "public/qa-index.json").read_bytes())
+        requests = []
+
+        class Receiver(BaseHTTPRequestHandler):
+            def do_PUT(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                requests.append((self.path, self.headers.get("x-oss-forbid-overwrite")))
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Receiver)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        native_run = subprocess.run
+
+        def execute(command, **kwargs):
+            command = list(command)
+            command[command.index("--endpoint") + 1] = f"http://127.0.0.1:{server.server_port}"
+            command += ["--addressing-style", "path", "--retry-times", "0"]
+            return native_run(command, check=True, timeout=15, capture_output=True,
+                              env={"PATH": os.environ.get("PATH", ""), "HOME": str(self.root),
+                                   "OSS_ACCESS_KEY_ID": "loopback-only",
+                                   "OSS_ACCESS_KEY_SECRET": "not-a-real-secret"})
+
+        missing = urllib.error.HTTPError("https://example.test", 404, "missing", {}, None)
+
+        def observed_old(url, destination, **kwargs):
+            shutil.copyfile(self.output / "public/channels/prerelease/latest.json", destination)
+
+        try:
+            with patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}), patch.object(QA, "validate", return_value=index), patch.object(QA, "verify_public"), patch.object(QA.subprocess, "run", side_effect=execute):
+                with patch.object(QA.VERIFY, "download", side_effect=missing):
+                    QA.publish(self.output, self.identity, os.environ["QA_OSSUTIL"], False)
+                with patch.object(QA.VERIFY, "download", side_effect=observed_old):
+                    QA.publish(self.output, self.identity, os.environ["QA_OSSUTIL"], True)
+            self.assertEqual(len(requests), 9)
+            self.assertTrue(all(value == "true" for _, value in requests[:-1]))
+            self.assertEqual(requests[-1], ("/instplot-release/instplot-studio/windows-gui-qa/123-1/channels/prerelease/latest.json", "false"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

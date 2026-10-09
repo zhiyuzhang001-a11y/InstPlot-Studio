@@ -208,7 +208,9 @@ def publish(output: Path, identity: str, ossutil: str, activate: bool) -> dict:
             raise ValueError("only the isolated QA latest pointer may change")
         subprocess.run([
             ossutil, "api", "put-object", "--bucket", BUCKET, "--key", f"{prefix}/{relative}",
-            "--body", f"file://{path.resolve()}", "--forbid-overwrite", "false" if overwrite else "true",
+            # Boolean flags consume no following token: a separate "false"
+            # enables the flag instead of disabling it in ossutil 2.x.
+            "--body", f"file://{path.resolve()}", f"--forbid-overwrite={'false' if overwrite else 'true'}",
             "--content-type", "application/json" if relative.endswith(".json") else "application/octet-stream",
             "--cache-control", "no-store" if relative == "channels/prerelease/latest.json" else "public, max-age=31536000, immutable",
             "--endpoint", "https://oss-cn-beijing.aliyuncs.com", "--region", "cn-beijing",
