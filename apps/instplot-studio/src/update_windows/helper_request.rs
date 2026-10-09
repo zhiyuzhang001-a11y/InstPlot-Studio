@@ -269,6 +269,18 @@ impl PreparedWindowsHelper {
     pub fn directory(&self) -> &Path {
         &self.directory
     }
+    /// Best-effort diagnostic only; no readiness or installation authorization.
+    pub fn record_parent_preparation(&self, creation_ms: u128, resume_ms: u128) {
+        if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "scope": "diagnostic-only-not-readiness-proof",
+            "process_id": std::process::id(), "creation_ms": creation_ms, "resume_ms": resume_ms,
+        })) {
+            let _ = super::write_private_atomic(
+                &self.directory.join("parent-preparation.json"),
+                &bytes,
+            );
+        }
+    }
     pub fn helper_executable(&self) -> PathBuf {
         self.directory.join(HELPER_NAME)
     }
@@ -658,6 +670,11 @@ impl WindowsHelperSession {
 
     pub fn transaction(&self) -> &UpdateTransaction {
         &self.transaction
+    }
+
+    /// Non-authoritative phase timing, using the same preflight origin.
+    pub(super) fn record_runtime_phase(&self, phase: &'static str) {
+        self.preflight_trace.phase(&self.directory, phase);
     }
     pub fn store(&self) -> &TransactionStore {
         &self.store

@@ -13,6 +13,10 @@ use std::path::{Component, Path, PathBuf};
 
 use semver::Version;
 
+#[cfg(windows)]
+#[path = "update_windows/window.rs"]
+mod window;
+
 #[path = "update_windows/assets.rs"]
 mod assets;
 #[cfg(windows)]

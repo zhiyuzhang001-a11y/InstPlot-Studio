@@ -103,6 +103,8 @@ impl<'a> WindowsUpdateController<'a> {
         }
         if let Err(error) = self.step() {
             self.phase = WindowsControllerPhase::InspectionRequired;
+            self.helper
+                .record_runtime_phase("runtime-inspection-required");
             return Err(error);
         }
         Ok(self.phase)
@@ -111,6 +113,23 @@ impl<'a> WindowsUpdateController<'a> {
     fn enter(&mut self, phase: WindowsControllerPhase) {
         self.phase = phase;
         self.entered = Instant::now();
+        self.helper.record_runtime_phase(match phase {
+            WindowsControllerPhase::WaitingForExit => "runtime-waiting-parent-exit",
+            WindowsControllerPhase::Applying => "runtime-candidate-installer-started",
+            WindowsControllerPhase::AwaitingCandidate => {
+                "runtime-candidate-launched-awaiting-visible-health"
+            }
+            WindowsControllerPhase::StoppingCandidate => "runtime-stopping-candidate",
+            WindowsControllerPhase::Restoring => "runtime-recovery-installer-started",
+            WindowsControllerPhase::AwaitingRecovery => {
+                "runtime-recovery-launched-awaiting-visible-health"
+            }
+            WindowsControllerPhase::StoppingRecovery => "runtime-stopping-recovery",
+            WindowsControllerPhase::Completed => "runtime-completed",
+            WindowsControllerPhase::RolledBack => "runtime-rolled-back",
+            WindowsControllerPhase::FailedBeforeApply => "runtime-failed-before-apply",
+            WindowsControllerPhase::InspectionRequired => "runtime-inspection-required",
+        });
     }
 
     fn step(&mut self) -> io::Result<()> {

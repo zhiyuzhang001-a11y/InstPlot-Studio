@@ -10,6 +10,7 @@ use std::time::Duration;
 pub fn run_helper_after_preflight(
     helper: &WindowsHelperSession,
 ) -> io::Result<WindowsControllerPhase> {
+    helper.record_runtime_phase("runtime-waiting-parent-exit");
     let mut controller = WindowsUpdateController::wait_after_preflight(helper)?;
     drive(&mut controller, || {
         std::thread::sleep(Duration::from_millis(250));

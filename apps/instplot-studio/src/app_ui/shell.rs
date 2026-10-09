@@ -43,7 +43,12 @@ impl eframe::App for StudioApp {
             // editor/configuration changes until durable helper commitment.
             ui.disable();
             self.show_canvas(ui, &context);
-            match self.update_health.as_mut().unwrap().first_canvas_ready() {
+            let result = crate::app_update::windows_health_frame(
+                self.update_health.as_mut().unwrap(),
+                _frame,
+                &context,
+            );
+            match result {
                 Ok(WindowsHealthFrame::Committed) => self.update_health = None,
                 Ok(WindowsHealthFrame::Pending) => {
                     context.request_repaint_after(std::time::Duration::from_millis(100));

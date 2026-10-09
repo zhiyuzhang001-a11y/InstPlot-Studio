@@ -36,7 +36,7 @@ on:
         description: Isolated Windows GUI QA only (never a production release)
         type: choice
         default: "off"
-        options: ["off", build, publish, activate, desktop-smoke]
+        options: ["off", build, publish, activate, desktop-smoke, desktop-e2e]
       windows_gui_qa_identity:
         description: Existing QA artifact identity RUN_ID-ATTEMPT (publish/activate only)
         type: string
@@ -77,7 +77,7 @@ jobs:
         run: python3 scripts/check_repository_hygiene.py
 
       - name: Test release metadata tools
-        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py scripts/test_install_studio_macos.py scripts/test_windows_gui_qa.py
+        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py scripts/test_install_studio_macos.py scripts/test_windows_gui_qa.py scripts/test_windows_gui_e2e_fixture.py
 
       - name: Run all tests and examples
         run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast
@@ -260,6 +260,39 @@ jobs:
         with:
           name: windows-desktop-smoke-${{ github.run_id }}
           path: target/windows-desktop-smoke/
+          if-no-files-found: error
+
+  windows-gui-e2e:
+    # Strict local TLS/fixture-snapshot GUI acceptance, never a public release.
+    if: ${{ inputs.windows_gui_qa_action == 'desktop-e2e' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Parse desktop fixture PowerShell before costly builds
+        shell: pwsh
+        run: |
+          foreach ($file in @('scripts/test_windows_gui_e2e.ps1', 'scripts/test_windows_installer_recovery.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { $errors | Format-List; throw 'PowerShell fixture syntax errors' }
+          }
+      - name: Validate fixture guards and native root-window behavior
+        shell: pwsh
+        run: |
+          python3 -m unittest scripts.test_windows_gui_e2e_fixture
+          if ($LASTEXITCODE -ne 0) { throw 'GUI fixture guard tests failed' }
+          cargo test --locked --package instplot-studio --lib update_windows::window::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native root-window tests failed' }
+      - name: Run actual desktop input, update and visible restart on isolated TLS snapshot
+        shell: pwsh
+        run: ./scripts/test_windows_gui_e2e.ps1
+      - name: Preserve GUI screenshots, exact fixture provenance and phase timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-gui-e2e-${{ github.run_id }}
+          path: target/windows-gui-e2e/
           if-no-files-found: error
 
   windows-gui-qa-build:

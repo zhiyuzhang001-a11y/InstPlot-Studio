@@ -1,6 +1,8 @@
 param(
     [string]$FixturePublicRoot = 'https://windows-update.example.test/instplot-studio',
-    [switch]$KitOnly
+    [switch]$KitOnly,
+    [switch]$GuiFixture,
+    [string]$FixtureCaPem = ''
 )
 # Disposable CI-only installer recovery prototype. Does NOT implement the updater.
 $ErrorActionPreference = 'Stop'
@@ -8,7 +10,14 @@ Set-StrictMode -Version Latest
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') {
     throw 'Run only on a disposable Windows GitHub Actions runner, never on a user installation.'
 }
-if ($FixturePublicRoot -ne 'https://windows-update.example.test/instplot-studio') {
+if ($GuiFixture) {
+    if (-not $KitOnly -or $FixturePublicRoot -cne 'https://localhost:38443/instplot-studio' -or
+        -not (Test-Path -LiteralPath $FixtureCaPem)) {
+        throw 'Local GUI fixture requires kit-only, exact loopback TLS root and its temporary CA.'
+    }
+} elseif ($FixtureCaPem -ne '') {
+    throw 'A custom CA is forbidden outside the isolated GUI fixture snapshot.'
+} elseif ($FixturePublicRoot -ne 'https://windows-update.example.test/instplot-studio') {
     $ExpectedRoot = "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
     if (-not $KitOnly -or $env:GITHUB_RUN_ID -notmatch '^[0-9]+$' -or
         $env:GITHUB_RUN_ATTEMPT -notmatch '^[0-9]+$' -or $FixturePublicRoot -cne $ExpectedRoot) {
@@ -187,6 +196,13 @@ try {
     $Archive = Join-Path $TaskRoot 'snapshot.tar'
     Checked 'git' @('archive', '--format=tar', "--output=$Archive", 'HEAD')
     Checked 'tar' @('-xf', $Archive, '-C', $Snapshot)
+    if ($GuiFixture) {
+        New-Item -ItemType File (Join-Path $Snapshot '.studio-disposable-gui-fixture') | Out-Null
+        $SnapshotPatchEvidence = Join-Path $TaskRoot 'gui-snapshot-patch.json'
+        Checked 'python3' @('-m', 'scripts.windows_gui_e2e_fixture', 'patch-snapshot',
+            '--snapshot', $Snapshot, '--ca', $FixtureCaPem, '--evidence', $SnapshotPatchEvidence,
+            '--source-sha', ((& git rev-parse HEAD).Trim()))
+    }
     # Fixture trust is isolated to the snapshot. Never read production keys,
     # change the checkout trust root, or export this private key in artifacts.
     $FixtureKey = Join-Path $TaskRoot 'preview-fixture-key.pem'
@@ -206,12 +222,16 @@ try {
         keys = $FixtureKeys
     } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM (Join-Path $Snapshot 'packaging/update/trust.json')
     $Manifest = Join-Path $Snapshot 'Cargo.toml'
-    Checked 'cargo' @('build', '--locked', '--manifest-path', $Manifest,
-        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview')
+    # Public GUI QA must exercise release-only startup behavior and optimized
+    # hashing. The separate native component fixture may keep its debug build.
+    $BuildProfile = if ($KitOnly) { 'release' } else { 'debug' }
+    $ProfileArguments = if ($KitOnly) { @('--release') } else { @() }
+    Checked 'cargo' (@('build', '--locked', '--manifest-path', $Manifest,
+        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview') + $ProfileArguments)
     $OldSource = Join-Path $TaskRoot 'old-source'
     $NewSource = Join-Path $TaskRoot 'new-source'
     New-Item -ItemType Directory $OldSource, $NewSource | Out-Null
-    Copy-Item 'target/debug/instplot-studio.exe' $OldSource
+    Copy-Item "target/$BuildProfile/instplot-studio.exe" $OldSource
     foreach ($Source in @($OldSource, $NewSource)) {
         Copy-Item 'LICENSE' $Source
         Copy-Item 'apps/instplot-studio/assets/InstPlotStudio.ico' $Source
@@ -220,9 +240,9 @@ try {
     $Before = 'version = "' + $CurrentVersion + '"'
     if (([regex]::Matches($Content, [regex]::Escape($Before))).Count -ne 1) { throw 'Ambiguous workspace version.' }
     [IO.File]::WriteAllText($Manifest, $Content.Replace($Before, 'version = "' + $NextVersion + '"'))
-    Checked 'cargo' @('build', '--offline', '--manifest-path', $Manifest,
-        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview')
-    Copy-Item 'target/debug/instplot-studio.exe' $NewSource
+    Checked 'cargo' (@('build', '--locked', '--offline', '--manifest-path', $Manifest,
+        '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview') + $ProfileArguments)
+    Copy-Item "target/$BuildProfile/instplot-studio.exe" $NewSource
     $OldBinary = Join-Path $OldSource 'instplot-studio.exe'
     $NewBinary = Join-Path $NewSource 'instplot-studio.exe'
     ProductIdentity $OldBinary $CurrentVersion
@@ -250,6 +270,7 @@ try {
     # These are disposable test versions, not published/accepted releases.
     $KitRoot = Join-Path $EvidenceRoot 'preview-kit'
     New-Item -ItemType Directory $KitRoot | Out-Null
+    if ($GuiFixture) { Copy-Item $SnapshotPatchEvidence $KitRoot }
     [ordered]@{
         scope = 'signed-fixture-metadata-not-GUI-updater'
         public_root = $FixturePublicRoot
@@ -273,6 +294,10 @@ try {
             $Probe.scope -ne 'preview-components-not-accepted-updater' -or
             $Probe.public_update_protocol -ne 0 -or $Probe.gui_acceptance_complete -ne $false -or
             $Probe.public_apply_entry_enabled -ne $false) { throw 'Invalid preview kit identity/capability scope.' }
+        if ($Probe.build_profile -cne $BuildProfile -or
+            $Probe.startup_update_check_enabled -ne [bool]$KitOnly) {
+            throw 'Actual binary build profile/startup update capability differs from the fixture.'
+        }
         $Contract = [ordered]@{ schema = 1 }
         foreach ($Name in @('helper_protocol', 'transaction_schema', 'candidate_health_protocol', 'recovery_health_protocol')) {
             if ($Probe.components.$Name -ne 1) { throw "Invalid preview kit protocol: $Name" }
@@ -286,6 +311,8 @@ try {
             version = $Item.Version
             installer_sha256 = (Get-FileHash -Algorithm SHA256 $Item.Installer).Hash.ToLowerInvariant()
             windows_gui_subsystem = 2
+            build_profile = $Probe.build_profile
+            startup_update_check_enabled = $Probe.startup_update_check_enabled
             contract = $Contract
         } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM (Join-Path $KitRoot ($Item.Version + '-windows-in-place.json'))
     }

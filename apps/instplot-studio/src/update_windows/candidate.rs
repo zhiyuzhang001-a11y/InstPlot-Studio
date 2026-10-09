@@ -785,6 +785,7 @@ pub struct WindowsHealthStartup {
     process: (u32, u64),
     waiting_since: Instant,
     receipt_written: bool,
+    window_activation_requested: bool,
     _binary_lease: File,
     _resume_lease: Option<File>,
 }
@@ -843,6 +844,7 @@ impl WindowsHealthStartup {
             process: (std::process::id(), super::current_process_created()?),
             waiting_since: Instant::now(),
             receipt_written: false,
+            window_activation_requested: false,
             _binary_lease: binary_lease,
             _resume_lease: resume_lease,
         };
@@ -881,7 +883,52 @@ impl WindowsHealthStartup {
         Ok(())
     }
 
-    pub fn first_canvas_ready(&mut self) -> io::Result<WindowsHealthFrame> {
+    /// Exactly one activation of the already launched candidate/recovery GUI.
+    /// Never spawns another process and never repeatedly steals user focus.
+    pub fn take_window_activation_request(&mut self) -> bool {
+        !std::mem::replace(&mut self.window_activation_requested, true)
+    }
+
+    pub fn first_canvas_ready_for_window(
+        &mut self,
+        root_hwnd: isize,
+    ) -> io::Result<WindowsHealthFrame> {
+        let visible = super::window::visible_owned_root(root_hwnd, self.process.0)?;
+        let previously_written = self.receipt_written;
+        let result = self.first_canvas_ready_with_visibility(visible);
+        if !previously_written && self.receipt_written {
+            eprintln!(
+                "VISIBLE_WINDOW product=instplot-studio pid={} hwnd={} elapsed_ms={}",
+                self.process.0,
+                root_hwnd,
+                self.waiting_since.elapsed().as_millis()
+            );
+            // Best-effort evidence only, never read as a health authorization.
+            if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "scope": "diagnostic-only-not-health-proof",
+                "process_id": self.process.0, "root_hwnd": root_hwnd,
+                "visible": true, "minimized": false, "cloaked": false,
+                "on_monitor": true,
+            })) {
+                let name = match self.record.purpose {
+                    LaunchPurpose::Candidate => "candidate-window.json",
+                    LaunchPurpose::Recovery => "recovery-window.json",
+                };
+                let _ = super::write_private_atomic(&self.directory.join(name), &bytes);
+            }
+        }
+        result
+    }
+
+    #[cfg(test)]
+    fn first_canvas_ready(&mut self) -> io::Result<WindowsHealthFrame> {
+        self.first_canvas_ready_with_visibility(true)
+    }
+
+    fn first_canvas_ready_with_visibility(
+        &mut self,
+        visible: bool,
+    ) -> io::Result<WindowsHealthFrame> {
         let latest: LaunchRecord = read_private_json(
             &self.directory.join(self.record.purpose.launch_file()),
             64 * 1024,
@@ -931,6 +978,11 @@ impl WindowsHealthStartup {
             return Err(invalid("helper did not commit candidate health in time"));
         }
         if !self.receipt_written {
+            // Hidden/minimized/cloaked/offscreen roots cannot publish health.
+            // The normal stop, binding and finite timeout gates above still run.
+            if !visible {
+                return Ok(WindowsHealthFrame::Pending);
+            }
             let receipt = HealthReceipt {
                 transaction_id: self.record.transaction_id.clone(),
                 nonce: self.record.nonce.clone(),
@@ -1251,6 +1303,7 @@ mod tests {
             process,
             waiting_since: Instant::now(),
             receipt_written: false,
+            window_activation_requested: false,
             _binary_lease: lease,
             _resume_lease: None,
         };
@@ -1274,6 +1327,13 @@ mod tests {
         assert!(startup.first_canvas_ready().is_err());
         assert!(!fixture.0.join("health.json").exists());
         startup.waiting_since = Instant::now();
+        assert!(startup.take_window_activation_request());
+        assert!(!startup.take_window_activation_request());
+        assert_eq!(
+            startup.first_canvas_ready_with_visibility(false).unwrap(),
+            WindowsHealthFrame::Pending
+        );
+        assert!(!fixture.0.join("health.json").exists());
         // A stale receipt must never be replaced with this process's receipt.
         let health_path = fixture.0.join("health.json");
         super::super::write_private_atomic(&health_path, b"stale receipt").unwrap();
@@ -1547,6 +1607,7 @@ mod tests {
             process,
             waiting_since: Instant::now(),
             receipt_written: false,
+            window_activation_requested: false,
             _binary_lease: lease,
             _resume_lease: None,
         };
@@ -1645,6 +1706,7 @@ mod tests {
             ),
             waiting_since: Instant::now() - Duration::from_secs(6),
             receipt_written: false,
+            window_activation_requested: false,
             _binary_lease: lease,
             _resume_lease: None,
         };

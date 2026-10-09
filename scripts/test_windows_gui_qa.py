@@ -53,6 +53,7 @@ class WindowsGuiQaTests(unittest.TestCase):
             installer.write_bytes(f"fake installer for guard tests only {version}".encode())
             proof = {"scope": "preview-components-not-accepted-updater", "version": version,
                      "windows_gui_subsystem": 2,
+                     "build_profile": "release", "startup_update_check_enabled": True,
                      "installer_sha256": QA.PREPARE.sha256(installer),
                      "contract": {"schema": 1, "helper_protocol": 1, "transaction_schema": 1,
                                   "candidate_health_protocol": 1, "recovery_health_protocol": 1,
@@ -124,11 +125,31 @@ class WindowsGuiQaTests(unittest.TestCase):
             self.stage()
         self.assertFalse(self.output.exists())
 
+    def test_debug_or_disabled_startup_check_is_rejected_before_staging(self):
+        proof_path = self.kit / "0.1.2-rc.2-windows-in-place.json"
+        original = json.loads(proof_path.read_bytes())
+        for change in ({"build_profile": "debug"}, {"startup_update_check_enabled": False},
+                       {"startup_update_check_enabled": None}, {"build_profile": None}):
+            proof_path.write_text(json.dumps(original | change))
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "release binary"):
+                self.stage()
+            self.assertFalse(self.output.exists())
+
     def test_production_key_path_and_wrong_run_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "ephemeral"):
             QA.stage(self.kit, self.output, self.identity, "a" * 40, self.root / "production.pem")
         with self.assertRaisesRegex(ValueError, "differs from this build"):
             QA.stage(self.kit, self.output, "124-1", "a" * 40, self.key)
+
+    def test_validate_rejects_debug_disabled_or_missing_profile(self):
+        self.stage()
+        path = self.output / "public" / "qa-index.json"
+        original = json.loads(path.read_bytes())
+        for change in ({"build_profile": "debug"}, {"startup_update_check_enabled": False},
+                       {"startup_update_check_enabled": None}, {"build_profile": None}):
+            path.write_text(json.dumps(original | change))
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "release binary"):
+                QA.validate(self.output, self.identity)
 
     def test_exact_installer_evidence_is_required_before_staging(self):
         (self.kit / "InstPlot-Studio-0.1.2-rc.3-windows-x86_64-setup.exe").write_bytes(b"tampered")

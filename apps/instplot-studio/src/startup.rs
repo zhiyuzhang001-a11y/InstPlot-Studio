@@ -268,6 +268,8 @@ fn windows_preview_capabilities() -> serde_json::Value {
         "public_update_protocol": 0,
         "gui_acceptance_complete": false,
         "public_apply_entry_enabled": false,
+        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "startup_update_check_enabled": !cfg!(debug_assertions),
         "components": {
             "helper_protocol": 1,
             "transaction_schema": 1,
@@ -409,6 +411,18 @@ mod tests {
         assert_eq!(value["public_update_protocol"], 0);
         assert_eq!(value["gui_acceptance_complete"], false);
         assert_eq!(value["public_apply_entry_enabled"], false);
+        assert_eq!(
+            value["startup_update_check_enabled"],
+            !cfg!(debug_assertions)
+        );
+        assert_eq!(
+            value["build_profile"],
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
         assert_eq!(value["components"]["helper_protocol"], 1);
         assert_eq!(value["components"]["transaction_schema"], 1);
         assert_eq!(value["components"]["candidate_health_protocol"], 1);

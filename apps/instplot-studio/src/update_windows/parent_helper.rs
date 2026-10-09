@@ -115,12 +115,31 @@ impl WindowsParentHelper {
         // exists. A receipt alone NEVER grants close permission: all previous
         // access and full validation gates still run once it is present.
         let receipt = owned.prepared.confirm_ready_receipt(&owned.child);
-        let readiness = validate_after_receipt(self.started.elapsed(), receipt, || {
-            parent_access.require_parent_exit_access(&owned.prepared)?;
-            owned.prepared.confirm_ready(&owned.child)
-        })?;
-        self.last_ready = (readiness == WindowsParentReadiness::Ready).then(Instant::now);
-        Ok(readiness)
+        let mut full_validation_ms = None;
+        let result = validate_after_receipt(self.started.elapsed(), receipt, || {
+            let started = Instant::now();
+            let result = parent_access
+                .require_parent_exit_access(&owned.prepared)
+                .and_then(|()| owned.prepared.confirm_ready(&owned.child));
+            full_validation_ms = Some(started.elapsed().as_millis());
+            result
+        });
+        // Timestamp the actual proof BEFORE any best-effort diagnostic I/O.
+        // Slow diagnostics may make it stale; they must never refresh it.
+        self.last_ready = matches!(&result, Ok(WindowsParentReadiness::Ready)).then(Instant::now);
+        if let Some(full_validation_ms) = full_validation_ms
+            && let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+                "schema": 1, "scope": "diagnostic-only-not-readiness-proof",
+                "process_id": std::process::id(), "elapsed_ms": self.started.elapsed().as_millis(),
+                "full_validation_ms": full_validation_ms, "accepted": result.is_ok(),
+            }))
+        {
+            let _ = super::write_private_atomic(
+                &owned.prepared.directory().join("parent-proof.json"),
+                &bytes,
+            );
+        }
+        result
     }
 
     /// GUI's final cheap close gate after full background verification. The

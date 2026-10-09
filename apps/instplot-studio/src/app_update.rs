@@ -28,6 +28,28 @@ const MAX_PACKAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 3;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(20);
 
+#[cfg(all(windows, feature = "in-place-update-preview"))]
+pub(crate) fn windows_health_frame(
+    health: &mut instplot_studio::update_windows::WindowsHealthStartup,
+    frame: &mut eframe::Frame,
+    context: &egui::Context,
+) -> std::io::Result<instplot_studio::update_windows::WindowsHealthFrame> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    if health.take_window_activation_request() {
+        context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        context.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+    let window = frame
+        .winit_window()
+        .ok_or_else(|| std::io::Error::other("GUI root window missing"))?;
+    let handle = window.window_handle().map_err(std::io::Error::other)?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(handle) => health.first_canvas_ready_for_window(handle.hwnd.get()),
+        _ => Err(std::io::Error::other("GUI root window is not Win32")),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct AvailableUpdate {
     pub(super) version: String,
@@ -410,12 +432,21 @@ impl AppUpdateState {
         self.receiver = Some(receiver);
         let context = context.clone();
         std::thread::spawn(move || {
-            let result = reserve_background_check().and_then(|due| {
-                if due {
-                    check_for_update().map(Some)
-                } else {
-                    Ok(None)
-                }
+            let result = reserve_background_check().and_then(|reservation| {
+                let Some(reservation) = reservation else {
+                    return Ok(None);
+                };
+                // Keep the cross-instance lock until the network and signature
+                // checks finish. Failed checks must not suppress the next launch.
+                let outcome = match check_for_update() {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        reservation.record_failure();
+                        return Err(error);
+                    }
+                };
+                reservation.record_success()?;
+                Ok(Some(outcome))
             });
             let event = match result {
                 Ok(Some(outcome)) => UpdateEvent::Checked(Ok(outcome)),
@@ -976,8 +1007,12 @@ impl AppUpdateState {
         let (sender, receiver) = mpsc::channel();
         self.receiver = Some(receiver);
         std::thread::spawn(move || {
+            let preparation_started = std::time::Instant::now();
             let helper = PreparedWindowsHelper::create(&prepared).and_then(|mut helper| {
+                let creation_ms = preparation_started.elapsed().as_millis();
+                let resume_started = std::time::Instant::now();
                 helper.set_resume_project(project.as_deref())?;
+                helper.record_parent_preparation(creation_ms, resume_started.elapsed().as_millis());
                 Ok(helper)
             });
             let helper = match helper {
@@ -1396,8 +1431,53 @@ fn write_cache_evidence(directory: &Path, update: &AvailableUpdate) -> Result<()
     Ok(())
 }
 
-fn reserve_background_check() -> Result<bool, String> {
+struct BackgroundCheckReservation {
+    _lock: fs::File,
+    state: PathBuf,
+    now: u64,
+}
+
+impl BackgroundCheckReservation {
+    fn record_failure(&self) {
+        // No server response, URLs, credentials or project data are retained.
+        // This diagnostic is never read to authorize an update or throttle it.
+        let path = self.state.with_file_name("background-check-result.json");
+        if fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
+            return;
+        }
+        let bytes = format!(
+            "{{\"schema\":1,\"scope\":\"diagnostic-only\",\"started_at\":{},\"result\":\"check-failed\"}}",
+            self.now
+        );
+        let _ = AtomicFile::new(path, AllowOverwrite).write(|f| {
+            f.write_all(bytes.as_bytes())?;
+            f.sync_all()
+        });
+    }
+
+    fn record_success(&self) -> Result<(), String> {
+        AtomicFile::new(&self.state, AllowOverwrite)
+            .write(|f| {
+                f.write_all(self.now.to_string().as_bytes())?;
+                f.sync_all()
+            })
+            .map_err(|_| "无法保存后台检查时间。".to_owned())
+    }
+}
+
+fn reserve_background_check() -> Result<Option<BackgroundCheckReservation>, String> {
     let root = private_update_cache()?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "系统时间无效。".to_owned())?
+        .as_secs();
+    reserve_background_check_at(&root, now)
+}
+
+fn reserve_background_check_at(
+    root: &Path,
+    now: u64,
+) -> Result<Option<BackgroundCheckReservation>, String> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -1418,10 +1498,6 @@ fn reserve_background_check() -> Result<bool, String> {
     if fs::symlink_metadata(&state).is_ok_and(|m| !m.is_file() || m.file_type().is_symlink()) {
         return Err("后台检查状态路径无效。".to_owned());
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| "系统时间无效。".to_owned())?
-        .as_secs();
     let previous: Option<u64> = if state.exists() {
         if fs::metadata(&state)
             .map_err(|_| "无法读取检查时间。".to_owned())?
@@ -1438,15 +1514,13 @@ fn reserve_background_check() -> Result<bool, String> {
         None
     };
     if !background_check_due(previous, now) {
-        return Ok(false);
+        return Ok(None);
     }
-    AtomicFile::new(state, AllowOverwrite)
-        .write(|f| {
-            f.write_all(now.to_string().as_bytes())?;
-            f.sync_all()
-        })
-        .map_err(|_| "无法保存后台检查时间。".to_owned())?;
-    Ok(true)
+    Ok(Some(BackgroundCheckReservation {
+        _lock: file,
+        state,
+        now,
+    }))
 }
 
 fn background_check_due(previous: Option<u64>, now: u64) -> bool {
@@ -2263,6 +2337,37 @@ mod tests {
         assert!(!background_check_due(Some(100), 100));
         assert!(!background_check_due(Some(100), 100 + 299));
         assert!(background_check_due(Some(100), 100 + 300));
+    }
+
+    #[test]
+    fn background_failure_does_not_throttle_and_reservation_holds_lock() {
+        let root = std::env::temp_dir().join(format!(
+            "instplot-background-check-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let reservation = reserve_background_check_at(&root, 100).unwrap().unwrap();
+        assert!(reserve_background_check_at(&root, 100).is_err());
+        assert!(!root.join("background-check.json").exists());
+        reservation.record_failure();
+        let diagnostic: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("background-check-result.json")).unwrap())
+                .unwrap();
+        assert_eq!(diagnostic["result"], "check-failed");
+        assert!(!root.join("background-check.json").exists());
+        drop(reservation); // Simulate failed network/signature verification.
+        let reservation = reserve_background_check_at(&root, 101).unwrap().unwrap();
+        reservation.record_success().unwrap();
+        drop(reservation);
+        assert!(reserve_background_check_at(&root, 102).unwrap().is_none());
+        assert!(reserve_background_check_at(&root, 401).unwrap().is_some());
+        fs::write(root.join("background-check.json"), b"invalid").unwrap();
+        assert!(reserve_background_check_at(&root, 500).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
