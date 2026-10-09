@@ -1,5 +1,7 @@
 # Windows GUI 实机问题与无人值守验收
 
+2026-10-09 run37963369054 / ba1f159：native退出码0/7自测实际通过。自动提示与真实点击后约8.25秒完成升级，候选可见存活30秒，但项目窗口标题检查失败；截图为初始标题InstPlot Studio与禁用灰画布。Windows健康UI在Committed清除health后仍return，刚绘制的禁用画布不会保证再触发一帧，故无后续事件时普通编辑器/项目标题没有刷新。补Committed后显式request_repaint，强制下一帧正常UI；不跳过健康门、不改变安装或恢复授权。此为产品修改，必须新source/new QA，不复用3ba成功包作为本次修复交付。新完整GUI与准确包仍待执行。
+
 2026-10-09 run37960121663 / GUI test source d3d448e：真实自动弹窗、Tab/Enter点击、旧PID正常退出、原路径升级、唯一新版窗口持续可见30秒、项目/快捷方式/rc.3身份与事务completed均已取得证据。点击至completed约13.7秒；helper ready930ms、父准备955ms、完整proof120ms。该值是临时软件渲染VM/loopback TLS，不承诺用户公网环境同速。截图已人工核对。最后正常关闭检查失败，最终桌面截图已无Studio窗口；原脚本对Get-Process取得的非子进程使用延迟Process.ExitCode，没有保留原生退出证据，因此不能断言崩溃或正常退出。改为关闭前保留仅query/synchronize的原生句柄并绑定事务创建时间，正常CloseMainWindow后严格等待并读取实际exit code，任何非零/缺证据仍失败。仅测试脚本改动，不修改产品/包；完整GUI成功门仍待新run。
 
 2026-10-09。用户授权自主修复并要求在虚拟 Windows 上验证，不再反复由用户操作另一台电脑。

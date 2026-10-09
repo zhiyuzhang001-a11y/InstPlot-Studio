@@ -49,7 +49,13 @@ impl eframe::App for StudioApp {
                 &context,
             );
             match result {
-                Ok(WindowsHealthFrame::Committed) => self.update_health = None,
+                Ok(WindowsHealthFrame::Committed) => {
+                    self.update_health = None;
+                    // This frame still drew the disabled health-only canvas.
+                    // Always schedule the normal editor/title frame, even when
+                    // no input or helper event arrives after durable commitment.
+                    context.request_repaint();
+                }
                 Ok(WindowsHealthFrame::Pending) => {
                     context.request_repaint_after(std::time::Duration::from_millis(100));
                 }
