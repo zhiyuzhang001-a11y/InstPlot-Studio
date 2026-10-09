@@ -17,6 +17,8 @@ permissions:
 
 # This narrow bridge does NOT merge updater implementation into main, create a
 # release or build another package. It consumes one frozen, successful QA build.
+# Background-handoff preview: publish rc.2 baseline; rc.3 activation still needs
+# fresh baseline GUI confirmation. Source and tools are the same reviewed SHA.
 # Package provenance stays frozen. A separately reviewed transport-only tools
 # commit may differ ONLY in the two QA publication files checked below.
 jobs:
@@ -30,12 +32,12 @@ jobs:
       actions: read
       id-token: write
     concurrency:
-      group: studio-windows-gui-qa-37898949787-1
+      group: studio-windows-gui-qa-37928369761-1
       cancel-in-progress: false
     env:
-      QA_IDENTITY: 37898949787-1
-      QA_SOURCE_SHA: 4f50e72fc0b94f308ccbbdf0ccac3a3978ce84db
-      QA_TOOLS_SHA: eeff5d16207763e0f64df07de05a905898a08758
+      QA_IDENTITY: 37928369761-1
+      QA_SOURCE_SHA: 9c0baf904b29d68cda3d37d203fad3581dd9486e
+      QA_TOOLS_SHA: 9c0baf904b29d68cda3d37d203fad3581dd9486e
       QA_ACTION: ${{ inputs.action || 'publish' }}
       GH_TOKEN: ${{ github.token }}
       ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
@@ -44,7 +46,7 @@ jobs:
       - name: Check out frozen reviewed QA transport tools, not an arbitrary branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: eeff5d16207763e0f64df07de05a905898a08758
+          ref: 9c0baf904b29d68cda3d37d203fad3581dd9486e
           fetch-depth: 2
           persist-credentials: false
       - name: Verify frozen build provenance and exact public artifact
