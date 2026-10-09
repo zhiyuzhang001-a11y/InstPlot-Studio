@@ -107,7 +107,7 @@ def patch_snapshot(snapshot: Path, certificate: Path, source_sha: str) -> dict:
     if b"PRIVATE KEY" in ca or b"BEGIN CERTIFICATE" not in ca:
         raise ValueError("fixture root must contain only a public CA certificate")
     (snapshot / "packaging/update/gui-fixture-ca.pem").write_bytes(ca)
-    source.write_text(text.replace(anchor, addition))
+    source.write_bytes(text.replace(anchor, addition).encode("utf-8"))
     return {
         "scope": SCOPE, "source_sha": source_sha,
         "patched_file": "apps/instplot-studio/src/app_update.rs",

@@ -240,6 +240,15 @@ try {
     $Before = 'version = "' + $CurrentVersion + '"'
     if (([regex]::Matches($Content, [regex]::Escape($Before))).Count -ne 1) { throw 'Ambiguous workspace version.' }
     [IO.File]::WriteAllText($Manifest, $Content.Replace($Before, 'version = "' + $NextVersion + '"'))
+    # Update only the four version-inheriting workspace package entries in the
+    # disposable lockfile. Registry/git dependencies and their pins stay exact;
+    # the candidate build remains --locked --offline.
+    $SnapshotLock = Join-Path $Snapshot 'Cargo.lock'
+    $LockContent = [IO.File]::ReadAllText($SnapshotLock)
+    $LockPattern = '(?m)(^name = "instplot-(?:demo|layout|studio|update-signature)"\r?\nversion = ")' + [regex]::Escape($CurrentVersion) + '("\r?$)'
+    if (([regex]::Matches($LockContent, $LockPattern)).Count -ne 4) { throw 'Unexpected workspace candidate lock entries.' }
+    $UpdatedLock = [regex]::Replace($LockContent, $LockPattern, { param($Match) $Match.Groups[1].Value + $NextVersion + $Match.Groups[2].Value })
+    [IO.File]::WriteAllText($SnapshotLock, $UpdatedLock)
     Checked 'cargo' (@('build', '--locked', '--offline', '--manifest-path', $Manifest,
         '--target-dir', (Join-Path $RepositoryRoot 'target'), '--package', 'instplot-studio', '--features', 'in-place-update-preview') + $ProfileArguments)
     Copy-Item "target/$BuildProfile/instplot-studio.exe" $NewSource

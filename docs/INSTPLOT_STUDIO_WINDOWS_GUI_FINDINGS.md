@@ -48,4 +48,6 @@ helper-preflight诊断延伸到controller运行阶段：等待旧GUI退出、安
 
 本批现已补齐父端create/resume准备、完整proof耗时的私有诊断；proof freshness在完整校验结束时绑定，诊断写盘不会刷新授权。后台失败记录只有固定check-failed状态和时间，不保存服务端错误/URL/项目/密钥，失败仍可重试。
 
+虚拟机run37956316698/source79c6原生窗口3项逐项通过，包括真实自有窗口显示/最小化/恢复和foreign/child/destroyed拒绝；fixture5项通过。完整GUI随后在快照中文源码写入CP1252编码时失败，尚未启动更新。前一run37955903004的mock源码CRLF失败已修。本批固定UTF-8字节写入并加入中文回归，不改严格TLS或源字节校验。public QA build37955904898/source71870e4的baseline Release编译成功，candidate因临时版本变更未同步Cargo.lock被--locked拒绝；补临时snapshot四个workspace包版本的精确同步，依赖pins不变且candidate保留--locked --offline。失败包不部署，新脚本输入必须准确记录新source/build。
+
 新增手动desktop-e2e job和真实输入脚本：隔离CA与localhost SAN服务证书、严格TLS正反例及私有文件拒绝、真实Release两包、baseline首次检查与可信恢复记录、保留真实5分钟节流后本地切换candidate、启动自动弹窗、绑定前台窗口后Tab/Enter点击、旧PID正常退出、原目录替换、唯一新PID可见持续30秒、恢复项目/快捷方式/版本/事务completed及正常退出。独立复审指出的baseline可见性最终门、Enter前再查焦点、成功证据延后到正常关闭与服务清理后均已落实。夹具5项签名/隔离回归与本地定向测试通过，不代表此完整Windows job已运行。测试快照加载公开fixture CA不是公有QA二进制，公网确切包验证须单独执行。

@@ -21,7 +21,7 @@ class SnapshotTlsGuardTests(unittest.TestCase):
         self.source.parent.mkdir(parents=True)
         (self.snapshot / "packaging/update").mkdir(parents=True)
         (self.snapshot / ".studio-disposable-gui-fixture").touch()
-        self.original = "ureq::Agent::config_builder()\n        .max_redirects(0)\n" * 2
+        self.original = "// 更新夹具保持 UTF-8 和 LF\n" + "ureq::Agent::config_builder()\n        .max_redirects(0)\n" * 2
         self.source.write_bytes(self.original.encode())
         self.ca = self.root / "fixture-ca.pem"
         self.ca.write_bytes(b"-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----")
@@ -39,7 +39,7 @@ class SnapshotTlsGuardTests(unittest.TestCase):
 
     def test_only_two_agents_in_marked_snapshot_use_strict_ca(self):
         proof = FIXTURE.patch_snapshot(self.snapshot, self.ca, "a" * 40)
-        text = self.source.read_text()
+        text = self.source.read_text(encoding="utf-8")
         self.assertEqual(text.count(".tls_config("), 2)
         self.assertEqual(text.count(".max_redirects(0)"), 2)
         self.assertNotIn("disable_verification", text)
@@ -66,7 +66,7 @@ class SnapshotTlsGuardTests(unittest.TestCase):
         self.ca.write_bytes(b"-----BEGIN PRIVATE KEY-----")
         with self.assertRaisesRegex(ValueError, "public CA"):
             FIXTURE.patch_snapshot(self.snapshot, self.ca, "a" * 40)
-        self.assertEqual(self.source.read_text(), self.original)
+        self.assertEqual(self.source.read_bytes(), self.original.encode("utf-8"))
 
 
 class LoopbackSignedStageTests(unittest.TestCase):
