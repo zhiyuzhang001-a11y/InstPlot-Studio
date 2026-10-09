@@ -54,6 +54,8 @@ public static class StudioGuiE2E {
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h,uint a,out uint v,uint n);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int command);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int width,int height,uint flags);
     [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint f,bool inherit,uint access);
     [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr d);
     public static GuiWindow[] Windows(int processId) {
@@ -160,8 +162,21 @@ try {
     $Parent = Start-Process $Binary -ArgumentList ('"'+$Project+'"') -PassThru -RedirectStandardError (Join-Path $Evidence 'update-parent-startup.log')
     $Deadline = [datetime]::UtcNow.AddSeconds(60)
     $Popup = $null
+    $SizedParent = $false
     do {
         if ($Parent.HasExited) { throw 'Old GUI exited before update click.' }
+        if (-not $SizedParent) {
+            $RootWindow = VisibleWindow $Parent.Id
+            if ($null -ne $RootWindow -and $RootWindow.Title -like 'InstPlot Studio*') {
+                # The VM's 1024x768 desktop otherwise makes the main canvas
+                # fill the monitor and intentionally embeds tool windows.
+                # Resize our own real window, not the product/popup state.
+                [void][StudioGuiE2E]::ShowWindow([IntPtr]$RootWindow.Handle,9)
+                if (-not [StudioGuiE2E]::SetWindowPos([IntPtr]$RootWindow.Handle,[IntPtr]::Zero,40,40,800,600,20)) { throw 'Cannot resize owned GUI for detached-tool acceptance.' }
+                $SizedParent = $true
+                Phase 'owned-main-window-sized-for-detached-tool-mode'
+            }
+        }
         $Popup = VisibleWindow $Parent.Id '检查更新'
         if ($null -ne $Popup) { break }
         Start-Sleep -Milliseconds 200
