@@ -37,11 +37,31 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 public sealed class GuiWindow {
     public long Handle; public int Pid; public string Title;
     public bool Visible, Minimized, Cloaked, OnMonitor;
 }
 public static class StudioGuiE2E {
+    [DllImport("kernel32.dll", SetLastError=true)] static extern SafeWaitHandle OpenProcess(uint access,bool inherit,int pid);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(SafeWaitHandle h,out long created,out long exited,out long kernel,out long user);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(SafeWaitHandle h,out uint code);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(SafeWaitHandle h,uint milliseconds);
+    public static SafeWaitHandle BindExitWitness(int pid,long expectedCreated) {
+        // Query/synchronize only; retaining the handle prevents PID reuse after exit.
+        var h=OpenProcess(0x00101000,false,pid);
+        long created,exited,kernel,user;
+        if(h.IsInvalid || !GetProcessTimes(h,out created,out exited,out kernel,out user) || created!=expectedCreated) {
+            h.Dispose(); throw new InvalidOperationException("Candidate exit witness binding failed.");
+        }
+        return h;
+    }
+    public static uint WaitExitCode(SafeWaitHandle h) {
+        uint code;
+        if(WaitForSingleObject(h,20000)!=0 || !GetExitCodeProcess(h,out code))
+            throw new InvalidOperationException("Candidate native exit evidence unavailable.");
+        return code;
+    }
     delegate bool Callback(IntPtr h, IntPtr p);
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int L,T,R,B; }
     [DllImport("user32.dll")] static extern bool EnumWindows(Callback c, IntPtr p);
@@ -73,6 +93,17 @@ public static class StudioGuiE2E {
     }
 }
 '@
+# Exercise native exit evidence on both success and failure before expensive builds.
+foreach ($ExpectedExitCode in @(0, 7)) {
+    $ExitProbe = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-Command', "Start-Sleep -Seconds 2; exit $ExpectedExitCode"
+    ) -PassThru
+    $ProbeWitness = [StudioGuiE2E]::BindExitWitness($ExitProbe.Id, $ExitProbe.StartTime.ToUniversalTime().ToFileTimeUtc())
+    try {
+        if ([StudioGuiE2E]::WaitExitCode($ProbeWitness) -ne $ExpectedExitCode) { throw 'Native exit witness regression failed.' }
+    } finally { $ProbeWitness.Dispose() }
+}
+Phase 'native-exit-zero-and-nonzero-evidence-verified'
 $Desktop = [StudioGuiE2E]::OpenInputDesktop(0, $false, 1)
 if ($Desktop -eq [IntPtr]::Zero -or -not [Environment]::UserInteractive) { throw 'No interactive desktop; GUI acceptance cannot pass.' }
 [void][StudioGuiE2E]::CloseDesktop($Desktop)
@@ -244,7 +275,18 @@ try {
        version=$Index.candidate; native_windows=[StudioGuiE2E]::Windows($Candidate.Id);
        project_sha256=$ProjectHash.ToLowerInvariant(); single_gui=$true; completed=$true; overall_success=$true }
     Phase 'project-shortcuts-version-and-single-visible-GUI-verified'
-    if (-not $Candidate.CloseMainWindow() -or -not $Candidate.WaitForExit(20000) -or $Candidate.ExitCode -ne 0) { throw 'Candidate did not close normally.' }
+    # Get-Process observes a helper-owned process, not our Start-Process child.
+    # Retain a bound native handle before requesting normal closure; do not infer
+    # an exit code from a lazily opened Process handle after the process is gone.
+    $ExitWitness = [StudioGuiE2E]::BindExitWitness($Candidate.Id, [long]$Transaction.candidate_process[1])
+    try {
+        if (-not $Candidate.CloseMainWindow()) { throw 'Candidate normal close request rejected.' }
+        $NativeExitCode = [StudioGuiE2E]::WaitExitCode($ExitWitness)
+        @{ process_id=$Candidate.Id; process_created=[string]$Transaction.candidate_process[1]; exit_code=$NativeExitCode } |
+            ConvertTo-Json | Set-Content -Encoding utf8NoBOM (Join-Path $Evidence 'candidate-exit.json')
+        if ($NativeExitCode -ne 0) { throw "Candidate did not close normally: native exit code $NativeExitCode." }
+        Phase 'candidate-native-normal-exit-confirmed'
+    } finally { $ExitWitness.Dispose() }
 } finally {
     Screenshot 'final-desktop'
     if (Test-Path $Updater) {
