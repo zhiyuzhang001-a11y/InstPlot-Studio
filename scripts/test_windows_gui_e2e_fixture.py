@@ -22,7 +22,7 @@ class SnapshotTlsGuardTests(unittest.TestCase):
         (self.snapshot / "packaging/update").mkdir(parents=True)
         (self.snapshot / ".studio-disposable-gui-fixture").touch()
         self.original = "ureq::Agent::config_builder()\n        .max_redirects(0)\n" * 2
-        self.source.write_text(self.original)
+        self.source.write_bytes(self.original.encode())
         self.ca = self.root / "fixture-ca.pem"
         self.ca.write_bytes(b"-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----")
         self.environment = patch.dict(os.environ, {
@@ -56,7 +56,7 @@ class SnapshotTlsGuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             FIXTURE.patch_snapshot(self.snapshot, self.ca, "a" * 40)
         (self.snapshot / ".studio-disposable-gui-fixture").touch()
-        self.source.write_text(self.original + self.original)
+        self.source.write_bytes((self.original + self.original).encode())
         with self.assertRaisesRegex(ValueError, "exact git archive"):
             FIXTURE.patch_snapshot(self.snapshot, self.ca, "a" * 40)
 
