@@ -1,6 +1,6 @@
 # InstPlot Studio 发布运维清单
 
-> 状态：仓库侧技术 RC 基础设施与 GitHub OIDC→阿里云 STS 信任链已验证；正式更新信任根配置中，商业平台签名尚未配置。
+> 状态（2026-10-10，北京时间）：公开 rc.3 技术 prerelease 与受保护 OSS prerelease 更新渠道已发布并独立核验；生产公钥未变，stable 未启用，商业平台签名尚未配置。准确来源、资产与验收边界见[rc.3 发布收尾记录](INSTPLOT_STUDIO_RC3_RELEASE_CLOSEOUT.md)。
 
 本文只记录实际操作入口和账户侧配置。安全契约、分阶段门禁与验收标准以
 `INSTPLOT_STUDIO_GITHUB_OSS_RELEASE_PLAN.md` 为准。
@@ -28,7 +28,7 @@
   合同，不为旧安装器伪造恢复描述，也不覆盖旧资产。
 - 安装公共 rc.3 是从隔离 QA 渠道迁出的首次手动操作。旧公开 rc.2 不具备原位能力/描述时，
   不承诺它能自动升级；后续自动更新仍须候选签名契约、可信恢复资产与正常退出/健康门通过。
-- 当前仅完成发布配置准备，不代表公开 rc.3 已发布或新 exact 资产已通过 GUI/公网验收。
+- rc.3 已从冻结源码发布；平台打包/适用安装门、隔离 GUI 更新验收、公开资产校验与公开 Mac 包启动已完成。隔离 GUI 测试不冒充公开 exact binary 的端到端更新网络测试，详见收尾记录中的证据分层。
 
 ## 2. GitHub Environment
 
@@ -92,8 +92,8 @@ OSS 身份使用 GitHub OIDC 换取阿里云短期 STS 凭据，不保存长期 
 
 ## 6. 仍需用户/账户侧完成
 
-- OSS Public Root、Bucket、地域与 OIDC RAM 最小权限已配置；只读短期凭据探针已于 2026-09-29 通过。Bucket 版本控制/WORM、缓存和费用/保留策略仍须在首次发布前复核。
-- 正式当前/下一把 Ed25519 信任根已生成并配置工作副本；首次 RC 前仍须完成离线备份、公钥入客户端及一致性检查。
+- OSS Public Root、Bucket、地域与 OIDC RAM 最小权限已配置；受保护 OIDC 发布 rc.3 已通过。Bucket 版本控制/WORM、费用/保留策略和离线备份应由账户持有人持续复核；本次发布证据不证明这些账户运维项已完成。
+- 当前/下一把 Ed25519 公钥已固化到客户端并用于独立公网验证；私钥只由受保护发布环境使用，离线备份状态不在本次客户端验收范围。
 - Apple Developer ID、notarization 凭据。
 - Windows Authenticode 证书或受控云签名服务。
 - 至少一台非开发 macOS、Windows、Linux 设备的最终黑盒安装验收。

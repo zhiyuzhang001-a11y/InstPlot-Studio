@@ -8,7 +8,7 @@
 
 这次成功不是只延长等待，也不是换了更新框架。最终交付同时修正了真实包的构建配置、后台检查节流、父 GUI 与助手交接、候选窗口健康判定，以及健康提交后的正常编辑界面重绘。较早“安装成功/事务 completed”的结果没有证明用户能看到并使用新界面。
 
-可复用的是流程分层、身份绑定、安全边界和验收方法。当前代码仍属于 [updater PR #9](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/pull/9)，该 PR 未合并；只合并了隔离 QA 的部署工作流。本文不授权启用生产更新，也不宣称这些模块已成为可直接引用的通用库。
+可复用的是流程分层、身份绑定、安全边界和验收方法。[updater PR #9](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/pull/9) 已合并；另经用户明确批准和发布门验收，公开 rc.3 技术 prerelease 与 OSS prerelease 渠道已发布，见[发布收尾记录](INSTPLOT_STUDIO_RC3_RELEASE_CLOSEOUT.md)。这不授权 stable 发布、降低安全门或宣称这些模块已成为可直接引用的通用库。
 
 ## 从用户点击到可用新版
 

@@ -1,5 +1,19 @@
 # SciPlot agent notes
 
+## Risk-based validation and CI efficiency
+
+- Before choosing tests or changing CI, read `docs/CI_VALIDATION_POLICY.md`.
+- Classify the actual behavioral risk and affected platforms, not the diff size.
+  Use targeted validation for low-risk edits; retain the relevant security and
+  recovery matrix for updater behavior changes and full validation for releases.
+- Batch related fixes and reuse only explicitly proven exact-source evidence;
+  do not rerun expensive packaging/recovery tests for every intermediate edit.
+- This policy does not override current required checks. Do not bypass checks,
+  weaken security gates, or claim the optimized workflow exists before it does.
+- Separate queue, build/test, packaging, upload and public verification timings;
+  do not describe OSS upload delays as CI test time. Poll only at the agreed
+  interval and stay quiet when nothing actionable has changed.
+
 ## Rust toolchain and Clippy
 
 - This repository pins Rust 1.98.0 through `rust-toolchain.toml`.
