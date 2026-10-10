@@ -144,7 +144,7 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
 
       - name: Build macOS DMG
-        run: python3 packaging/macos/build_package.py
+        run: python3 packaging/macos/build_package.py --in-place-update-preview
 
       - name: Mount and verify DMG
         shell: bash
@@ -194,7 +194,7 @@ jobs:
 
       - name: Build Windows installer
         shell: pwsh
-        run: ./packaging/windows/build_package.ps1
+        run: ./packaging/windows/build_package.ps1 -InPlaceUpdatePreview
 
       - name: Install, verify, and uninstall
         shell: pwsh
@@ -226,7 +226,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-windows-${{ env.SOURCE_SHA }}
-          path: target/packages/windows/*-setup.exe
+          path: |
+            target/packages/windows/*-setup.exe
+            target/packages/windows/windows-in-place.json
           if-no-files-found: error
           retention-days: 7
 
@@ -262,12 +264,18 @@ jobs:
             "InstPlot-Studio-${version}-linux-x86_64.tar.gz"
             "InstPlot-Studio-${version}-macos-aarch64.dmg"
             "InstPlot-Studio-${version}-windows-x86_64-setup.exe"
+            "windows-in-place.json"
           )
           mapfile -t actual < <(find . -maxdepth 1 -type f -printf '%f\n' | sort)
           mapfile -t wanted < <(printf '%s\n' "${expected[@]}" | sort)
           diff -u <(printf '%s\n' "${wanted[@]}") <(printf '%s\n' "${actual[@]}")
           sha256sum "${expected[@]}" > SHA256SUMS.txt
           sha256sum -c SHA256SUMS.txt
+          cd ../..
+          python3 scripts/build_release_asset_spec.py \
+            --asset-dir target/release-assets --version "${version}" \
+            --windows-contract-evidence target/release-assets/windows-in-place.json \
+            --output target/release-assets.json
 
       - name: Create or resume matching draft Release
         env:
@@ -327,8 +335,14 @@ jobs:
           mkdir target/release-download
           gh release download "${RELEASE_TAG}" --dir target/release-download
           cd target/release-download
-          test "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" = 5
+          test "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" = 6
           sha256sum -c SHA256SUMS.txt
+          cd ../..
+          python3 scripts/build_release_asset_spec.py \
+            --asset-dir target/release-download --version '${{ needs.freeze-source.outputs.version }}' \
+            --windows-contract-evidence target/release-download/windows-in-place.json \
+            --output target/downloaded-release-assets.json
+          cmp target/release-assets/windows-in-place.json target/release-download/windows-in-place.json
 
       - name: Publish verified Release
         env:
@@ -349,7 +363,7 @@ jobs:
             echo "- Source: \`${SOURCE_SHA}\`"
             echo "- Version: \`${{ needs.freeze-source.outputs.version }}\`"
             echo "- Prerelease: \`${{ needs.freeze-source.outputs.prerelease }}\`"
-            echo "- Platform assets: 4 plus SHA256SUMS.txt"
+            echo "- Platform assets: 4 plus exact Windows contract evidence and SHA256SUMS.txt"
           } >> "${GITHUB_STEP_SUMMARY}"
 
   dispatch-oss-publication:

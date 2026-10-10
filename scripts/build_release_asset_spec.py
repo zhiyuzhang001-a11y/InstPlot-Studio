@@ -36,6 +36,11 @@ def build_spec(asset_dir: Path, version: str, windows_contract_path: Path | None
         ),
     }
     expected = {filename for _, packages in definitions.values() for _, _, filename, _ in packages}
+    # The explicit evidence input is a checksummed Release sidecar, not a
+    # platform download. Keep the package inventory strict in both modes.
+    if windows_contract_path is not None:
+        if windows_contract_path.resolve() == (asset_dir / "windows-in-place.json").resolve():
+            expected.add("windows-in-place.json")
     actual = {
         path.name
         for path in asset_dir.iterdir()

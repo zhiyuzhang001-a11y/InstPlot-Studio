@@ -10,7 +10,25 @@
 - 当前工作流只允许带 prerelease 段的 SemVer 技术 RC，例如 `0.1.2-rc.1`。
 - Windows 安装器当前没有 Authenticode；macOS 当前只做 ad-hoc 签名，没有 Developer ID、公证和 staple。
 - 在商业签名流程接入并验证前，`release.yml` 会拒绝 stable 版本，不能把技术演练描述为可信正式发行。
-- 应用内生产更新入口尚未启用；仓库中只有独立的清单、签名、URL 边界和验证原型。
+- rc.3 发布准备显式构建已实现的原位更新技术预览能力；是否可交付以该发布源码的
+  必需检查、实际平台包/GUI 验收和独立公网核验为准，不能只凭编译 feature 宣告通过。
+
+## rc.3 原位更新发布契约
+
+- 用户已另行授权公开不可变 rc.3 和生产 prerelease 更新；stable、生产公钥和旧资产不变。
+- Mac 与 Windows 打包显式选择 `in-place-update-preview`；默认开发构建仍关闭。
+  `packaging/update/in-place-release.json` 标记新的冻结发布源码要求原位契约，不是运行时信任配置。
+- Windows 的 `windows-in-place.json` 从安装器实际使用的 binary 与 LICENSE 生成固定文件摘要，
+  同时绑定安装器大小之外的精确 SHA-256 与版本；它随四个平台包作为第五份数据资产公开，
+  总共六文件（含 SHA256SUMS.txt）。Release 上传前与重新下载后均验证完整契约及严格资产集合。
+- 编译探针的历史 preview scope / public=false / GUI=false 不充当 GUI 验收证明，也不被翻转为
+  人造验收标志。公开技术 RC 的批准与验收由独立证据、受保护工作流和具体资产验证承担。
+- OSS 从相同冻结源码检查标记并要求 sidecar，再将其严格校验的 windows_in_place 契约纳入
+  Ed25519 签名清单。新源码缺 sidecar 立即停止；旧源码的历史 Release 续期继续保留原手动下载
+  合同，不为旧安装器伪造恢复描述，也不覆盖旧资产。
+- 安装公共 rc.3 是从隔离 QA 渠道迁出的首次手动操作。旧公开 rc.2 不具备原位能力/描述时，
+  不承诺它能自动升级；后续自动更新仍须候选签名契约、可信恢复资产与正常退出/健康门通过。
+- 当前仅完成发布配置准备，不代表公开 rc.3 已发布或新 exact 资产已通过 GUI/公网验收。
 
 ## 2. GitHub Environment
 

@@ -147,9 +147,23 @@ jobs:
           cd target/release-assets
           sha256sum -c SHA256SUMS.txt
           cd ../..
+          contract_args=()
+          if [[ -f packaging/update/in-place-release.json && ! -f target/release-assets/windows-in-place.json ]]; then
+            echo "This frozen source requires the exact Windows contract sidecar." >&2
+            exit 1
+          fi
+          if [[ -f target/release-assets/windows-in-place.json ]]; then
+            contract_args=(--windows-contract-evidence target/release-assets/windows-in-place.json)
+            echo "WINDOWS_IN_PLACE_METADATA=true" >> "${GITHUB_ENV}"
+          else
+            # Older immutable Releases retain their original manual-download
+            # contract when metadata is renewed. Never manufacture a descriptor.
+            echo "WINDOWS_IN_PLACE_METADATA=false" >> "${GITHUB_ENV}"
+          fi
           python3 scripts/build_release_asset_spec.py \
             --asset-dir target/release-assets \
             --version "${RELEASE_VERSION}" \
+            "${contract_args[@]}" \
             --output target/release-assets.json
 
       - name: Install pinned ossutil
@@ -179,6 +193,10 @@ jobs:
           printf '%s\n' "${UPDATE_SIGNING_PRIVATE_KEY}" > "${key_path}"
           chmod 600 "${key_path}"
           trap 'rm -f "${key_path}"' EXIT
+          contract_args=()
+          if [[ "${WINDOWS_IN_PLACE_METADATA}" == true ]]; then
+            contract_args=(--windows-in-place-metadata)
+          fi
           python3 packaging/update/prepare_oss_release.py \
             --assets target/release-assets.json \
             --version "${RELEASE_VERSION}" \
@@ -190,6 +208,7 @@ jobs:
             --key-id "${UPDATE_KEY_ID}" \
             --notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
             --expires-at "${EXPIRES_AT}" \
+            "${contract_args[@]}" \
             --output target/oss-upload
 
       - name: Obtain short-lived Alibaba Cloud credentials
