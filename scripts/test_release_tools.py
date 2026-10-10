@@ -35,6 +35,24 @@ MAC_PACKAGE_SPEC = importlib.util.spec_from_file_location(
 assert MAC_PACKAGE_SPEC and MAC_PACKAGE_SPEC.loader
 MAC_PACKAGE_MODULE = importlib.util.module_from_spec(MAC_PACKAGE_SPEC)
 MAC_PACKAGE_SPEC.loader.exec_module(MAC_PACKAGE_MODULE)
+MAC_FIXTURE_SPEC = importlib.util.spec_from_file_location(
+    "mac_gui_fixture", ROOT / "scripts/macos_gui_e2e_fixture.py"
+)
+assert MAC_FIXTURE_SPEC and MAC_FIXTURE_SPEC.loader
+MAC_FIXTURE_MODULE = importlib.util.module_from_spec(MAC_FIXTURE_SPEC)
+MAC_FIXTURE_SPEC.loader.exec_module(MAC_FIXTURE_MODULE)
+
+
+class MacFixtureVersionTests(unittest.TestCase):
+    def test_exact_baseline_and_next_candidate(self) -> None:
+        for baseline, candidate in (("0.1.2-rc.2", "0.1.2-rc.3"), ("0.1.2-rc.3", "0.1.2-rc.4")):
+            cargo = f'[workspace.package]\nversion = "{baseline}"\n'.encode()
+            self.assertEqual(MAC_FIXTURE_MODULE.fixture_versions(cargo), (baseline, candidate))
+
+    def test_stable_and_unknown_prerelease_fail_closed(self) -> None:
+        for version in ("0.1.2", "0.1.2-beta.1", "0.1.2-rc.0"):
+            with self.assertRaises(ValueError):
+                MAC_FIXTURE_MODULE.fixture_versions(f'[workspace.package]\nversion = "{version}"\n'.encode())
 
 
 class MacReleaseBuildTests(unittest.TestCase):

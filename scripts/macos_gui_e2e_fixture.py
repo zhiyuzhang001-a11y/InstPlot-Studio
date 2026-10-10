@@ -65,6 +65,20 @@ def replace_exact(text: str, before: str, after: str, count: int = 1) -> str:
     return text.replace(before, after)
 
 
+def fixture_versions(cargo: bytes) -> tuple[str, str]:
+    sections = re.findall(r"(?ms)^\[workspace\.package\]\s*\n(.*?)(?=^\[|\Z)", cargo.decode("utf-8"))
+    if len(sections) != 1:
+        raise ValueError("one workspace package version section required")
+    versions = re.findall(r'^version\s*=\s*"([^"]+)"\s*$', sections[0], re.MULTILINE)
+    if len(versions) != 1:
+        raise ValueError("one exact workspace package version required")
+    version = versions[0]
+    match = re.fullmatch(r"(\d+\.\d+\.\d+-rc\.)([1-9]\d*)", version)
+    if not match:
+        raise ValueError("isolated GUI fixture requires an exact rc baseline")
+    return version, match[1] + str(int(match[2]) + 1)
+
+
 def prepare(root: Path, source: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise ValueError("exact committed source required")
@@ -79,6 +93,7 @@ def prepare(root: Path, source: str) -> None:
     (snapshot / ".studio-disposable-mac-fixture").touch()
     if (snapshot / ".git").exists():
         raise ValueError("archive only")
+    baseline, candidate = fixture_versions((snapshot / "Cargo.toml").read_bytes())
     ca, ca_key = root / "ca.pem", root / "ca-key.pem"
     leaf, leaf_key = root / "server.pem", root / "server-key.pem"
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "7",
@@ -132,6 +147,7 @@ def prepare(root: Path, source: str) -> None:
         'bundle_id.trim() != "com.instplot.studio"',
         'bundle_id.trim() != "com.instplot.studio.mac-gui-qa"').encode("utf-8"))
     save(root / "provenance.json", {"source_sha": source, "scope": "isolated-Release-TLS-GUI-not-public-binary",
+         "baseline_version": baseline, "candidate_version": candidate,
          "fixture_script_sha256": digest(Path(__file__)),
          "before_sha256": hashlib.sha256(before).hexdigest(), "after_sha256": digest(code),
          "ca_sha256": digest(ca), "trust_before_sha256": trust_before, "trust_after_sha256": digest(trust),
@@ -165,14 +181,15 @@ def build(root: Path) -> None:
     web = root / "public"
     now = datetime.now(timezone.utc).replace(microsecond=0)
     proofs = []
-    for sequence, version in enumerate(("0.1.2-rc.2", "0.1.2-rc.3"), 1):
+    baseline, candidate = provenance["baseline_version"], provenance["candidate_version"]
+    for sequence, version in enumerate((baseline, candidate), 1):
         if sequence == 2:
             cargo = snapshot / "Cargo.toml"
-            cargo.write_bytes(replace_exact(cargo.read_text(), 'version = "0.1.2-rc.2"', 'version = "0.1.2-rc.3"').encode())
+            cargo.write_bytes(replace_exact(cargo.read_text(), f'version = "{baseline}"', f'version = "{candidate}"').encode())
             lock = snapshot / "Cargo.lock"
             text = lock.read_text()
-            pattern = r'(\[\[package\]\]\nname = "(?:instplot-demo|instplot-layout|instplot-studio|instplot-update-signature)"\nversion = ")0\.1\.2-rc\.2(")'
-            text, count = re.subn(pattern, r'\g<1>0.1.2-rc.3\2', text)
+            pattern = r'(\[\[package\]\]\nname = "(?:instplot-demo|instplot-layout|instplot-studio|instplot-update-signature)"\nversion = ")' + re.escape(baseline) + r'(")'
+            text, count = re.subn(pattern, lambda m: m[1] + candidate + m[2], text)
             if count != 4:
                 raise ValueError("four workspace versions required; dependency pins unchanged")
             lock.write_bytes(text.encode())
@@ -208,7 +225,7 @@ def build(root: Path) -> None:
             shutil.copytree(app, root / "Studio Mac GUI QA.app")
     latest = web / "instplot-studio/channels/prerelease/latest.json"
     latest.parent.mkdir(parents=True)
-    shutil.copyfile(web / "instplot-studio/releases/0.1.2-rc.2/metadata/1/manifest.json", latest)
+    shutil.copyfile(web / f"instplot-studio/releases/{baseline}/metadata/1/manifest.json", latest)
     save(root / "build-proof.json", proofs)
     run(str(root / "Studio Mac GUI QA.app" / EXECUTABLE), "--create-project", str(root / "GUI sentinel.instplot"))
 
@@ -243,6 +260,7 @@ def serve(root: Path) -> None:
 def health_failure(root: Path) -> None:
     """Post-verification fault only; never counted as download/button evidence."""
     case = root / "health-failure"
+    provenance = json.loads((root / "provenance.json").read_bytes())
     case.mkdir(mode=0o700)
     (case / ".metadata_never_index").touch()
     target = case / "Studio Mac GUI QA.app"
@@ -256,8 +274,8 @@ def health_failure(root: Path) -> None:
     shutil.copytree(root / "dmg-source-2/InstPlot Studio.app", candidate)
     transaction = {"schema": 1, "id": identifier, "nonce": nonce,
         "identity": {"product": "instplot-studio", "platform": "macos-aarch64",
-            "installed_path": str(target), "previous_version": "0.1.2-rc.2",
-            "candidate_version": "0.1.2-rc.3", "candidate_sha256": digest(candidate / EXECUTABLE),
+            "installed_path": str(target), "previous_version": provenance["baseline_version"],
+            "candidate_version": provenance["candidate_version"], "candidate_sha256": digest(candidate / EXECUTABLE),
             "candidate_size": (candidate / EXECUTABLE).stat().st_size},
         "stage": "waiting_for_exit", "candidate_process": None, "last_error": None}
     save(directory / "request.json", {"directory": str(directory), "transaction": transaction,
@@ -334,7 +352,7 @@ def inspect_success(root: Path, project_hash: str) -> None:
         raise ValueError("real GUI transaction did not complete")
     assert receipt["transaction_id"] == state["id"] and receipt["nonce"] == state["nonce"]
     assert receipt["initialized"] is True and receipt["window_ready"] is True
-    assert receipt["version"] == "0.1.2-rc.3" and receipt["installed_path"] == str(target)
+    assert receipt["version"] == proofs[1]["version"] and receipt["installed_path"] == str(target)
     assert state["candidate_process"] == [receipt["process_id"], receipt["process_started"]]
     assert digest(target / EXECUTABLE) == proofs[1]["binary_sha256"]
     assert digest(directory / "previous.app" / EXECUTABLE) == proofs[0]["binary_sha256"]
@@ -374,21 +392,22 @@ def handoff(root: Path) -> None:
     output.mkdir(mode=0o700)
     stage = output / "dmg-source"
     stage.mkdir(mode=0o700)
-    app = stage / "InstPlot Studio Mac QA rc.3.app"
+    version = proofs[1]["version"]
+    app = stage / f"InstPlot Studio Mac QA {version}.app"
     shutil.copytree(root / "dmg-source-2/InstPlot Studio.app", app)
     assert digest(app / EXECUTABLE) == proofs[1]["binary_sha256"]
     run("codesign", "--verify", "--deep", "--strict", str(app))
-    assert run(str(app / EXECUTABLE), "--product-info").endswith("\t0.1.2-rc.3")
-    dmg = output / "InstPlot-Studio-Mac-QA-0.1.2-rc.3-aarch64.dmg"
+    assert run(str(app / EXECUTABLE), "--product-info").endswith("\t" + version)
+    dmg = output / f"InstPlot-Studio-Mac-QA-{version}-aarch64.dmg"
     run("hdiutil", "create", "-srcfolder", str(stage), "-format", "UDZO", "-fs", "HFS+",
-        "-volname", "Studio Mac QA rc.3", str(dmg))
+        "-volname", f"Studio Mac QA {version}", str(dmg))
     run("hdiutil", "verify", str(dmg))
     evidence = output / "evidence"
     evidence.mkdir(mode=0o700)
     for name in ("provenance.json", "build-proof.json", "success-proof.json"):
         shutil.copy2(root / name, evidence / name)
     shutil.copy2(root / "health-failure/rollback-proof.json", evidence / "rollback-proof.json")
-    save(output / "package-proof.json", {"version": "0.1.2-rc.3", "source_sha": provenance["source_sha"],
+    save(output / "package-proof.json", {"version": version, "source_sha": provenance["source_sha"],
         "binary_sha256": digest(app / EXECUTABLE), "dmg_sha256": digest(dmg), "size_bytes": dmg.stat().st_size,
         "scope": "local-isolated-QA-not-production-release", "bundle_id": provenance["bundle_id"],
         "signed_update_asset": False, "same_tested_binary": True, "codesign": "ad-hoc-not-notarized",
@@ -422,7 +441,8 @@ def main() -> None:
     elif args.action == "inspect-success":
         inspect_success(root, args.project_sha256 or "")
     elif args.action == "activate":
-        shutil.copyfile(root / "public/instplot-studio/releases/0.1.2-rc.3/metadata/2/manifest.json",
+        provenance = json.loads((root / "provenance.json").read_bytes())
+        shutil.copyfile(root / f"public/instplot-studio/releases/{provenance['candidate_version']}/metadata/2/manifest.json",
                         root / "public/instplot-studio/channels/prerelease/latest.json")
     else:
         with (root / "baseline-gui.log").open("ab") as log:
