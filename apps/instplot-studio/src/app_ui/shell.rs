@@ -27,6 +27,9 @@ impl eframe::App for StudioApp {
             match self.update_health.as_mut().unwrap().frame_ready(&context) {
                 Ok(true) => {
                     self.update_health = None;
+                    // Finish the health-only frame, then draw the normal editor
+                    // and project title without relying on new user input.
+                    context.request_repaint();
                 }
                 Ok(false) => {}
                 Err(error) => {

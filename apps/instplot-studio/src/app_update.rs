@@ -551,6 +551,12 @@ impl AppUpdateState {
                         Ok(prepared) => UpdatePhase::ReadyMac(prepared),
                         Err(explanation) => UpdatePhase::Failed { explanation },
                     };
+                    if std::mem::take(&mut self.update_and_restart)
+                        && matches!(self.phase, UpdatePhase::ReadyMac(_))
+                    {
+                        // The shell still owns the final save and draft gate.
+                        self.restart_requested = true;
+                    }
                     keep_receiver = false;
                 }
                 #[cfg(target_os = "macos")]
@@ -611,6 +617,14 @@ impl AppUpdateState {
                         Err(explanation) => UpdatePhase::Failed { explanation },
                     };
                     keep_receiver = false;
+                    #[cfg(target_os = "macos")]
+                    if self.update_and_restart {
+                        if let UpdatePhase::Downloaded { path, update } = self.phase.clone() {
+                            self.start_macos_preparation(context, &path, &update.version);
+                        } else {
+                            self.update_and_restart = false;
+                        }
+                    }
                     #[cfg(all(windows, feature = "in-place-update-preview"))]
                     if self.update_and_restart {
                         if let UpdatePhase::Downloaded { path, update } = self.phase.clone() {
@@ -800,7 +814,10 @@ impl AppUpdateState {
                 }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    let one_click = cfg!(all(windows, feature = "in-place-update-preview"));
+                    let one_click = cfg!(all(
+                        any(windows, target_os = "macos"),
+                        feature = "in-place-update-preview"
+                    ));
                     if ui
                         .button(if one_click {
                             "更新并重启"
@@ -869,17 +886,9 @@ impl AppUpdateState {
                 }
                 #[cfg(target_os = "macos")]
                 if cfg!(feature = "in-place-update-preview") && self.instance_guard.is_ok() {
-                    if ui.button("准备原位升级").clicked() {
-                        self.phase = UpdatePhase::PreparingMac;
-                        let (sender, receiver) = mpsc::channel();
-                        self.receiver = Some(receiver);
-                        let context = ui.ctx().clone();
-                        let path = path.clone();
-                        std::thread::spawn(move || {
-                            let result = crate::update_macos::prepare(&path, &update.version);
-                            let _ = sender.send(UpdateEvent::PreparedMac(Box::new(result)));
-                            context.request_repaint();
-                        });
+                    if ui.button("继续更新").clicked() {
+                        self.update_and_restart = true;
+                        self.start_macos_preparation(ui.ctx(), &path, &update.version);
                     }
                 } else {
                     ui.weak("原位升级仍在平台验证中，当前保留已校验安装包，不会自动退出或覆盖。");
@@ -1185,6 +1194,26 @@ impl AppUpdateState {
                 };
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn start_macos_preparation(&mut self, context: &egui::Context, path: &Path, version: &str) {
+        if !cfg!(feature = "in-place-update-preview") || self.instance_guard.is_err() {
+            self.update_and_restart = false;
+            self.explain_blocked("当前安装不能安全原位更新；原窗口保持打开。".into());
+            return;
+        }
+        self.phase = UpdatePhase::PreparingMac;
+        let (sender, receiver) = mpsc::channel();
+        self.receiver = Some(receiver);
+        let context = context.clone();
+        let path = path.to_path_buf();
+        let version = version.to_owned();
+        std::thread::spawn(move || {
+            let result = crate::update_macos::prepare(&path, &version);
+            let _ = sender.send(UpdateEvent::PreparedMac(Box::new(result)));
+            context.request_repaint();
+        });
     }
 
     #[cfg(all(windows, feature = "in-place-update-preview"))]
@@ -2193,6 +2222,65 @@ mod tests {
             if explanation == "helper identity mismatch"));
         assert!(!state.take_close_request());
         assert!(state.receiver.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_one_click_preparation_requests_work_gate_once_not_close() {
+        use instplot_studio::update_transaction::{UpdateIdentity, UpdateTransaction};
+        let root = std::env::temp_dir().join("instplot-mac-event-fixture");
+        let transaction = UpdateTransaction::new(UpdateIdentity {
+            product: "instplot-studio".into(),
+            platform: "macos-aarch64".into(),
+            installed_path: root.join("Studio.app"),
+            previous_version: "0.1.2-rc.2".into(),
+            candidate_version: "0.1.2-rc.3".into(),
+            candidate_sha256: "a".repeat(64),
+            candidate_size: 100,
+        })
+        .unwrap();
+        // Event-state test only: this is not a verified bundle or GUI proof.
+        let prepared = serde_json::from_value(serde_json::json!({
+            "directory": root.join("transaction"), "transaction": transaction,
+            "previous_binary_hash": "b".repeat(64),
+            "candidate_binary_hash": "a".repeat(64), "resume_project": null
+        }))
+        .unwrap();
+        let mut state = AppUpdateState::default();
+        state.phase = UpdatePhase::PreparingMac;
+        state.update_and_restart = true;
+        let (sender, receiver) = mpsc::channel();
+        state.receiver = Some(receiver);
+        sender
+            .send(UpdateEvent::PreparedMac(Box::new(Ok(prepared))))
+            .unwrap();
+        state.poll(&egui::Context::default());
+        assert!(matches!(state.phase, UpdatePhase::ReadyMac(_)));
+        assert!(state.take_restart_request());
+        assert!(!state.take_restart_request());
+        assert!(!state.take_close_request());
+        assert!(!state.update_and_restart);
+        assert!(state.receiver.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_one_click_failures_never_request_restart_or_close() {
+        for event in [
+            UpdateEvent::Downloaded(Box::new(Err("bad signature".into()))),
+            UpdateEvent::PreparedMac(Box::new(Err("bad bundle".into()))),
+        ] {
+            let mut state = AppUpdateState::default();
+            state.update_and_restart = true;
+            let (sender, receiver) = mpsc::channel();
+            state.receiver = Some(receiver);
+            sender.send(event).unwrap();
+            state.poll(&egui::Context::default());
+            assert!(matches!(state.phase, UpdatePhase::Failed { .. }));
+            assert!(!state.take_restart_request());
+            assert!(!state.take_close_request());
+            assert!(!state.update_and_restart);
+        }
     }
 
     #[cfg(target_os = "macos")]

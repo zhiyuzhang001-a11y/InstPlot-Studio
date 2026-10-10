@@ -539,6 +539,7 @@ fn restart_previous(request: &PreparedMacUpdate) -> Result<(), String> {
 pub(super) struct HealthStartup {
     request: PreparedMacUpdate,
     receipt_written: bool,
+    activation_requested: bool,
 }
 impl HealthStartup {
     pub(super) fn load(directory: &Path) -> Result<Self, String> {
@@ -560,6 +561,7 @@ impl HealthStartup {
         Ok(Self {
             request,
             receipt_written: false,
+            activation_requested: false,
         })
     }
     pub(super) fn project(&self) -> Option<PathBuf> {
@@ -573,6 +575,7 @@ impl HealthStartup {
             context.send_viewport_cmd(eframe::egui::ViewportCommand::Close);
             return Ok(false);
         }
+        activate_health_window_once(context, &mut self.activation_requested);
         if !self.receipt_written {
             let receipt = HealthReceipt {
                 transaction_id: self.request.transaction.id().into(),
@@ -599,6 +602,16 @@ impl HealthStartup {
         Ok(state.id() == self.request.transaction.id()
             && state.identity() == self.request.transaction.identity()
             && state.stage() == UpdateStage::Completed)
+    }
+}
+
+// Activation is a request on the existing candidate, not a second launch and
+// not native visibility evidence. Real GUI acceptance verifies visibility.
+fn activate_health_window_once(context: &eframe::egui::Context, requested: &mut bool) {
+    if !std::mem::replace(requested, true) {
+        context.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
+        context.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(false));
+        context.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
     }
 }
 
@@ -836,6 +849,44 @@ fn error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_activation_is_one_request_on_existing_viewport() {
+        let context = eframe::egui::Context::default();
+        let mut requested = false;
+        let mut output = context.run_ui(Default::default(), |ui| {
+            activate_health_window_once(ui.ctx(), &mut requested);
+            activate_health_window_once(ui.ctx(), &mut requested);
+        });
+        let commands = &output.viewport_output[&eframe::egui::ViewportId::ROOT].commands;
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, eframe::egui::ViewportCommand::Visible(true)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(
+                    command,
+                    eframe::egui::ViewportCommand::Minimized(false)
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| matches!(command, eframe::egui::ViewportCommand::Focus))
+                .count(),
+            1
+        );
+        assert!(requested);
+        // Dispose egui texture deltas according to its headless test contract.
+        output.textures_delta.clear();
+    }
 
     struct Fixture {
         root: PathBuf,
