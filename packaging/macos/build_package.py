@@ -127,7 +127,6 @@ def main() -> int:
         run(
             "hdiutil",
             "create",
-            "-quiet",
             "-fs",
             "HFS+",
             "-volname",

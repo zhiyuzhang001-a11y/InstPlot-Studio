@@ -92,12 +92,40 @@ def verify_private_key(private_key: Path, public_key_hex: str) -> None:
         raise ValueError("private key does not match the configured public key")
 
 
-def load_asset_spec(path: Path) -> dict[str, Any]:
+def validate_windows_contract(value: Any) -> dict[str, Any]:
+    protocols = {
+        "schema", "helper_protocol", "transaction_schema",
+        "candidate_health_protocol", "recovery_health_protocol",
+    }
+    hashes = {"executable_sha256", "license_sha256"}
+    if not isinstance(value, dict) or set(value) != protocols | hashes:
+        raise ValueError("invalid windows_in_place contract fields")
+    if any(type(value[key]) is not int or value[key] != 1 for key in protocols):
+        raise ValueError("unsupported windows_in_place protocol")
+    if any(not isinstance(value[key], str) or not re.fullmatch(r"[0-9a-f]{64}", value[key]) for key in hashes):
+        raise ValueError("invalid windows_in_place fixed-file hash")
+    return dict(value)
+
+
+def load_asset_spec(path: Path, *, allow_windows_in_place: bool = False) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("platforms"), dict):
         raise ValueError("asset specification must contain a platforms object")
     if not payload["platforms"]:
         raise ValueError("asset specification must contain at least one platform")
+    for platform, platform_spec in payload["platforms"].items():
+        if isinstance(platform_spec, dict) and "windows_in_place" in platform_spec:
+            if not allow_windows_in_place:
+                raise ValueError("windows_in_place publication is not enabled")
+            if platform != "windows-x86_64":
+                raise ValueError("windows_in_place requires windows-x86_64")
+            validate_windows_contract(platform_spec["windows_in_place"])
+            packages = platform_spec.get("packages")
+            if platform_spec.get("preferred") != "inno-setup" or not isinstance(packages, list) or not any(
+                isinstance(package, dict) and package.get("id") == "inno-setup"
+                and package.get("package_type") == "exe-installer" for package in packages
+            ):
+                raise ValueError("windows_in_place requires the preferred Inno installer")
     return payload
 
 
@@ -115,6 +143,7 @@ def prepare(
     published_at: str,
     expires_at: str,
     output: Path,
+    allow_windows_in_place: bool = False,
 ) -> tuple[Path, Path, Path]:
     channel = channel_for(version)
     if release_sequence < 1:
@@ -134,11 +163,13 @@ def prepare(
     ):
         raise ValueError("expires_at must be later than published_at")
 
+    # Reject unsupported capability declarations before accessing signing
+    # material or replacing any existing staging directory.
+    spec = load_asset_spec(asset_spec_path, allow_windows_in_place=allow_windows_in_place)
     private_key = private_key.resolve()
     if not private_key.is_file():
         raise ValueError(f"private key not found: {private_key}")
     verify_private_key(private_key, public_key_hex)
-    spec = load_asset_spec(asset_spec_path)
 
     staged_root = output.resolve() / product
     if staged_root.exists():
@@ -208,6 +239,8 @@ def prepare(
             "packages": sorted(prepared_packages, key=lambda item: item["id"]),
             "preferred": preferred,
         }
+        if "windows_in_place" in platform_spec:
+            platforms[platform]["windows_in_place"] = validate_windows_contract(platform_spec["windows_in_place"])
 
     signature_url = (
         f"{public_root}/releases/{quote(version)}/metadata/"
@@ -263,6 +296,8 @@ def main() -> int:
     parser.add_argument("--published-at", default=utc_now())
     parser.add_argument("--expires-at", required=True)
     parser.add_argument("--output", type=Path, default=Path("target/oss-upload"))
+    parser.add_argument("--windows-in-place-metadata", action="store_true",
+                        help="Explicitly sign validated Windows compatibility metadata; does not enable the client entry or certify GUI acceptance")
     args = parser.parse_args()
     try:
         paths = prepare(
@@ -278,6 +313,7 @@ def main() -> int:
             published_at=args.published_at,
             expires_at=args.expires_at,
             output=args.output,
+            allow_windows_in_place=args.windows_in_place_metadata,
         )
     except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
         parser.error(str(error))

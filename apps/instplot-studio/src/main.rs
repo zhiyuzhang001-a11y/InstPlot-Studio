@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -16,6 +18,8 @@ mod startup;
 mod text_input;
 mod ui_chrome;
 mod ui_text;
+#[cfg(target_os = "macos")]
+mod update_macos;
 mod workspace;
 
 use app_state::*;

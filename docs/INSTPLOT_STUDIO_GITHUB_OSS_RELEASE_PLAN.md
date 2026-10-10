@@ -1,5 +1,7 @@
 # InstPlot Studio GitHub + OSS 自动发布与更新计划
 
+> 后续方案（2026-10-01）：应用内原位替换、重启与恢复见 `INSTPLOT_STUDIO_IN_PLACE_AUTO_UPDATE_PLAN.md`（待确认、未实施）。本文件的“不实现自动覆盖”是原发布阶段边界，不代表新方案已完成；已有签名发布契约继续有效。
+
 > 状态：`IN PROGRESS — OIDC VERIFIED; TRUST ROOT AND CLIENT IMPLEMENTATION`
 > 制定日期：2026-09-29
 > 当前发布基线：`v0.1.1`

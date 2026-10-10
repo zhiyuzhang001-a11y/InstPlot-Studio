@@ -21,14 +21,20 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayName=InstPlot Studio
+SetupIconFile={#SourceDir}\InstPlotStudio.ico
+UninstallDisplayIcon={app}\{#AppExeName},0
 VersionInfoVersion={#MyVersionInfoVersion}
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\instplot-studio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\InstPlot Studio"; Filename: "{app}\{#AppExeName}"
+Name: "{autoprograms}\InstPlot Studio"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; IconIndex: 0
+Name: "{autodesktop}\InstPlot Studio"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\{#AppExeName}"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch InstPlot Studio"; Flags: nowait postinstall skipifsilent

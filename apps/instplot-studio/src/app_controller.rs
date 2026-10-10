@@ -9,6 +9,7 @@ mod interaction;
 mod lifecycle;
 mod selection_windows;
 mod tool_windows;
+mod update_workflow;
 
 pub(super) fn export_confirmation_text(language: UiLanguage, error_count: usize) -> &'static str {
     language.text(if error_count > 0 {

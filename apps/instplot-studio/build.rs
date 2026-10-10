@@ -21,6 +21,7 @@ struct TrustKey {
 }
 
 fn main() {
+    embed_windows_icon();
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let trust_path = manifest_dir.join("../../packaging/update/trust.json");
     println!("cargo:rerun-if-changed={}", trust_path.display());
@@ -68,3 +69,21 @@ fn main() {
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("update_trust.rs");
     fs::write(output, generated).expect("write generated update trust constants");
 }
+
+#[cfg(windows)]
+fn embed_windows_icon() {
+    let icon = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"))
+        .join("assets/InstPlotStudio.ico");
+    println!("cargo:rerun-if-changed={}", icon.display());
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        winresource::WindowsResource::new()
+            .set_icon(icon.to_str().expect("icon path"))
+            .set("ProductName", "InstPlot Studio")
+            .set("FileDescription", "InstPlot Studio")
+            .compile()
+            .expect("embed Windows product icon");
+    }
+}
+
+#[cfg(not(windows))]
+fn embed_windows_icon() {}

@@ -310,7 +310,7 @@ pub enum ErrorStatistic {
     StandardError,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ManualAxisInput {
     pub name: String,
     pub measurements: Vec<String>,
@@ -325,7 +325,7 @@ impl ManualAxisInput {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ManualDataGroupInput {
     pub group_id: String,
     pub source_name: String,
@@ -380,7 +380,7 @@ impl ManualDataGroupInput {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ManualDataInput {
     pub groups: Vec<ManualDataGroupInput>,
 }

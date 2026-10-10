@@ -31,15 +31,27 @@ on:
       - "LICENSE"
       - ".github/workflows/**"
   workflow_dispatch:
+    inputs:
+      windows_gui_qa_action:
+        description: Isolated Windows GUI QA only (never a production release)
+        type: choice
+        default: "off"
+        options: ["off", build, publish, activate, desktop-smoke, desktop-e2e]
+      windows_gui_qa_identity:
+        description: Existing QA artifact identity RUN_ID-ATTEMPT (publish/activate only)
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   quality:
+    if: ${{ !inputs.windows_gui_qa_action || inputs.windows_gui_qa_action == 'off' }}
     name: Quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows also builds two disposable versions and exercises installer recovery.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +77,7 @@ jobs:
         run: python3 scripts/check_repository_hygiene.py
 
       - name: Test release metadata tools
-        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py
+        run: python3 -m unittest scripts/test_update_release.py scripts/test_release_tools.py scripts/test_install_studio_macos.py scripts/test_windows_gui_qa.py scripts/test_windows_gui_e2e_fixture.py
 
       - name: Run all tests and examples
         run: cargo test --workspace --locked --all-targets --all-features --no-fail-fast
@@ -89,6 +101,11 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release --locked --package instplot-studio
+
+      - name: Verify embedded Windows product icon
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify_windows_icon.ps1 -Executable target/release/instplot-studio.exe
 
       - name: Read product version
         shell: bash
@@ -117,23 +134,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $actual = & target/release/instplot-studio.exe --product-info
+          . ./scripts/invoke_studio_probe.ps1
+          $actual = Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--product-info')
           $expected = "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION"
           if ($actual -ne $expected) { throw "Unexpected product identity: $actual" }
-          & target/release/instplot-studio.exe --export-fixed-pdf target/b1-fixed.pdf
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--export-fixed-pdf', 'target/b1-fixed.pdf') | Out-Host
           if (-not (Test-Path target/b1-fixed.pdf)) { throw "Headless PDF was not created" }
           if ((Get-Item target/b1-fixed.pdf).Length -lt 1000) { throw "Headless PDF is unexpectedly small" }
-          & target/release/instplot-studio.exe --export-fixed-png target/b3-fixed.png
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--export-fixed-png', 'target/b3-fixed.png') | Out-Host
           if (-not (Test-Path target/b3-fixed.png)) { throw "Headless PNG was not created" }
           if ((Get-Item target/b3-fixed.png).Length -lt 1000) { throw "Headless PNG is unexpectedly small" }
-          & target/release/instplot-studio.exe --create-project target/b2-ci.instplot
-          & target/release/instplot-studio.exe --check-project target/b2-ci.instplot
-          & target/release/instplot-studio.exe --publication-check target/b2-ci.instplot | Out-File -Encoding utf8 target/b4-publication-check.json
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--create-project', 'target/b2-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--check-project', 'target/b2-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--publication-check', 'target/b2-ci.instplot') | Out-File -Encoding utf8 target/b4-publication-check.json
           if (-not (Test-Path target/b4-publication-check.json)) { throw "Publication Check report was not created" }
           if ((Get-Item target/b4-publication-check.json).Length -lt 1000) { throw "Publication Check report is unexpectedly small" }
-          & target/release/instplot-studio.exe --create-handoff apps/instplot-studio/tests/fixtures/lite-source-fit.txt target/b5-ci.instplot-handoff
-          & target/release/instplot-studio.exe --import-handoff target/b5-ci.instplot-handoff target/b5-ci.instplot
-          & target/release/instplot-studio.exe --check-project target/b5-ci.instplot
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--create-handoff', 'apps/instplot-studio/tests/fixtures/lite-source-fit.txt', 'target/b5-ci.instplot-handoff') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--import-handoff', 'target/b5-ci.instplot-handoff', 'target/b5-ci.instplot') | Out-Host
+          Invoke-StudioProbe 'target/release/instplot-studio.exe' @('--check-project', 'target/b5-ci.instplot') | Out-Host
 
       - name: Build, install, and remove Linux packages
         if: runner.os == 'Linux'
@@ -189,11 +207,14 @@ jobs:
           $installer = "target/packages/windows/InstPlot-Studio-$env:INSTPLOT_VERSION-windows-x86_64-setup.exe"
           $installRoot = Join-Path $env:RUNNER_TEMP "instplot-studio-ci"
           $installProcess = Start-Process -FilePath $installer -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=$installRoot"
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/TASKS=desktopicon', "/DIR=$installRoot"
           ) -Wait -PassThru
           if ($installProcess.ExitCode -ne 0) { throw "Installer failed with $($installProcess.ExitCode)" }
           $binary = Join-Path $installRoot "instplot-studio.exe"
-          $actual = & $binary --product-info
+          $shortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'InstPlot Studio.lnk'
+          ./scripts/verify_windows_icon.ps1 -Executable $binary -Shortcut $shortcut
+          . ./scripts/invoke_studio_probe.ps1
+          $actual = Invoke-StudioProbe $binary @('--product-info')
           if ($actual -ne "InstPlot Studio`tinstplot-studio`t$env:INSTPLOT_VERSION") { throw "Unexpected installed identity: $actual" }
           $uninstallProcess = Start-Process -FilePath (Join-Path $installRoot "unins000.exe") -ArgumentList @(
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
@@ -201,3 +222,175 @@ jobs:
           if ($uninstallProcess.ExitCode -ne 0) { throw "Uninstaller failed with $($uninstallProcess.ExitCode)" }
           Start-Sleep -Seconds 2
           if (Test-Path $binary) { throw "Installed binary remains after uninstall" }
+
+      - name: Test Windows installer downgrade and recovery prototype
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test_windows_installer_recovery.ps1
+
+      - name: Verify signed metadata for both Windows preview installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:INSTPLOT_WINDOWS_PREVIEW_KIT = (Resolve-Path 'target/windows-update-recovery/preview-kit').Path
+          python3 -m unittest scripts.test_update_release.UpdateReleaseTests.test_real_preview_installers_have_verified_signed_fixture_metadata
+          if ($LASTEXITCODE -ne 0) { throw 'Windows preview fixture signing verification failed' }
+
+      - name: Upload Windows recovery prototype evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-update-recovery-prototype
+          path: target/windows-update-recovery/
+          if-no-files-found: warn
+
+  windows-desktop-smoke:
+    # Diagnostic only: consume existing exact QA packages, never rebuild/publish.
+    if: ${{ inputs.windows_gui_qa_action == 'desktop-smoke' }}
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify real desktop windows for the frozen preview packages
+        shell: pwsh
+        run: ./scripts/test_windows_desktop_smoke.ps1
+      - name: Preserve native window evidence and screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-desktop-smoke-${{ github.run_id }}
+          path: target/windows-desktop-smoke/
+          if-no-files-found: error
+
+  windows-gui-e2e:
+    # Strict local TLS/fixture-snapshot GUI acceptance, never a public release.
+    if: ${{ inputs.windows_gui_qa_action == 'desktop-e2e' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Parse desktop fixture PowerShell before costly builds
+        shell: pwsh
+        run: |
+          foreach ($file in @('scripts/test_windows_gui_e2e.ps1', 'scripts/test_windows_installer_recovery.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { $errors | Format-List; throw 'PowerShell fixture syntax errors' }
+          }
+      - name: Validate fixture guards and native root-window behavior
+        shell: pwsh
+        run: |
+          python3 -m unittest scripts.test_windows_gui_e2e_fixture
+          if ($LASTEXITCODE -ne 0) { throw 'GUI fixture guard tests failed' }
+          cargo test --locked --package instplot-studio --lib update_windows::window::tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native root-window tests failed' }
+      - name: Run actual desktop input, update and visible restart on isolated TLS snapshot
+        shell: pwsh
+        run: ./scripts/test_windows_gui_e2e.ps1
+      - name: Preserve GUI screenshots, exact fixture provenance and phase timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-gui-e2e-${{ github.run_id }}
+          path: target/windows-gui-e2e/
+          if-no-files-found: error
+
+  windows-gui-qa-build:
+    if: ${{ inputs.windows_gui_qa_action == 'build' }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify isolated publishing guards
+        run: python3 -m unittest scripts.test_windows_gui_qa scripts.test_release_tools.WindowsProbeTests
+      - name: Build both isolated preview installers (no installed app changed)
+        shell: pwsh
+        run: |
+          $identity = "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $root = "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/$identity"
+          ./scripts/test_windows_installer_recovery.ps1 -KitOnly -FixturePublicRoot $root
+          $source = (git rev-parse HEAD).Trim()
+          python3 scripts/windows_gui_qa.py stage --kit target/windows-update-recovery/preview-kit `
+            --output target/windows-gui-qa --identity $identity --source-sha $source `
+            --private-key $env:INSTPLOT_WINDOWS_PREVIEW_FIXTURE_KEY
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated GUI QA signing/staging failed' }
+      - name: Upload only public assets and inventory (never private keys)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-gui-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/windows-gui-qa/public/
+            target/windows-gui-qa/inventory.json
+          if-no-files-found: error
+          retention-days: 30
+
+  windows-gui-qa-publish:
+    # Main and the existing protected Environment are mandatory. No branch-policy bypass.
+    if: ${{ github.ref == 'refs/heads/main' && (inputs.windows_gui_qa_action == 'publish' || inputs.windows_gui_qa_action == 'activate') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    environment: release-production
+    concurrency:
+      group: studio-windows-gui-qa-${{ inputs.windows_gui_qa_identity }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      QA_IDENTITY: ${{ inputs.windows_gui_qa_identity }}
+      QA_ACTION: ${{ inputs.windows_gui_qa_action }}
+      GH_TOKEN: ${{ github.token }}
+      ALIYUN_OIDC_PROVIDER_ARN: ${{ vars.ALIYUN_OIDC_PROVIDER_ARN }}
+      ALIYUN_ROLE_ARN: ${{ vars.ALIYUN_ROLE_ARN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch and validate the exact public QA artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${QA_IDENTITY}" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
+          run_id=${QA_IDENTITY%-*}
+          source_sha=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+            --jq 'select(.conclusion == "success" and .event == "workflow_dispatch" and .path == ".github/workflows/instplot-studio.yml") | .head_sha')
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]]
+          gh run download "${run_id}" --repo "${GITHUB_REPOSITORY}" --name "windows-gui-qa-${QA_IDENTITY}" --dir target/windows-gui-qa
+          test "$(python3 -c 'import json; print(json.load(open("target/windows-gui-qa/public/qa-index.json"))["source_sha"])')" = "${source_sha}"
+          python3 scripts/windows_gui_qa.py validate --output target/windows-gui-qa --identity "${QA_IDENTITY}"
+      - name: Install pinned ossutil
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/ossutil.zip"
+          curl --fail --silent --show-error --location \
+            https://gosspublic.alicdn.com/ossutil/v2/2.3.0/ossutil-2.3.0-linux-amd64.zip --output "${archive}"
+          echo "3ae4d9fc85a7a6e9f5654d1599766f1a3a42a3692870887b5ae9338d582ef65a  ${archive}" | sha256sum --check --strict
+          unzip -q "${archive}" -d "${RUNNER_TEMP}"
+          install -m 0755 "${RUNNER_TEMP}/ossutil-2.3.0-linux-amd64/ossutil" "${RUNNER_TEMP}/ossutil"
+      - name: Assume existing OIDC role (no signing secret accessed)
+        uses: aliyun/configure-aliyun-credentials-action@1e5248c8d5d93a8781ac344a68e19a43341e79e6 # v1
+        with:
+          oidc-provider-arn: ${{ env.ALIYUN_OIDC_PROVIDER_ARN }}
+          role-to-assume: ${{ env.ALIYUN_ROLE_ARN }}
+          role-session-name: studio-gui-qa-${{ github.run_id }}
+          role-session-expiration: 900
+          audience: sts.aliyuncs.com
+      - name: Publish and verify only the run-specific QA prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OSS_ACCESS_KEY_ID="${ALIBABA_CLOUD_ACCESS_KEY_ID}"
+          export OSS_ACCESS_KEY_SECRET="${ALIBABA_CLOUD_ACCESS_KEY_SECRET}"
+          export OSS_SESSION_TOKEN="${ALIBABA_CLOUD_SECURITY_TOKEN}"
+          python3 scripts/windows_gui_qa.py "${QA_ACTION}" --output target/windows-gui-qa \
+            --identity "${QA_IDENTITY}" --ossutil "${RUNNER_TEMP}/ossutil"
+      - name: Preserve public verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-gui-qa-public-verification-${{ github.run_id }}
+          path: |
+            target/windows-gui-qa/public/qa-index.json
+            target/windows-gui-qa/inventory.json
+            target/windows-gui-qa/publication-result.json
+          if-no-files-found: warn

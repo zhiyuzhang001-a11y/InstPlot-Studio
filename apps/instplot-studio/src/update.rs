@@ -68,6 +68,40 @@ pub struct UpdatePackage {
 pub struct UpdatePlatform {
     pub packages: Vec<UpdatePackage>,
     pub preferred: String,
+    /// Absent on legacy releases: download remains supported, automatic
+    /// application must fail closed. Covered by the existing raw-byte signature.
+    #[serde(default)]
+    pub windows_in_place: Option<WindowsInPlaceContract>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WindowsInPlaceContract {
+    pub schema: u32,
+    pub helper_protocol: u32,
+    pub transaction_schema: u32,
+    pub candidate_health_protocol: u32,
+    pub recovery_health_protocol: u32,
+    pub executable_sha256: String,
+    pub license_sha256: String,
+}
+
+impl WindowsInPlaceContract {
+    fn structurally_valid(&self) -> bool {
+        self.schema == 1
+            && self.helper_protocol > 0
+            && self.transaction_schema > 0
+            && self.candidate_health_protocol > 0
+            && self.recovery_health_protocol > 0
+            && [&self.executable_sha256, &self.license_sha256]
+                .into_iter()
+                .all(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -103,6 +137,23 @@ pub struct AllowedUpdateRoot {
 }
 
 impl AllowedUpdateRoot {
+    /// Canonical identity for persistent state; trust-key rotation keeps the
+    /// same namespace, while another host, port or path gets its own state.
+    pub fn state_namespace(&self) -> String {
+        format!(
+            "{}://{}:{}{}",
+            self.scheme, self.host, self.port, self.path_prefix
+        )
+    }
+
+    /// Legacy channel-only records came from the original production feed.
+    /// This identity must not follow the fixture-overridden build constant.
+    pub fn owns_legacy_state(&self) -> bool {
+        *self
+            == Self::parse("https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio")
+                .expect("fixed legacy production root")
+    }
+
     pub fn parse(value: &str) -> Result<Self, SignedManifestError> {
         let parsed = Url::parse(value)
             .map_err(|error| SignedManifestError::InvalidUrl(error.to_string()))?;
@@ -320,6 +371,13 @@ fn validate_manifest(
         ));
     }
     for (platform, assets) in &manifest.platforms {
+        if let Some(contract) = &assets.windows_in_place
+            && (platform != "windows-x86_64" || !contract.structurally_valid())
+        {
+            return Err(SignedManifestError::Manifest(
+                "invalid Windows in-place installation contract".into(),
+            ));
+        }
         if assets.packages.is_empty() {
             return Err(SignedManifestError::Manifest(format!(
                 "platform {platform} has no packages"
@@ -560,6 +618,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(manifest.version, "0.1.2-rc.1");
+    }
+
+    #[test]
+    fn state_namespace_is_canonical_and_source_specific() {
+        let production = AllowedUpdateRoot::parse(
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio",
+        )
+        .unwrap();
+        let equivalent = AllowedUpdateRoot::parse(
+            "https://INSTPLOT-RELEASE.oss-cn-beijing.aliyuncs.com:443/instplot-studio/",
+        )
+        .unwrap();
+        assert_eq!(production.state_namespace(), equivalent.state_namespace());
+        assert!(equivalent.owns_legacy_state());
+        for value in [
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com/instplot-studio/windows-gui-qa/123-1",
+            "https://instplot-release.oss-cn-beijing.aliyuncs.com:444/instplot-studio",
+            "https://another.example/instplot-studio",
+        ] {
+            let other = AllowedUpdateRoot::parse(value).unwrap();
+            assert_ne!(other.state_namespace(), production.state_namespace());
+            assert!(!other.owns_legacy_state());
+        }
     }
 
     #[test]

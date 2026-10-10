@@ -1,0 +1,2062 @@
+//! Private, bound handoff to a copy of the RUNNING old application.
+//! Preparing/loading this request never closes a GUI or executes an installer.
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
+use std::os::windows::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+use crate::update_transaction::{TransactionStore, UpdateIdentity, UpdateStage, UpdateTransaction};
+
+use super::{
+    InstallScope, PinnedWindowsInstallerPair, PreparedWindowsInstallers, STUDIO_APP_ID,
+    TrackedWindowsProcess, VerifiedWindowsInstaller, WindowsInstallRecord, WindowsInstallation,
+    WindowsInstallerPair, invalid,
+};
+
+const HELPER_NAME: &str = "instplot-update-helper.exe";
+
+/// Diagnostic only: never read to authorize readiness, installation or exit.
+/// Preserve phase boundaries so a slow cold start is not confused with a lock
+/// or package-validation delay. No keys, nonce or project contents are logged.
+struct HelperPreflightTrace {
+    started: std::time::Instant,
+    phases: std::cell::RefCell<Vec<(&'static str, u128)>>,
+}
+
+impl HelperPreflightTrace {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            phases: Default::default(),
+        }
+    }
+
+    fn phase(&self, directory: &Path, name: &'static str) {
+        self.phases
+            .borrow_mut()
+            .push((name, self.started.elapsed().as_millis()));
+        if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "scope": "diagnostic-only-not-readiness-proof",
+            "process_id": std::process::id(),
+            "phases": &*self.phases.borrow(),
+        })) {
+            // Diagnostics cannot weaken gates or turn a valid transaction into
+            // a failure merely because the diagnostic write was unavailable.
+            let _ = super::write_private_atomic(&directory.join("helper-preflight.json"), &bytes);
+        }
+    }
+}
+
+/// Separate parent-owned signal: the helper is the sole journal writer while
+/// alive. Never acquire its journal lock to request cancellation.
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParentCancellation {
+    schema: u32,
+    transaction_id: String,
+    nonce: String,
+    identity: UpdateIdentity,
+    process_id: u32,
+    process_created: u64,
+}
+
+impl ParentCancellation {
+    fn for_request(request: &HelperRequest) -> Self {
+        Self {
+            schema: 1,
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            identity: request.identity.clone(),
+            process_id: request.old_process_id,
+            process_created: request.old_process_created,
+        }
+    }
+}
+
+fn cancellation_requested(directory: &Path, request: &HelperRequest) -> io::Result<bool> {
+    let bytes = match read_private(&directory.join("parent-cancel.json"), 4096) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let signal: ParentCancellation = serde_json::from_slice(&bytes).map_err(invalid)?;
+    if signal != ParentCancellation::for_request(request) {
+        return Err(invalid("foreign parent cancellation signal"));
+    }
+    Ok(true)
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssetBinding {
+    cache: PathBuf,
+    version: String,
+    manifest_sha256: String,
+    package_sha256: String,
+    package_size: u64,
+}
+
+impl AssetBinding {
+    fn from_installer(installer: &VerifiedWindowsInstaller) -> io::Result<Self> {
+        Ok(Self {
+            cache: fs::canonicalize(
+                installer
+                    .path()
+                    .parent()
+                    .ok_or_else(|| invalid("missing cache"))?,
+            )?,
+            version: installer.version().to_string(),
+            manifest_sha256: installer.manifest_sha256().into(),
+            package_sha256: installer.sha256().into(),
+            package_size: installer.size_bytes(),
+        })
+    }
+
+    fn require(&self, installer: &VerifiedWindowsInstaller) -> io::Result<()> {
+        let actual = Self::from_installer(installer)?;
+        if self.cache != actual.cache
+            || self.version != actual.version
+            || self.manifest_sha256 != actual.manifest_sha256
+            || self.package_sha256 != actual.package_sha256
+            || self.package_size != actual.package_size
+        {
+            return Err(invalid("installer differs from prepared request"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelperRequest {
+    schema: u32,
+    transaction_id: String,
+    nonce: String,
+    identity: UpdateIdentity,
+    desktop_shortcut: bool,
+    old_process_id: u32,
+    old_process_created: u64,
+    previous_binary_sha256: String,
+    previous_license_sha256: String,
+    resume_project: Option<super::WindowsResumeProject>,
+    recovery: AssetBinding,
+    candidate: AssetBinding,
+}
+
+impl HelperRequest {
+    fn transaction(&self) -> io::Result<UpdateTransaction> {
+        if self.schema != 1
+            || self.identity.platform != "windows-x86_64"
+            || self.old_process_id == 0
+            || self.old_process_created == 0
+            || self.previous_binary_sha256.len() != 64
+            || !self
+                .previous_binary_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || self.previous_license_sha256 != expected_license_sha256()
+            || self.recovery.version != self.identity.previous_version
+            || self.candidate.version != self.identity.candidate_version
+            || self.candidate.package_sha256 != self.identity.candidate_sha256
+            || self.candidate.package_size != self.identity.candidate_size
+        {
+            return Err(invalid("invalid Windows helper request binding"));
+        }
+        UpdateTransaction::prepared(
+            self.transaction_id.clone(),
+            self.nonce.clone(),
+            self.identity.clone(),
+        )
+    }
+
+    fn installation(&self) -> io::Result<WindowsInstallation> {
+        let record = WindowsInstallRecord {
+            app_id: STUDIO_APP_ID.into(),
+            scope: InstallScope::CurrentUser,
+            directory: self.identity.installed_path.clone(),
+            version: self.identity.previous_version.clone(),
+            desktop_shortcut: self.desktop_shortcut,
+        };
+        WindowsInstallation::bind(
+            &record,
+            &record.directory.join("instplot-studio.exe"),
+            &record.version,
+        )
+    }
+}
+
+/// Holds the helper executable lease. No spawn or exit request is made here.
+pub struct PreparedWindowsHelper {
+    directory: PathBuf,
+    request: HelperRequest,
+    _helper_lease: File,
+    _installers: PinnedWindowsInstallerPair,
+    _resume_lease: Option<File>,
+}
+
+impl PreparedWindowsHelper {
+    pub fn create(prepared: &PreparedWindowsInstallers) -> io::Result<Self> {
+        let installed = prepared.installation();
+        super::native::revalidate_installation(installed)?;
+        if fs::canonicalize(std::env::current_exe()?)? != installed.executable()
+            || installed.version().to_string() != env!("CARGO_PKG_VERSION")
+        {
+            return Err(invalid(
+                "helper must be copied from the exact running old installation",
+            ));
+        }
+        let candidate = prepared.installers().candidate.installer();
+        let recovery = prepared.installers().recovery.installer();
+        candidate.revalidate()?;
+        recovery.revalidate()?;
+        // Do not start a bootstrap update from legacy packages that cannot
+        // perform the required independent old/new GUI health handshakes.
+        if !cfg!(feature = "in-place-update-preview") {
+            return Err(invalid("this build has no Windows health entry points"));
+        }
+        candidate.require_supported_contract()?;
+        recovery.require_installed_files(installed.directory())?;
+        let previous_license_sha256 = verified_license(installed.directory())?;
+        let transaction = UpdateTransaction::new(UpdateIdentity {
+            product: "instplot-studio".into(),
+            platform: "windows-x86_64".into(),
+            installed_path: installed.directory().to_path_buf(),
+            previous_version: installed.version().to_string(),
+            candidate_version: candidate.version().to_string(),
+            candidate_sha256: candidate.sha256().into(),
+            candidate_size: candidate.size_bytes(),
+        })?;
+        let root = transaction_root()?;
+        let directory = root.join(transaction.id());
+        super::create_private_directory(&directory)?;
+        let directory = fs::canonicalize(directory)?;
+        let store = TransactionStore::lock(&directory)?;
+        let (helper_lease, previous_binary_sha256) =
+            copy_helper(installed.executable(), &directory.join(HELPER_NAME))?;
+        let request = HelperRequest {
+            schema: 1,
+            transaction_id: transaction.id().into(),
+            nonce: transaction.health_nonce().into(),
+            identity: transaction.identity().clone(),
+            desktop_shortcut: installed.desktop_shortcut(),
+            old_process_id: std::process::id(),
+            old_process_created: super::current_process_created()?,
+            previous_binary_sha256,
+            previous_license_sha256,
+            resume_project: None,
+            recovery: AssetBinding::from_installer(recovery)?,
+            candidate: AssetBinding::from_installer(candidate)?,
+        };
+        request.transaction()?;
+        let installers = request.verify_installers()?;
+        write_new_json(&directory.join("request.json"), &request)?;
+        store.write(&transaction)?;
+        drop(store);
+        Ok(Self {
+            directory,
+            request,
+            _helper_lease: helper_lease,
+            _installers: installers,
+            _resume_lease: None,
+        })
+    }
+
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+    /// Best-effort diagnostic only; no readiness or installation authorization.
+    pub fn record_parent_preparation(&self, creation_ms: u128, resume_ms: u128) {
+        if let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "scope": "diagnostic-only-not-readiness-proof",
+            "process_id": std::process::id(), "creation_ms": creation_ms, "resume_ms": resume_ms,
+        })) {
+            let _ = super::write_private_atomic(
+                &self.directory.join("parent-preparation.json"),
+                &bytes,
+            );
+        }
+    }
+    pub fn helper_executable(&self) -> PathBuf {
+        self.directory.join(HELPER_NAME)
+    }
+
+    /// Only after saving/discarding drafts and freezing the old editor. This
+    /// binds an existing saved primary file; it does not save user work itself.
+    pub fn set_resume_project(&mut self, project: Option<&Path>) -> io::Result<()> {
+        let store = TransactionStore::lock(&self.directory)?;
+        let state = store.read(&self.request.identity)?;
+        require_transaction(&self.request, &state, UpdateStage::Prepared)?;
+        let (binding, lease) = match project {
+            Some(path) => {
+                let (binding, lease) = super::WindowsResumeProject::capture(
+                    path,
+                    &self.request.identity.installed_path,
+                )?;
+                (Some(binding), Some(lease))
+            }
+            None => (None, None),
+        };
+        let mut request = self.request.clone();
+        request.resume_project = binding;
+        let bytes = serde_json::to_vec(&request).map_err(invalid)?;
+        if bytes.len() > 64 * 1024 {
+            return Err(invalid("oversized helper project handoff"));
+        }
+        super::write_private_atomic(&self.directory.join("request.json"), &bytes)?;
+        self.request = request;
+        self._resume_lease = lease;
+        Ok(())
+    }
+
+    /// Parent verifies an actual owned Child handle, not a supplied PID or a
+    /// ready file alone. Success still does not request or authorize GUI exit.
+    pub fn confirm_ready(&self, child: &std::process::Child) -> io::Result<()> {
+        confirm_process_ready(&self.directory, &self.request, child)?;
+        confirm_waiting_request(&self.directory, &self.request)?;
+        let installation = self.request.installation()?;
+        super::native::revalidate_installation(&installation)?;
+        require_original_files(&installation, &self.request)?;
+        // Re-observe the owned native helper after potentially slow file checks.
+        // The parent must not close based only on a stale ready file.
+        // The helper may have timed out while we hashed: its terminal journal
+        // must also veto close even if the actual process has not exited yet.
+        confirm_waiting_request(&self.directory, &self.request)?;
+        confirm_process_ready(&self.directory, &self.request, child)
+    }
+
+    /// Cheap authenticated acknowledgement probe. This is NOT a close gate.
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_ready_receipt(&self, child: &std::process::Child) -> io::Result<()> {
+        confirm_process_ready(&self.directory, &self.request, child)
+    }
+
+    /// Call only AFTER the work-protection controller has accepted user restart.
+    /// This arms the durable wait state, but does not spawn or close anything.
+    pub fn arm_waiting(&self) -> io::Result<()> {
+        let installed = self.request.installation()?;
+        super::native::revalidate_installation(&installed)?;
+        let _old = TrackedWindowsProcess::bind(
+            self.request.old_process_id,
+            self.request.old_process_created,
+            installed.executable(),
+        )?;
+        if digest_file(installed.executable())? != self.request.previous_binary_sha256
+            || digest_file(&self.helper_executable())? != self.request.previous_binary_sha256
+        {
+            return Err(invalid(
+                "old application or helper changed since preparation",
+            ));
+        }
+        require_original_files(&installed, &self.request)?;
+        let _resume = self
+            .request
+            .resume_project
+            .as_ref()
+            .map(|project| project.pin(installed.directory()))
+            .transpose()?;
+        let _installers = self.request.verify_installers()?;
+        let store = TransactionStore::lock(&self.directory)?;
+        let mut state = store.read(&self.request.identity)?;
+        require_transaction(&self.request, &state, UpdateStage::Prepared)?;
+        state.transition(UpdateStage::WaitingForExit)?;
+        store.write(&state)
+    }
+
+    /// Persist a cancellation request while the parent is still frozen/open.
+    /// The live helper owns the journal lock and commits the terminal state.
+    /// Afterwards
+    /// keep the owned helper Child and this object until the helper has exited;
+    /// only then drop project leases and unfreeze editing/saving. Ok alone is
+    /// not proof those leases were released. Matching durable cancellation is
+    /// verified read-only on a lost-ack retry.
+    #[cfg(feature = "in-place-update-preview")]
+    pub fn cancel_before_exit(&self) -> io::Result<()> {
+        self.verify_running_parent()?;
+        let state = crate::update_transaction::read_validated_snapshot(&self.directory)?;
+        require_transaction(&self.request, &state, state.stage())?;
+        if !matches!(
+            state.stage(),
+            UpdateStage::WaitingForExit | UpdateStage::FailedBeforeApply
+        ) {
+            return Err(invalid("cannot cancel after installation began"));
+        }
+        if cancellation_requested(&self.directory, &self.request)? {
+            return Ok(());
+        }
+        super::cache::write_private_atomic_new(
+            &self.directory.join("parent-cancel.json"),
+            &serde_json::to_vec(&ParentCancellation::for_request(&self.request))
+                .map_err(invalid)?,
+        )
+    }
+
+    /// Only the start-failure owner (which never obtained a Child) calls this.
+    /// Preparation/arming failures may still be Prepared rather than Waiting.
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn cancel_unspawned_before_exit(&self) -> io::Result<()> {
+        let store = TransactionStore::lock(&self.directory)?;
+        let stage = store.read(&self.request.identity)?.stage();
+        if stage == UpdateStage::Prepared {
+            abort_before_apply(
+                &store,
+                &self.request,
+                UpdateStage::Prepared,
+                "helper never spawned",
+                || self.verify_running_parent(),
+            )?;
+        } else if !cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+            abort_waiting(&store, &self.request, "helper never spawned", || {
+                self.verify_running_parent()
+            })?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_bound_parent_waiting(&self, target: &Path) -> io::Result<()> {
+        if fs::canonicalize(target)? != self.request.identity.installed_path {
+            return Err(invalid(
+                "parent installation lock belongs to another target",
+            ));
+        }
+        self.verify_running_parent()?;
+        confirm_waiting_request(&self.directory, &self.request)
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    pub(super) fn confirm_bound_parent_cancelled(&self, target: &Path) -> io::Result<()> {
+        if fs::canonicalize(target)? != self.request.identity.installed_path {
+            return Err(invalid(
+                "parent installation lock belongs to another target",
+            ));
+        }
+        self.verify_running_parent()?;
+        if !cancellation_requested(&self.directory, &self.request)? {
+            return Err(invalid("missing durable parent cancellation"));
+        }
+        // Called only after the owned Child has exited. The writer lock is now
+        // available; also cover a helper that exited before consuming signal.
+        let store = TransactionStore::lock(&self.directory)?;
+        if !cancelled_waiting(&store, &self.request, || self.verify_running_parent())? {
+            abort_waiting(
+                &store,
+                &self.request,
+                "parent cancelled before apply",
+                || self.verify_running_parent(),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    fn verify_running_parent(&self) -> io::Result<()> {
+        let installed = self.request.installation()?;
+        if self.request.old_process_id != std::process::id()
+            || self.request.old_process_created != super::current_process_created()?
+            || fs::canonicalize(std::env::current_exe()?)? != installed.executable()
+        {
+            return Err(invalid("cancellation is not from the bound running parent"));
+        }
+        let old = TrackedWindowsProcess::bind(
+            self.request.old_process_id,
+            self.request.old_process_created,
+            installed.executable(),
+        )?;
+        if old.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("parent already exited before cancellation"));
+        }
+        super::native::revalidate_installation(&installed)?;
+        require_original_files(&installed, &self.request)
+    }
+
+    /// Caller must freeze work first and retain the returned actual Child until
+    /// confirm_ready succeeds or cancellation is durably completed. This never
+    /// closes the GUI, waits for readiness, or accepts an arbitrary command.
+    #[cfg(feature = "in-place-update-preview")]
+    pub fn spawn_after_work_protection(&self) -> io::Result<std::process::Child> {
+        self.arm_waiting()?;
+        match helper_command(&self.helper_executable(), &self.directory).spawn() {
+            Ok(child) => Ok(child),
+            Err(spawn_error) => {
+                // CreateProcess failed: no child was returned and no install
+                // intent can exist. Preserve evidence if cancellation cannot
+                // be committed; never retry spawning this transaction.
+                let cancelled = (|| {
+                    let store = TransactionStore::lock(&self.directory)?;
+                    abort_waiting(&store, &self.request, "helper could not be started", || {
+                        let installation = self.request.installation()?;
+                        let old = TrackedWindowsProcess::bind(
+                            self.request.old_process_id,
+                            self.request.old_process_created,
+                            installation.executable(),
+                        )?;
+                        if old.wait_for_exit(std::time::Duration::ZERO)? {
+                            return Err(invalid("old application exited before helper failure"));
+                        }
+                        super::native::revalidate_installation(&installation)?;
+                        require_original_files(&installation, &self.request)
+                    })?;
+                    Ok::<_, io::Error>(())
+                })();
+                match cancelled {
+                    Ok(()) => Err(spawn_error),
+                    Err(cancel_error) => Err(invalid(format!(
+                        "helper spawn failed ({spawn_error}); cancellation requires inspection ({cancel_error})"
+                    ))),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "in-place-update-preview")]
+fn helper_command(executable: &Path, directory: &Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(executable);
+    command
+        .arg("--windows-update-helper")
+        .arg(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+    command
+}
+
+impl HelperRequest {
+    fn verify_installers(&self) -> io::Result<PinnedWindowsInstallerPair> {
+        let root = fs::canonicalize(super::private_download_root()?)?;
+        for cache in [&self.recovery.cache, &self.candidate.cache] {
+            super::reject_redirected_path(cache)?;
+            if fs::canonicalize(cache)? != *cache || !cache.starts_with(&root) || *cache == root {
+                return Err(invalid(
+                    "installer cache is outside the fixed private download root",
+                ));
+            }
+        }
+        let installed = self.installation()?;
+        let pair = WindowsInstallerPair::from_caches(
+            &installed,
+            &self.recovery.cache,
+            &self.candidate.cache,
+            &self.candidate.version,
+        )?;
+        self.recovery.require(pair.recovery())?;
+        self.candidate.require(pair.candidate())?;
+        pair.candidate().require_supported_contract()?;
+        pair.recovery()
+            .require_installed_files(installed.directory())?;
+        pair.pin()
+    }
+}
+
+/// Only the exact private helper executable can construct this capability.
+/// Its store, both installer leases and exact old-process handle remain owned.
+pub struct WindowsHelperSession {
+    directory: PathBuf,
+    request: HelperRequest,
+    transaction: UpdateTransaction,
+    store: TransactionStore,
+    installation: WindowsInstallation,
+    installers: PinnedWindowsInstallerPair,
+    old_process: TrackedWindowsProcess,
+    _helper_lease: File,
+    _resume_lease: std::cell::Cell<Option<File>>,
+    preflight_trace: HelperPreflightTrace,
+}
+
+impl WindowsHelperSession {
+    pub fn load_waiting(directory: &Path) -> io::Result<Self> {
+        super::reject_redirected_path(directory)?;
+        super::validate_private_directory(directory)?;
+        let directory = fs::canonicalize(directory)?;
+        let request: HelperRequest =
+            serde_json::from_slice(&read_private(&directory.join("request.json"), 64 * 1024)?)
+                .map_err(invalid)?;
+        request.transaction()?;
+        if directory.parent() != Some(fs::canonicalize(transaction_root()?)?.as_path())
+            || directory.file_name().and_then(|s| s.to_str()) != Some(&request.transaction_id)
+            || request.identity.previous_version != env!("CARGO_PKG_VERSION")
+            || fs::canonicalize(std::env::current_exe()?)? != directory.join(HELPER_NAME)
+        {
+            return Err(invalid(
+                "foreign helper path, transaction directory or source version",
+            ));
+        }
+        let preflight_trace = HelperPreflightTrace::new();
+        preflight_trace.phase(&directory, "request-and-transaction");
+        let store = TransactionStore::lock(&directory)?;
+        let transaction = store.read(&request.identity)?;
+        require_transaction(&request, &transaction, UpdateStage::WaitingForExit)?;
+        preflight_trace.phase(&directory, "installation-identity");
+        let installation = request.installation()?;
+        super::native::revalidate_installation(&installation)?;
+        let old_process = TrackedWindowsProcess::bind(
+            request.old_process_id,
+            request.old_process_created,
+            installation.executable(),
+        )?;
+        if old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("old GUI exited before helper acknowledgement"));
+        }
+        preflight_trace.phase(&directory, "original-release-files");
+        // This authenticates both the same executable hash and the license;
+        // do not hash the executable a second time immediately beforehand.
+        require_original_files(&installation, &request)?;
+        preflight_trace.phase(&directory, "helper-copy");
+        let helper = directory.join(HELPER_NAME);
+        let helper_lease = open_read_lease(&helper)?;
+        if digest_file(&helper)? != request.previous_binary_sha256 {
+            return Err(invalid("helper copy does not match original binary"));
+        }
+        preflight_trace.phase(&directory, "installer-pair-signature-hash-and-pin");
+        let installers = request.verify_installers()?;
+        preflight_trace.phase(&directory, "resume-project");
+        let resume_lease = request
+            .resume_project
+            .as_ref()
+            .map(|project| project.pin(installation.directory()))
+            .transpose()?;
+        Ok(Self {
+            directory,
+            request,
+            transaction,
+            store,
+            installation,
+            installers,
+            old_process,
+            _helper_lease: helper_lease,
+            _resume_lease: std::cell::Cell::new(resume_lease),
+            preflight_trace,
+        })
+    }
+
+    /// Acknowledgement only. Not permission to apply, launch, or report health.
+    pub fn acknowledge_ready(&self) -> io::Result<()> {
+        self.preflight_trace
+            .phase(&self.directory, "ready-installation-revalidation");
+        if self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("old GUI exited before helper acknowledgement"));
+        }
+        super::native::revalidate_installation(&self.installation)?;
+        require_original_files(&self.installation, &self.request)?;
+        self.preflight_trace
+            .phase(&self.directory, "ready-installer-revalidation");
+        self.installers.recovery.installer().revalidate()?;
+        self.installers.candidate.installer().revalidate()?;
+        let state = self.store.read(self.transaction.identity())?;
+        require_transaction(&self.request, &state, UpdateStage::WaitingForExit)?;
+        let result = publish_ready_json(
+            &self.directory.join("helper-ready.json"),
+            &HelperReady {
+                transaction_id: state.id().into(),
+                nonce: state.health_nonce().into(),
+                process_id: std::process::id(),
+                process_created: super::current_process_created()?,
+            },
+        );
+        if result.is_ok() {
+            self.preflight_trace
+                .phase(&self.directory, "ready-published");
+        }
+        result
+    }
+
+    pub fn transaction(&self) -> &UpdateTransaction {
+        &self.transaction
+    }
+
+    /// Non-authoritative phase timing, using the same preflight origin.
+    pub(super) fn record_runtime_phase(&self, phase: &'static str) {
+        self.preflight_trace.phase(&self.directory, phase);
+    }
+    pub fn store(&self) -> &TransactionStore {
+        &self.store
+    }
+    pub fn installation(&self) -> &WindowsInstallation {
+        &self.installation
+    }
+    pub fn installers(&self) -> &PinnedWindowsInstallerPair {
+        &self.installers
+    }
+    pub fn old_process(&self) -> &TrackedWindowsProcess {
+        &self.old_process
+    }
+    pub fn resume_project(&self) -> Option<&super::WindowsResumeProject> {
+        self.request.resume_project.as_ref()
+    }
+
+    pub(super) fn cancelled_before_apply(&self) -> io::Result<bool> {
+        if cancellation_requested(&self.directory, &self.request)?
+            && !cancelled_waiting(&self.store, &self.request, || {
+                require_original_files(&self.installation, &self.request)
+            })?
+        {
+            abort_waiting(
+                &self.store,
+                &self.request,
+                "parent cancelled before apply",
+                || {
+                    if self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+                        return Err(invalid("cancelling parent already exited"));
+                    }
+                    super::native::revalidate_installation(&self.installation)?;
+                    require_original_files(&self.installation, &self.request)
+                },
+            )?;
+        }
+        cancelled_waiting(&self.store, &self.request, || {
+            super::native::revalidate_installation(&self.installation)?;
+            self.installers
+                .recovery
+                .installer()
+                .require_installed_files(self.installation.directory())?;
+            require_original_files(&self.installation, &self.request)
+        })
+    }
+
+    /// Only after the exact live GUI's durable health commit. No file edits,
+    /// backup cleanup or security-watermark rollback accompany this release.
+    pub(super) fn release_project_after_health(
+        &self,
+        gui: &mut super::WindowsCandidateProcess<'_>,
+    ) -> io::Result<()> {
+        gui.release_project_after_health(&self.store)?;
+        drop(self._resume_lease.take());
+        Ok(())
+    }
+
+    /// Enter apply only after normal old-GUI exit and exact installation
+    /// exclusion. This does not execute an installer or authorize a replay.
+    pub fn enter_applying(
+        &self,
+        access: &super::WindowsInstallAccess,
+    ) -> io::Result<UpdateTransaction> {
+        access.require_exclusive(self.installation.directory())?;
+        if cancellation_requested(&self.directory, &self.request)? {
+            return Err(invalid("parent cancellation forbids installation"));
+        }
+        begin_applying(&self.store, &self.request, || {
+            if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+                return Err(invalid("old application has not exited normally"));
+            }
+            let request: HelperRequest = serde_json::from_slice(&read_private(
+                &self.directory.join("request.json"),
+                64 * 1024,
+            )?)
+            .map_err(invalid)?;
+            if request != self.request {
+                return Err(invalid("helper request changed before apply"));
+            }
+            let ready: HelperReady = serde_json::from_slice(&read_private(
+                &self.directory.join("helper-ready.json"),
+                4096,
+            )?)
+            .map_err(invalid)?;
+            if !ready.matches(
+                &self.request,
+                std::process::id(),
+                super::current_process_created()?,
+            ) {
+                return Err(invalid("apply requires this acknowledged helper"));
+            }
+            super::native::revalidate_installation(&self.installation)?;
+            require_original_files(&self.installation, &self.request)?;
+            if digest_file(&self.directory.join(HELPER_NAME))?
+                != self.request.previous_binary_sha256
+            {
+                return Err(invalid("helper changed before apply"));
+            }
+            self.request
+                .recovery
+                .require(self.installers.recovery.installer())?;
+            self.request
+                .candidate
+                .require(self.installers.candidate.installer())?;
+            self.installers.recovery.installer().revalidate()?;
+            self.installers.candidate.installer().revalidate()?;
+            if let Some(project) = self.resume_project() {
+                drop(project.pin(self.installation.directory())?);
+            }
+            Ok(())
+        })
+    }
+
+    /// External controller only, after work/configuration protection and
+    /// protocol compatibility gates. On post-spawn errors the returned runner
+    /// retains its actual child, exclusion and package lease.
+    pub fn start_candidate_installer(
+        &self,
+        access: super::WindowsInstallAccess,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        let candidate = self.installers.candidate.installer().pin()?;
+        let applying = self.enter_applying(&access)?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            candidate,
+            access,
+            &self.old_process,
+            &self.directory.join("apply.log"),
+            &self.store,
+            &applying,
+        )
+    }
+
+    /// A bounded wait/permission failure BEFORE installation may safely end
+    /// the transaction only after proving the exact old installation intact.
+    /// Never use this to disguise an ambiguous or started installer as canceled.
+    pub fn abort_before_apply(&self, reason: &str) -> io::Result<UpdateTransaction> {
+        abort_waiting(&self.store, &self.request, reason, || {
+            super::native::revalidate_installation(&self.installation)?;
+            require_original_files(&self.installation, &self.request)
+        })
+    }
+
+    /// Move a failed owned candidate into recovery, never a live/unknown child.
+    /// Does not run the recovery installer, launch the old GUI or mark RolledBack.
+    pub fn enter_restoring_after_candidate(
+        &self,
+        candidate: &mut super::WindowsCandidateProcess<'_>,
+        access: &super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<UpdateTransaction> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("original application is still running"));
+        }
+        let mut state = self.store.read(&self.request.identity)?;
+        require_transaction(&self.request, &state, state.stage())?;
+        candidate.require_exit_for_recovery(&self.store, &state)?;
+        if super::installer_attempt_status(
+            &self.store,
+            &state,
+            &self.installation,
+            self.installers.candidate.installer(),
+        )? != (super::InstallerAttemptStatus::Exited { exit_code: 0 })
+        {
+            return Err(invalid("candidate installer exit evidence is unresolved"));
+        }
+        self.request
+            .recovery
+            .require(self.installers.recovery.installer())?;
+        self.installers.recovery.installer().revalidate()?;
+        for name in ["restore-installer.json", "recovery-launch.json"] {
+            match fs::symlink_metadata(self.directory.join(name)) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+                Ok(_) => {
+                    return Err(invalid(
+                        "recovery execution already reserved; inspection required",
+                    ));
+                }
+            }
+        }
+        if state.stage() != UpdateStage::RecoveryRequired {
+            state.record_error(reason);
+            state.transition(UpdateStage::RecoveryRequired)?;
+            self.store.write(&state)?;
+        }
+        state.transition(UpdateStage::Restoring)?;
+        self.store.write(&state)?;
+        Ok(state)
+    }
+
+    pub fn start_recovery_installer_after_candidate(
+        &self,
+        candidate: &mut super::WindowsCandidateProcess<'_>,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        let recovery = self.installers.recovery.installer().pin()?;
+        let restoring = self.enter_restoring_after_candidate(candidate, &access, reason)?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            recovery,
+            access,
+            &self.old_process,
+            &self.directory.join("restore.log"),
+            &self.store,
+            &restoring,
+        )
+    }
+
+    /// A failed installation may require recovery before a GUI was reserved.
+    /// Only this helper's retained native installer can authorize that path.
+    pub fn start_recovery_after_failed_installer(
+        &self,
+        failed: &mut super::RunningWindowsInstaller<'_>,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        self.start_prelaunch_recovery(access, reason, |state| {
+            failed.require_owned_failed_exit(
+                &self.store,
+                state,
+                &self.installation,
+                self.installers.candidate.installer(),
+            )
+        })
+    }
+
+    /// Successful installer exit is not a valid installed application. Recover
+    /// only when identity validation fails again and no GUI intent exists.
+    /// A failed reservation/write alone must never authorize this path.
+    pub(super) fn start_recovery_after_prelaunch_identity_failure(
+        &self,
+        completed: &mut super::RunningWindowsInstaller<'_>,
+        access: super::WindowsInstallAccess,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        self.start_prelaunch_recovery(
+            access,
+            "candidate installed identity failed before GUI launch",
+            |state| {
+                let code = completed.require_owned_exit(
+                    &self.store,
+                    state,
+                    &self.installation,
+                    self.installers.candidate.installer(),
+                )?;
+                require_failed_candidate_validation(code, || {
+                    super::WindowsCandidateLaunch::verify_installed_candidate(
+                        &self.installation,
+                        self.installers.candidate.installer(),
+                    )
+                    .map(|_| ())
+                })
+            },
+        )
+    }
+
+    fn start_prelaunch_recovery(
+        &self,
+        access: super::WindowsInstallAccess,
+        reason: &str,
+        verify_owned_exit: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
+    ) -> io::Result<super::RunningWindowsInstaller<'_>> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("original application is still running"));
+        }
+        self.request
+            .recovery
+            .require(self.installers.recovery.installer())?;
+        let recovery = self.installers.recovery.installer().pin()?;
+        let state =
+            begin_failed_installer_recovery(&self.store, &self.request, reason, verify_owned_exit)?;
+        super::RunningWindowsInstaller::start_owned(
+            &self.installation,
+            recovery,
+            access,
+            &self.old_process,
+            &self.directory.join("restore.log"),
+            &self.store,
+            &state,
+        )
+    }
+
+    /// Verify the current fixed release-file contract AFTER a durable successful
+    /// old-installer exit. No GUI launch, deletion, configuration restoration or
+    /// RolledBack transition is performed here.
+    pub fn verify_restored_installation(
+        &self,
+        transaction: &UpdateTransaction,
+        access: &super::WindowsInstallAccess,
+    ) -> io::Result<()> {
+        access.require_exclusive(self.installation.directory())?;
+        if !self.old_process.wait_for_exit(std::time::Duration::ZERO)? {
+            return Err(invalid("old application has not exited normally"));
+        }
+        require_transaction(&self.request, transaction, UpdateStage::Restoring)?;
+        self.installers.recovery.installer().revalidate()?;
+        if super::installer_attempt_status(
+            &self.store,
+            transaction,
+            &self.installation,
+            self.installers.recovery.installer(),
+        )? != (super::InstallerAttemptStatus::Exited { exit_code: 0 })
+        {
+            return Err(invalid("recovery installer has no durable successful exit"));
+        }
+        super::native::revalidate_installation(&self.installation)?;
+        self.installers
+            .recovery
+            .installer()
+            .require_installed_files(self.installation.directory())?;
+        require_original_files(&self.installation, &self.request)
+    }
+}
+
+fn cancelled_waiting(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<bool> {
+    let state = store.read(&request.identity)?;
+    require_transaction(request, &state, state.stage())?;
+    match state.stage() {
+        UpdateStage::WaitingForExit => Ok(false),
+        UpdateStage::FailedBeforeApply => {
+            require_no_execution(store)?;
+            verify_original()?;
+            Ok(true)
+        }
+        _ => Err(invalid("waiting helper stage changed; inspection required")),
+    }
+}
+
+fn abort_waiting(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    reason: &str,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    abort_before_apply(
+        store,
+        request,
+        UpdateStage::WaitingForExit,
+        reason,
+        verify_original,
+    )
+}
+
+fn abort_before_apply(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    expected: UpdateStage,
+    reason: &str,
+    verify_original: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    if !matches!(
+        expected,
+        UpdateStage::Prepared | UpdateStage::WaitingForExit
+    ) {
+        return Err(invalid(
+            "unspawned cancellation cannot accept execution stages",
+        ));
+    }
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, expected)?;
+    require_no_execution(store)?;
+    verify_original()?;
+    state.record_error(reason);
+    state.transition(UpdateStage::FailedBeforeApply)?;
+    store.write(&state)?;
+    Ok(state)
+}
+
+fn begin_applying(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    verify_readiness: impl FnOnce() -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    require_no_execution(store)?;
+    verify_readiness()?;
+    state.transition(UpdateStage::Applying)?;
+    store.write(&state)?;
+    Ok(state)
+}
+
+fn require_no_execution(store: &TransactionStore) -> io::Result<()> {
+    for name in [
+        "apply-installer.json",
+        "restore-installer.json",
+        "candidate-launch.json",
+        "recovery-launch.json",
+    ] {
+        match fs::symlink_metadata(store.directory().join(name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => {
+                return Err(invalid(
+                    "execution evidence forbids a fresh pre-apply action",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_failed_candidate_validation(
+    owned_exit_code: i32,
+    revalidate: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    if owned_exit_code != 0 {
+        return Err(invalid("prelaunch validation recovery requires exit zero"));
+    }
+    match revalidate() {
+        Ok(()) => Err(invalid(
+            "valid candidate identity cannot authorize recovery",
+        )),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::InvalidData | io::ErrorKind::NotFound
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn begin_failed_installer_recovery(
+    store: &TransactionStore,
+    request: &HelperRequest,
+    reason: &str,
+    verify_owned_exit: impl FnOnce(&UpdateTransaction) -> io::Result<()>,
+) -> io::Result<UpdateTransaction> {
+    let mut state = store.read(&request.identity)?;
+    require_transaction(request, &state, UpdateStage::Applying)?;
+    for name in [
+        "candidate-launch.json",
+        "restore-installer.json",
+        "recovery-launch.json",
+    ] {
+        match fs::symlink_metadata(store.directory().join(name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+            Ok(_) => {
+                return Err(invalid(
+                    "execution intent already exists; inspection required",
+                ));
+            }
+        }
+    }
+    verify_owned_exit(&state)?;
+    state.record_error(reason);
+    state.transition(UpdateStage::RecoveryRequired)?;
+    store.write(&state)?;
+    state.transition(UpdateStage::Restoring)?;
+    store.write(&state)?;
+    Ok(state)
+}
+
+const RELEASE_LICENSE: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../LICENSE"));
+
+fn expected_license_sha256() -> String {
+    format!("{:x}", Sha256::digest(RELEASE_LICENSE))
+}
+
+pub(super) fn verified_license(directory: &Path) -> io::Result<String> {
+    let path = directory.join("LICENSE");
+    super::reject_redirected_path(&path)?;
+    let metadata = fs::metadata(&path)?;
+    if !metadata.is_file() || metadata.len() != RELEASE_LICENSE.len() as u64 {
+        return Err(invalid(
+            "installed release LICENSE has unexpected type or size",
+        ));
+    }
+    let actual = digest_file(&path)?;
+    if actual != expected_license_sha256() {
+        return Err(invalid(
+            "installed release LICENSE differs from the running old build",
+        ));
+    }
+    Ok(actual)
+}
+
+fn require_original_files(
+    installed: &WindowsInstallation,
+    request: &HelperRequest,
+) -> io::Result<()> {
+    if digest_file(installed.executable())? != request.previous_binary_sha256
+        || verified_license(installed.directory())? != request.previous_license_sha256
+    {
+        return Err(invalid("original release files are not intact"));
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelperReady {
+    transaction_id: String,
+    nonce: String,
+    process_id: u32,
+    process_created: u64,
+}
+
+impl HelperReady {
+    fn matches(&self, request: &HelperRequest, pid: u32, created: u64) -> bool {
+        pid != 0
+            && created != 0
+            && self.transaction_id == request.transaction_id
+            && self.nonce == request.nonce
+            && self.process_id == pid
+            && self.process_created == created
+    }
+}
+
+fn confirm_process_ready(
+    directory: &Path,
+    request: &HelperRequest,
+    child: &std::process::Child,
+) -> io::Result<()> {
+    let helper = TrackedWindowsProcess::bind_child(child, &directory.join(HELPER_NAME))?;
+    if helper.wait_for_exit(std::time::Duration::ZERO)? {
+        return Err(invalid("helper exited before parent confirmed readiness"));
+    }
+    let ready: HelperReady =
+        serde_json::from_slice(&read_private(&directory.join("helper-ready.json"), 4096)?)
+            .map_err(invalid)?;
+    let created = super::process::child_process_created(child)?;
+    if !ready.matches(request, child.id(), created) {
+        return Err(invalid(
+            "helper readiness belongs to another process or transaction",
+        ));
+    }
+    Ok(())
+}
+
+fn confirm_waiting_request(directory: &Path, request: &HelperRequest) -> io::Result<()> {
+    // The authenticated helper owns the writer lock; parent validation must be
+    // read-only and must not repair or contend for that lock.
+    let state = crate::update_transaction::read_snapshot(directory, &request.identity)?;
+    require_transaction(request, &state, UpdateStage::WaitingForExit)?;
+    let actual: HelperRequest =
+        serde_json::from_slice(&read_private(&directory.join("request.json"), 64 * 1024)?)
+            .map_err(invalid)?;
+    if actual != *request {
+        return Err(invalid("waiting helper request changed before GUI exit"));
+    }
+    Ok(())
+}
+
+fn require_transaction(
+    request: &HelperRequest,
+    state: &UpdateTransaction,
+    stage: UpdateStage,
+) -> io::Result<()> {
+    request.transaction()?;
+    if state.id() != request.transaction_id
+        || state.health_nonce() != request.nonce
+        || state.identity() != &request.identity
+        || state.stage() != stage
+    {
+        return Err(invalid(
+            "helper request does not match durable transaction stage",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn transaction_root() -> io::Result<PathBuf> {
+    let root = super::native::updater_private_root()?.join("transactions");
+    if let Err(error) = super::create_private_directory(&root)
+        && super::validate_private_directory(&root).is_err()
+    {
+        return Err(error);
+    }
+    Ok(root)
+}
+
+fn read_private(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    super::validate_private_file(path)?;
+    let mut bytes = Vec::new();
+    File::open(path)?.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(invalid("oversized helper evidence"));
+    }
+    super::validate_private_file(path)?;
+    Ok(bytes)
+}
+
+fn write_new_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(invalid)?;
+    if bytes.len() > 64 * 1024 {
+        return Err(invalid("oversized helper request"));
+    }
+    let mut file = super::create_private_file(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()
+}
+
+fn publish_ready_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(invalid)?;
+    if bytes.len() > 4096 {
+        return Err(invalid("oversized helper readiness"));
+    }
+    // The parent's frequent read-only probe must see either absence or the
+    // complete receipt, never a create-then-write partially serialized file.
+    super::cache::write_private_atomic_new(path, &bytes)
+}
+
+fn open_read_lease(path: &Path) -> io::Result<File> {
+    super::validate_private_file(path)?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ.0)
+        .open(path)?;
+    super::validate_private_file(path)?;
+    Ok(file)
+}
+
+fn digest_file(path: &Path) -> io::Result<String> {
+    super::reject_redirected_path(path)?;
+    let mut file = File::open(path)?;
+    if !file.metadata()?.is_file() || file.metadata()?.len() > 512 * 1024 * 1024 {
+        return Err(invalid("invalid helper binary"));
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn copy_helper(source: &Path, destination: &Path) -> io::Result<(File, String)> {
+    super::reject_redirected_path(source)?;
+    let mut input = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ.0)
+        .open(source)?;
+    if !input.metadata()?.is_file()
+        || input.metadata()?.len() == 0
+        || input.metadata()?.len() > 512 * 1024 * 1024
+    {
+        return Err(invalid("invalid old helper source"));
+    }
+    let mut output = super::create_private_file(destination)?;
+    io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    drop(output);
+    let lease = open_read_lease(destination)?;
+    let expected = digest_file(source)?;
+    if digest_file(destination)? != expected {
+        return Err(invalid("helper copy hash mismatch"));
+    }
+    Ok((lease, expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readiness_publication_is_complete_private_and_never_overwrites() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-ready-publication-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let path = root.join("helper-ready.json");
+        assert!(!path.exists());
+        let request = request();
+        let ready = HelperReady {
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            process_id: 123,
+            process_created: 456,
+        };
+        publish_ready_json(&path, &ready).unwrap();
+        super::super::validate_private_file(&path).unwrap();
+        let observed: HelperReady =
+            serde_json::from_slice(&read_private(&path, 4096).unwrap()).unwrap();
+        assert!(observed.matches(&request, 123, 456));
+        assert!(publish_ready_json(&path, &ready).is_err());
+        assert!(publish_ready_json(&root.join("oversized.json"), &"x".repeat(4096)).is_err());
+        let trace = HelperPreflightTrace::new();
+        trace.phase(&root, "installation-identity");
+        trace.phase(&root, "ready-published");
+        let diagnostic: serde_json::Value = serde_json::from_slice(
+            &read_private(&root.join("helper-preflight.json"), 4096).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(diagnostic["scope"], "diagnostic-only-not-readiness-proof");
+        assert_eq!(diagnostic["phases"].as_array().unwrap().len(), 2);
+        assert!(serde_json::from_value::<HelperReady>(diagnostic).is_err());
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
+    }
+
+    #[test]
+    fn terminal_journal_after_slow_validation_vetoes_parent_ready() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-ready-terminal-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        write_new_json(&root.join("request.json"), &request).unwrap();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        confirm_waiting_request(&root, &request).unwrap();
+        // The actual helper still holds its writer lease, but has cancelled
+        // while parent validation ran. Process liveness cannot grant exit.
+        state.transition(UpdateStage::FailedBeforeApply).unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        drop(store);
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
+    }
+
+    #[test]
+    fn cancellation_signal_is_atomic_bound_and_does_not_need_journal_lock() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-cancel-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let request = request();
+        let store = TransactionStore::lock(&root).unwrap();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(!cancellation_requested(&root, &request).unwrap());
+        let signal = ParentCancellation::for_request(&request);
+        let bytes = serde_json::to_vec(&signal).unwrap();
+        let path = root.join("parent-cancel.json");
+        super::super::cache::write_private_atomic_new(&path, &bytes).unwrap();
+        assert!(
+            TransactionStore::lock(&root).is_err(),
+            "helper still owns journal"
+        );
+        assert!(cancellation_requested(&root, &request).unwrap());
+        assert!(super::super::cache::write_private_atomic_new(&path, b"wrong").is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        for invalid_bytes in [
+            b"{".to_vec(),
+            vec![b' '; 4097],
+            {
+                let mut value = serde_json::to_value(&signal).unwrap();
+                value["schema"] = serde_json::json!(2);
+                serde_json::to_vec(&value).unwrap()
+            },
+            {
+                let mut value = serde_json::to_value(&signal).unwrap();
+                value["extra"] = serde_json::json!(true);
+                serde_json::to_vec(&value).unwrap()
+            },
+        ] {
+            super::super::write_private_atomic(&path, &invalid_bytes).unwrap();
+            assert!(cancellation_requested(&root, &request).is_err());
+        }
+        super::super::write_private_atomic(&path, &bytes).unwrap();
+        for change in 0..5 {
+            let mut foreign = request.clone();
+            match change {
+                0 => foreign.nonce = "9".repeat(64),
+                1 => foreign.transaction_id = "9".repeat(32),
+                2 => foreign.old_process_id += 1,
+                3 => foreign.old_process_created += 1,
+                _ => foreign.identity.installed_path = root.join("other"),
+            }
+            assert!(cancellation_requested(&root, &foreign).is_err());
+        }
+        // Only the journal owner acknowledges; the request alone is not an
+        // installation-cancellation terminal state.
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        abort_waiting(&store, &request, "test cancellation", || Ok(())).unwrap();
+        assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "in-place-update-preview")]
+    #[test]
+    fn copied_helper_command_has_fixed_entry_and_one_literal_transaction_path() {
+        let root = std::env::temp_dir().join("helper-command-fixture");
+        let executable = root.join("private").join("instplot-update-helper.exe");
+        let directory = root.join("私有 事务 & untouched");
+        let command = helper_command(&executable, &directory);
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![
+                std::ffi::OsStr::new("--windows-update-helper"),
+                directory.as_os_str(),
+            ]
+        );
+        assert_eq!(command.get_envs().count(), 0);
+    }
+
+    #[test]
+    fn successful_installer_requires_a_fresh_prelaunch_identity_failure() {
+        for code in [-1, 1, 23] {
+            assert!(require_failed_candidate_validation(code, || panic!("not exit zero")).is_err());
+        }
+        assert!(require_failed_candidate_validation(0, || Ok(())).is_err());
+        assert!(
+            require_failed_candidate_validation(0, || Err(invalid("identity mismatch"))).is_ok()
+        );
+        assert!(
+            require_failed_candidate_validation(0, || Err(io::Error::from(
+                io::ErrorKind::NotFound
+            )))
+            .is_ok()
+        );
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            assert!(require_failed_candidate_validation(0, || Err(io::Error::from(kind))).is_err());
+        }
+    }
+
+    fn request() -> HelperRequest {
+        let identity = UpdateIdentity {
+            product: "instplot-studio".into(),
+            platform: "windows-x86_64".into(),
+            installed_path: std::env::temp_dir().join("Studio 中文 install"),
+            previous_version: "0.1.2-rc.2".into(),
+            candidate_version: "0.1.2-rc.3".into(),
+            candidate_sha256: "a".repeat(64),
+            candidate_size: 20,
+        };
+        let cache = |version: &str, digest: &str, size| AssetBinding {
+            cache: std::env::temp_dir().join(version),
+            version: version.into(),
+            manifest_sha256: "c".repeat(64),
+            package_sha256: digest.repeat(64),
+            package_size: size,
+        };
+        HelperRequest {
+            schema: 1,
+            transaction_id: "1".repeat(32),
+            nonce: "2".repeat(64),
+            identity,
+            desktop_shortcut: false,
+            old_process_id: 123,
+            old_process_created: 456,
+            previous_binary_sha256: "b".repeat(64),
+            previous_license_sha256: expected_license_sha256(),
+            resume_project: None,
+            recovery: cache("0.1.2-rc.2", "d", 10),
+            candidate: cache("0.1.2-rc.3", "a", 20),
+        }
+    }
+
+    #[test]
+    fn helper_request_rejects_foreign_identity_nonce_stage_and_schema() {
+        let mut request = request();
+        let mut transaction = request.transaction().unwrap();
+        require_transaction(&request, &transaction, UpdateStage::Prepared).unwrap();
+        assert!(require_transaction(&request, &transaction, UpdateStage::WaitingForExit).is_err());
+        transaction.transition(UpdateStage::WaitingForExit).unwrap();
+        require_transaction(&request, &transaction, UpdateStage::WaitingForExit).unwrap();
+        request.nonce = "3".repeat(64);
+        assert!(require_transaction(&request, &transaction, UpdateStage::WaitingForExit).is_err());
+        request.nonce = "2".repeat(64);
+        request.identity.installed_path.push("other");
+        assert!(require_transaction(&request, &transaction, UpdateStage::WaitingForExit).is_err());
+        request.schema = 2;
+        assert!(request.transaction().is_err());
+        let mut raw = serde_json::to_value(request).unwrap();
+        raw["arbitrary_command"] = "must not run".into();
+        assert!(serde_json::from_value::<HelperRequest>(raw).is_err());
+        let mut missing_license = serde_json::to_value(self::request()).unwrap();
+        missing_license
+            .as_object_mut()
+            .unwrap()
+            .remove("previous_license_sha256");
+        assert!(serde_json::from_value::<HelperRequest>(missing_license).is_err());
+        let mut changed_license = self::request();
+        changed_license.previous_license_sha256 = "e".repeat(64);
+        assert!(changed_license.transaction().is_err());
+    }
+
+    #[test]
+    fn parent_ready_request_check_is_read_only_under_helper_writer_lock() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-parent-ready-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        write_new_json(&root.join("request.json"), &request).unwrap();
+        let mut state = request.transaction().unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(TransactionStore::lock(&root).is_err());
+        confirm_waiting_request(&root, &request).unwrap();
+        let before = fs::read(root.join("request.json")).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(confirm_waiting_request(&root, &foreign).is_err());
+        foreign = request.clone();
+        foreign.desktop_shortcut = true;
+        super::super::write_private_atomic(
+            &root.join("request.json"),
+            &serde_json::to_vec(&foreign).unwrap(),
+        )
+        .unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        assert_eq!(
+            fs::read(root.join("request.json")).unwrap(),
+            serde_json::to_vec(&foreign).unwrap()
+        );
+        super::super::write_private_atomic(&root.join("request.json"), &before).unwrap();
+        confirm_waiting_request(&root, &request).unwrap();
+        state.transition(UpdateStage::Applying).unwrap();
+        store.write(&state).unwrap();
+        assert!(confirm_waiting_request(&root, &request).is_err());
+        drop(store);
+        fs::remove_dir_all(root).unwrap(); // Exact synthetic fixture only.
+    }
+
+    #[test]
+    fn entering_apply_requires_fresh_waiting_and_all_readiness_checks() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-apply-gate-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let prepared = request.transaction().unwrap();
+        store.write(&prepared).unwrap();
+        assert!(begin_applying(&store, &request, || panic!("not waiting")).is_err());
+        let mut waiting = prepared;
+        waiting.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&waiting).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(begin_applying(&store, &foreign, || panic!("foreign request")).is_err());
+        assert!(begin_applying(&store, &request, || Err(invalid("readiness failed"))).is_err());
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial intent").unwrap();
+            assert!(
+                begin_applying(&store, &request, || panic!("execution already reserved")).is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial intent\"");
+            // Synthetic fixture cleanup only. Production never removes intent
+            // to retry or reclassify an interrupted update.
+            fs::remove_file(path).unwrap();
+        }
+        let applying = begin_applying(&store, &request, || Ok(())).unwrap();
+        assert_eq!(applying.stage(), UpdateStage::Applying);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        assert!(begin_applying(&store, &request, || panic!("must not replay")).is_err());
+        assert!(abort_waiting(&store, &request, "late cancellation", || Ok(())).is_err());
+        assert!(!root.join("apply-installer.json").exists());
+        assert!(!root.join("candidate-launch.json").exists());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_installer_recovery_requires_native_proof_and_no_gui_intent() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-failed-install-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let mut state = request.transaction().unwrap();
+        state.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&state).unwrap();
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "failure", |_| panic!(
+                "not applying"
+            ))
+            .is_err()
+        );
+        state.transition(UpdateStage::Applying).unwrap();
+        store.write(&state).unwrap();
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(
+            begin_failed_installer_recovery(&store, &foreign, "failure", |_| panic!("foreign"))
+                .is_err()
+        );
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "failure", |_| Err(invalid(
+                "live/unknown native installer"
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        for name in [
+            "candidate-launch.json",
+            "restore-installer.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial intent").unwrap();
+            assert!(
+                begin_failed_installer_recovery(&store, &request, "failure", |_| panic!(
+                    "existing intent"
+                ))
+                .is_err()
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial intent\"");
+            // Isolated synthetic fixture only, never production replay cleanup.
+            fs::remove_file(path).unwrap();
+        }
+        let restored =
+            begin_failed_installer_recovery(&store, &request, "failure", |_| Ok(())).unwrap();
+        assert_eq!(restored.stage(), UpdateStage::Restoring);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Restoring
+        );
+        assert!(
+            begin_failed_installer_recovery(&store, &request, "repeat", |_| panic!("no replay"))
+                .is_err()
+        );
+        assert!(!root.join("restore-installer.json").exists());
+        assert!(!root.join("recovery-launch.json").exists());
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellation_requires_no_execution_and_verified_original_files() {
+        let mut random = [0; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir()
+            .join(format!("studio-abort-{:032x}", u128::from_le_bytes(random),));
+        super::super::create_private_directory(&root).unwrap();
+        let store = TransactionStore::lock(&root).unwrap();
+        let request = request();
+        let mut waiting = request.transaction().unwrap();
+        store.write(&waiting).unwrap();
+        assert!(
+            abort_before_apply(
+                &store,
+                &request,
+                UpdateStage::Prepared,
+                "unspawned",
+                || Err(invalid("original mismatch"))
+            )
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Prepared
+        );
+        assert!(
+            abort_before_apply(
+                &store,
+                &request,
+                UpdateStage::Applying,
+                "unsafe stage",
+                || panic!("not allowed")
+            )
+            .is_err()
+        );
+        let cancelled =
+            abort_before_apply(&store, &request, UpdateStage::Prepared, "unspawned", || {
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(cancelled.stage(), UpdateStage::FailedBeforeApply);
+        assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+        // Reset only the isolated fixture to test the separate armed branch.
+        waiting.transition(UpdateStage::WaitingForExit).unwrap();
+        store.write(&waiting).unwrap();
+        assert!(!cancelled_waiting(&store, &request, || panic!("still waiting")).unwrap());
+        let mut foreign = request.clone();
+        foreign.nonce = "f".repeat(64);
+        assert!(cancelled_waiting(&store, &foreign, || panic!("foreign nonce")).is_err());
+        assert!(
+            abort_waiting(&store, &request, "wait failed", || Err(invalid(
+                "original installation could not be verified"
+            )))
+            .is_err()
+        );
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::WaitingForExit
+        );
+        // Even partial/unresolved intent is not proof that installation never ran.
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial execution evidence").unwrap();
+            assert!(
+                abort_waiting(&store, &request, "cancel", || panic!(
+                    "must refuse before calling original-file verifier"
+                ))
+                .is_err()
+            );
+            assert!(path.exists());
+            fs::remove_file(path).unwrap();
+        }
+        let failed = abort_waiting(&store, &request, request.nonce.as_str(), || Ok(())).unwrap();
+        assert_eq!(failed.stage(), UpdateStage::FailedBeforeApply);
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::FailedBeforeApply
+        );
+        let raw = fs::read_to_string(root.join("transaction.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["last_error"], "[redacted]");
+        for _ in 0..2 {
+            assert!(cancelled_waiting(&store, &request, || Ok(())).unwrap());
+            assert_eq!(
+                fs::read_to_string(root.join("transaction.json")).unwrap(),
+                raw
+            );
+        }
+        assert!(cancelled_waiting(&store, &request, || Err(invalid("original changed"))).is_err());
+        for name in [
+            "apply-installer.json",
+            "restore-installer.json",
+            "candidate-launch.json",
+            "recovery-launch.json",
+        ] {
+            let path = root.join(name);
+            write_new_json(&path, &"partial execution evidence").unwrap();
+            assert!(cancelled_waiting(&store, &request, || panic!("partial intent")).is_err());
+            assert_eq!(fs::read(&path).unwrap(), b"\"partial execution evidence\"");
+            fs::remove_file(path).unwrap();
+        }
+        assert!(abort_waiting(&store, &request, "again", || Ok(())).is_err());
+        let mut applying = waiting;
+        applying.transition(UpdateStage::Applying).unwrap();
+        store.write(&applying).unwrap();
+        assert!(cancelled_waiting(&store, &request, || panic!("already applying")).is_err());
+        assert!(abort_waiting(&store, &request, "not a safe cancellation", || Ok(())).is_err());
+        assert_eq!(
+            store.read(&request.identity).unwrap().stage(),
+            UpdateStage::Applying
+        );
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fixed_release_files_are_checked_without_touching_user_files() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-release-files 中文-{:032x}",
+            u128::from_le_bytes(random),
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let binary = root.join("instplot-studio.exe");
+        let license = root.join("LICENSE");
+        let user_file = root.join("user-project.instplot");
+        for (path, bytes) in [
+            (
+                &binary,
+                b"fake old binary; hash contract fixture only".as_slice(),
+            ),
+            (&license, RELEASE_LICENSE),
+            (&user_file, b"user project must remain untouched".as_slice()),
+        ] {
+            let mut file = super::super::create_private_file(path).unwrap();
+            file.write_all(bytes).unwrap();
+            file.sync_all().unwrap();
+        }
+        let mut request = request();
+        request.identity.installed_path = root.clone();
+        request.previous_binary_sha256 = digest_file(&binary).unwrap();
+        let installed = request.installation().unwrap();
+        require_original_files(&installed, &request).unwrap();
+        let user_hash = digest_file(&user_file).unwrap();
+        fs::write(&license, b"modified license").unwrap();
+        assert!(verified_license(&root).is_err());
+        assert!(require_original_files(&installed, &request).is_err());
+        assert_eq!(fs::read(&license).unwrap(), b"modified license");
+        let mut same_length = RELEASE_LICENSE.to_vec();
+        same_length[0] ^= 1;
+        fs::write(&license, &same_length).unwrap();
+        assert!(verified_license(&root).is_err());
+        assert_eq!(fs::read(&license).unwrap(), same_length);
+        fs::write(&license, RELEASE_LICENSE).unwrap();
+        fs::write(&binary, b"different restored executable").unwrap();
+        assert!(require_original_files(&installed, &request).is_err());
+        assert_eq!(digest_file(&user_file).unwrap(), user_hash);
+        fs::remove_file(&license).unwrap();
+        assert!(verified_license(&root).is_err());
+        fs::create_dir(&license).unwrap();
+        assert!(verified_license(&root).is_err());
+        assert_eq!(digest_file(&user_file).unwrap(), user_hash);
+        fs::remove_dir_all(root).unwrap(); // Exact disposable fixture only.
+    }
+
+    #[test]
+    fn fixed_release_contract_matches_the_inno_payload() {
+        // A future added published file must extend the recovery contract, not
+        // silently become an unknown file eligible for blanket deletion.
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/windows/InstPlotStudio.iss"
+        ));
+        let mut section = "";
+        let mut files = Vec::new();
+        for line in source.lines().map(str::trim) {
+            if line.starts_with('[') {
+                section = line;
+            } else if section == "[Files]" && !line.is_empty() && !line.starts_with(';') {
+                files.push(line);
+            }
+        }
+        assert_eq!(
+            files,
+            vec![
+                "Source: \"{#SourceDir}\\instplot-studio.exe\"; DestDir: \"{app}\"; Flags: ignoreversion",
+                "Source: \"{#SourceDir}\\LICENSE\"; DestDir: \"{app}\"; Flags: ignoreversion",
+            ]
+        );
+    }
+
+    #[test]
+    fn ready_receipt_requires_actual_process_birth_and_transaction() {
+        let request = request();
+        let mut ready = HelperReady {
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            process_id: 234,
+            process_created: 567,
+        };
+        assert!(ready.matches(&request, 234, 567));
+        assert!(!ready.matches(&request, 234, 568));
+        assert!(!ready.matches(&request, 235, 567));
+        assert!(!ready.matches(&request, 0, 0));
+        ready.nonce = "4".repeat(64);
+        assert!(!ready.matches(&request, 234, 567));
+        let mut raw = serde_json::to_value(ready).unwrap();
+        raw["initialized"] = true.into();
+        assert!(
+            serde_json::from_value::<HelperReady>(raw).is_err(),
+            "ready is not a health receipt"
+        );
+    }
+
+    #[test]
+    fn helper_copy_is_private_exact_pinned_and_never_overwrites() {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-helper-copy 中文-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let source = root.join("fixture old exe");
+        let mut input = super::super::create_private_file(&source).unwrap();
+        input
+            .write_all(b"not executable; byte-copy and lease fixture only")
+            .unwrap();
+        drop(input);
+        let destination = root.join(HELPER_NAME);
+        let (lease, digest) = copy_helper(&source, &destination).unwrap();
+        assert_eq!(digest, digest_file(&source).unwrap());
+        assert_eq!(fs::read(&source).unwrap(), fs::read(&destination).unwrap());
+        super::super::validate_private_file(&destination).unwrap();
+        assert!(
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&destination)
+                .is_err()
+        );
+        assert!(fs::remove_file(&destination).is_err());
+        assert!(copy_helper(&source, &destination).is_err());
+        drop(lease);
+        let state = root.join("new.json");
+        write_new_json(&state, &request()).unwrap();
+        assert!(write_new_json(&state, &request()).is_err());
+        assert!(read_private(&state, 1).is_err());
+        let parsed: HelperRequest =
+            serde_json::from_slice(&read_private(&state, 64 * 1024).unwrap()).unwrap();
+        parsed.transaction().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copied_test_helper_readiness_requires_a_live_exact_child() {
+        use std::process::{Command, Stdio};
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "studio-ready-child 中文-{:032x}",
+            u128::from_le_bytes(random)
+        ));
+        super::super::create_private_directory(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let helper = root.join(HELPER_NAME);
+        let (lease, _) = copy_helper(&std::env::current_exe().unwrap(), &helper).unwrap();
+        // Real process/handle/birth-time evidence, but this is a test harness,
+        // NOT a GUI or the complete updater session.
+        let mut child = Command::new(&helper)
+            .args(["--exact", "update_windows::assets::tests::installer_test_child_waits_for_normal_parent_pipe_close"])
+            .env("STUDIO_INSTALLER_TEST_WAIT", "1")
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        let created = super::super::process::child_process_created(&child).unwrap();
+        let ready_path = root.join("helper-ready.json");
+        let request = request();
+        let mut ready = HelperReady {
+            transaction_id: request.transaction_id.clone(),
+            nonce: request.nonce.clone(),
+            process_id: child.id(),
+            process_created: created,
+        };
+        write_new_json(&ready_path, &ready).unwrap();
+        confirm_process_ready(&root, &request, &child).unwrap();
+        ready.process_created += 1;
+        super::super::write_private_atomic(&ready_path, &serde_json::to_vec(&ready).unwrap())
+            .unwrap();
+        assert!(confirm_process_ready(&root, &request, &child).is_err());
+        ready.process_created = created;
+        ready.nonce = "f".repeat(64);
+        super::super::write_private_atomic(&ready_path, &serde_json::to_vec(&ready).unwrap())
+            .unwrap();
+        assert!(confirm_process_ready(&root, &request, &child).is_err());
+        ready.nonce = request.nonce.clone();
+        super::super::write_private_atomic(&ready_path, &serde_json::to_vec(&ready).unwrap())
+            .unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        assert!(
+            confirm_process_ready(&root, &request, &child).is_err(),
+            "a stale receipt from an exited helper never authorizes exit"
+        );
+        drop(lease);
+        fs::remove_dir_all(root).unwrap();
+    }
+}

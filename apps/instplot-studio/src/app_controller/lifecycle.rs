@@ -106,6 +106,8 @@ impl StudioApp {
             marker_fill_for_all: false,
             language,
             update: AppUpdateState::default(),
+            #[cfg(any(target_os = "macos", all(windows, feature = "in-place-update-preview")))]
+            update_health: None,
             #[cfg(target_os = "macos")]
             macos_open_files: None,
             first_frame: true,
