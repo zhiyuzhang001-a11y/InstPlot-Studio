@@ -28,6 +28,11 @@ The repository finalization procedure is recorded in
 [`docs/INSTPLOT_STUDIO_CODEBASE_FINALIZATION_PLAN.md`](docs/INSTPLOT_STUDIO_CODEBASE_FINALIZATION_PLAN.md),
 and release changes are summarized in [`CHANGELOG.md`](CHANGELOG.md).
 
+The Windows in-place updater's implementation, failure analysis, reuse boundaries,
+and exact GUI/public verification evidence are documented in
+[`docs/WINDOWS_UPDATER_ENGINEERING_PLAYBOOK.md`](docs/WINDOWS_UPDATER_ENGINEERING_PLAYBOOK.md).
+This is an isolated QA delivery record, not an announcement of production updater enablement.
+
 `apps/instplot-studio` is the full product. `apps/instplot-demo` is the independent
 InstPlot Quick consumer that imports data, selects XY columns, edits labels and exports
 SVG through shared services. Formal reusable crates are `instplot-text`,
