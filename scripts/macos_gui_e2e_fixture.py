@@ -123,10 +123,18 @@ def prepare(root: Path, source: str) -> None:
                          f'ProjectDirs::from("com", "InstPlotQA", "{root.name}")', 2)
     code.write_bytes(text.encode("utf-8"))
     (snapshot / "packaging/update/gui-fixture-ca.pem").write_bytes(ca.read_bytes())
+    # Match the independent QA bundle exactly; never relax bundle identity.
+    adapter = snapshot / "apps/instplot-studio/src/update_macos.rs"
+    adapter_before = digest(adapter)
+    adapter.write_bytes(replace_exact(adapter.read_text(),
+        'bundle_id.trim() != "com.instplot.studio"',
+        'bundle_id.trim() != "com.instplot.studio.mac-gui-qa"').encode("utf-8"))
     save(root / "provenance.json", {"source_sha": source, "scope": "isolated-Release-TLS-GUI-not-public-binary",
          "fixture_script_sha256": digest(Path(__file__)),
          "before_sha256": hashlib.sha256(before).hexdigest(), "after_sha256": digest(code),
          "ca_sha256": digest(ca), "trust_before_sha256": trust_before, "trust_after_sha256": digest(trust),
+         "adapter_before_sha256": adapter_before, "adapter_after_sha256": digest(adapter),
+         "bundle_id": "com.instplot.studio.mac-gui-qa",
          "strict_TLS": True, "cache_identity": root.name, "keys": keys})
 
 
