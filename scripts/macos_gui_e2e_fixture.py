@@ -28,7 +28,8 @@ EXECUTABLE = Path("Contents/MacOS/instplot-studio")
 
 
 def run(*args: str, cwd: Path = ROOT, env: dict | None = None) -> str:
-    return subprocess.check_output(args, cwd=cwd, env=env, text=True).strip()
+    return subprocess.check_output(args, cwd=cwd, env=env, text=True,
+                                   stderr=subprocess.PIPE).strip()
 
 
 def digest(path: Path) -> str:
@@ -80,6 +81,7 @@ def prepare(root: Path, source: str) -> None:
     leaf, leaf_key = root / "server.pem", root / "server-key.pem"
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "7",
         "-subj", "/CN=Studio isolated Mac GUI CA", "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         "-keyout", str(ca_key), "-out", str(ca))
     csr = root / "server.csr"
     run("openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
@@ -122,6 +124,7 @@ def prepare(root: Path, source: str) -> None:
     code.write_bytes(text.encode("utf-8"))
     (snapshot / "packaging/update/gui-fixture-ca.pem").write_bytes(ca.read_bytes())
     save(root / "provenance.json", {"source_sha": source, "scope": "isolated-Release-TLS-GUI-not-public-binary",
+         "fixture_script_sha256": digest(Path(__file__)),
          "before_sha256": hashlib.sha256(before).hexdigest(), "after_sha256": digest(code),
          "ca_sha256": digest(ca), "trust_before_sha256": trust_before, "trust_after_sha256": digest(trust),
          "strict_TLS": True, "cache_identity": root.name, "keys": keys})
@@ -242,7 +245,10 @@ def main() -> None:
         with (root / "baseline-gui.log").open("ab") as log:
             child = subprocess.Popen([str(root / "Studio Mac GUI QA.app" / EXECUTABLE), str(root / "GUI sentinel.instplot")],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-        print(json.dumps({"pid": child.pid, "scope": "isolated-baseline"}))
+        save(root / f"launch-{child.pid}.json", {"pid": child.pid, "scope": "isolated-baseline"})
+        print(json.dumps({"pid": child.pid, "scope": "isolated-baseline"}), flush=True)
+        code = child.wait()
+        save(root / f"exit-{child.pid}.json", {"pid": child.pid, "exit_code": code})
 
 
 if __name__ == "__main__":
