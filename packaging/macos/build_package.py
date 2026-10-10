@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import platform
 import plistlib
@@ -30,14 +31,30 @@ def run(*command: str, env: dict[str, str] | None = None) -> None:
     subprocess.run(command, cwd=ROOT, check=True, env=env)
 
 
+def build_arguments(in_place_update_preview: bool) -> list[str]:
+    arguments = [
+        "cargo", "build", "--release", "--locked", "--package", EXECUTABLE,
+        "--bin", EXECUTABLE,
+    ]
+    if in_place_update_preview:
+        arguments.extend(["--features", "in-place-update-preview"])
+    return arguments
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", default="target/packages/macos")
+    parser.add_argument("--in-place-update-preview", action="store_true")
+    args = parser.parse_args()
     if sys.platform != "darwin":
         raise SystemExit("macOS packages must be built on macOS")
     machine = platform.machine().lower()
     if machine != "arm64":
         raise SystemExit(f"first-release macOS package requires arm64, got {machine}")
     version = package_version()
-    output = ROOT / (sys.argv[1] if len(sys.argv) > 1 else "target/packages/macos")
+    if args.in_place_update_preview and "-" not in version:
+        raise SystemExit("in-place update technical preview requires a prerelease version")
+    output = ROOT / args.output
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
@@ -48,17 +65,7 @@ def main() -> int:
     )
     build_env = os.environ.copy()
     build_env["INSTPLOT_BUILD_ID"] = build_id
-    run(
-        "cargo",
-        "build",
-        "--release",
-        "--locked",
-        "--package",
-        EXECUTABLE,
-        "--bin",
-        EXECUTABLE,
-        env=build_env,
-    )
+    run(*build_arguments(args.in_place_update_preview), env=build_env)
 
     with tempfile.TemporaryDirectory(prefix="instplot-dmg-") as temporary:
         root = Path(temporary)

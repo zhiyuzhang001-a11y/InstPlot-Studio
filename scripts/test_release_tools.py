@@ -29,6 +29,32 @@ ASSET_SPEC = importlib.util.spec_from_file_location(
 assert ASSET_SPEC and ASSET_SPEC.loader
 ASSET_MODULE = importlib.util.module_from_spec(ASSET_SPEC)
 ASSET_SPEC.loader.exec_module(ASSET_MODULE)
+MAC_PACKAGE_SPEC = importlib.util.spec_from_file_location(
+    "mac_release_package", ROOT / "packaging/macos/build_package.py"
+)
+assert MAC_PACKAGE_SPEC and MAC_PACKAGE_SPEC.loader
+MAC_PACKAGE_MODULE = importlib.util.module_from_spec(MAC_PACKAGE_SPEC)
+MAC_PACKAGE_SPEC.loader.exec_module(MAC_PACKAGE_MODULE)
+
+
+class MacReleaseBuildTests(unittest.TestCase):
+    def test_preview_is_explicit_and_retains_release_locked_build(self) -> None:
+        ordinary = MAC_PACKAGE_MODULE.build_arguments(False)
+        preview = MAC_PACKAGE_MODULE.build_arguments(True)
+        self.assertIn("--release", ordinary)
+        self.assertIn("--locked", ordinary)
+        self.assertNotIn("--features", ordinary)
+        self.assertEqual(preview, ordinary + ["--features", "in-place-update-preview"])
+
+    def test_preview_refuses_stable_before_build_or_output_changes(self) -> None:
+        with patch.object(sys, "argv", ["build_package.py", "--in-place-update-preview"]), \
+                patch.object(sys, "platform", "darwin"), \
+                patch.object(MAC_PACKAGE_MODULE.platform, "machine", return_value="arm64"), \
+                patch.object(MAC_PACKAGE_MODULE, "package_version", return_value="0.1.2"), \
+                patch.object(MAC_PACKAGE_MODULE, "run") as run:
+            with self.assertRaisesRegex(SystemExit, "requires a prerelease"):
+                MAC_PACKAGE_MODULE.main()
+            run.assert_not_called()
 
 
 class ExtractChangelogTests(unittest.TestCase):
@@ -77,6 +103,18 @@ class WindowsProbeTests(unittest.TestCase):
 
 
 class ReleaseDispatchTests(unittest.TestCase):
+    def test_release_retains_explicit_preview_and_exact_contract_gates(self) -> None:
+        workflow = (ROOT / '.github/workflows/release.yml').read_text(encoding='utf-8')
+        self.assertIn('build_package.py --in-place-update-preview', workflow)
+        self.assertIn('build_package.ps1 -InPlaceUpdatePreview', workflow)
+        self.assertEqual(workflow.count('--windows-contract-evidence'), 2)
+        self.assertIn('"windows-in-place.json"', workflow)
+        oss = (ROOT / '.github/workflows/publish-oss-update.yml').read_text(encoding='utf-8')
+        self.assertIn('packaging/update/in-place-release.json', oss)
+        self.assertIn('--windows-contract-evidence', oss)
+        self.assertIn('--windows-in-place-metadata', oss)
+        self.assertIn('This frozen source requires the exact Windows contract sidecar.', oss)
+
     @unittest.skipIf(os.name == "nt", "Dispatch job runs on Ubuntu with Bash")
     def test_oss_dispatch_identifies_repository_without_checkout(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
@@ -135,6 +173,17 @@ class ReleaseAssetSpecTests(unittest.TestCase):
             self.assertNotIn("windows_in_place", ASSET_MODULE.build_spec(assets, version)["platforms"]["windows-x86_64"])
             with patch.object(ASSET_MODULE.hashlib, "file_digest", side_effect=AssertionError("Python 3.11-only API must not be called"), create=True):
                 self.assertEqual(ASSET_MODULE.build_spec(assets, version, proof)["platforms"]["windows-x86_64"]["windows_in_place"], evidence["contract"])
+            release_proof = assets / 'windows-in-place.json'
+            release_proof.write_text(json.dumps(evidence), encoding='utf-8')
+            self.assertEqual(ASSET_MODULE.build_spec(assets, version, release_proof)
+                             ['platforms']['windows-x86_64']['windows_in_place'], evidence['contract'])
+            with self.assertRaises(ValueError):
+                ASSET_MODULE.build_spec(assets, version)
+            (assets / 'unexpected.json').write_text('{}', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                ASSET_MODULE.build_spec(assets, version, release_proof)
+            (assets / 'unexpected.json').unlink()
+            release_proof.unlink()
             for field, value in (("installer_sha256", "0" * 64), ("version", "0.1.2-rc.2"), ("scope", "accepted"), ("contract", {"schema": 1})):
                 proof.write_text(json.dumps({**evidence, field: value}))
                 with self.subTest(field=field), self.assertRaises(ValueError):

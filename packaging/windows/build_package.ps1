@@ -8,6 +8,9 @@ $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 Set-Location $RepositoryRoot
 $Version = (& python3 scripts/read_version.py).Trim()
 if (-not $Version) { throw "Unable to read product version" }
+if ($InPlaceUpdatePreview -and $Version -notmatch '-') {
+    throw "In-place update technical preview requires a prerelease version"
+}
 $VersionComponents = @(($Version -split '-', 2)[0] -split '\.')
 if ($VersionComponents.Count -gt 4 -or $VersionComponents.Count -lt 1) {
     throw "Product version cannot be represented as a Windows file version: $Version"
@@ -55,15 +58,16 @@ if (-not (Test-Path $Installer)) { throw "Installer was not created: $Installer"
 if ($InPlaceUpdatePreview) {
     # Probe the exact packaged binary, not a separately compiled executable.
     $Binary = Join-Path $SourceRoot "instplot-studio.exe"
-    $ProbeText = & $Binary --windows-update-capabilities
-    if ($LASTEXITCODE -ne 0) { throw "Preview capability probe failed" }
-    $Probe = ($ProbeText -join "`n") | ConvertFrom-Json
+    . ./scripts/invoke_studio_probe.ps1
+    $Probe = (Invoke-StudioProbe $Binary @('--windows-update-capabilities')) | ConvertFrom-Json
     if ($Probe.product -ne "instplot-studio" -or $Probe.version -ne $Version -or
         $Probe.platform -ne "windows-x86_64" -or
         $Probe.scope -ne "preview-components-not-accepted-updater" -or
         $Probe.public_update_protocol -ne 0 -or
         $Probe.gui_acceptance_complete -ne $false -or
-        $Probe.public_apply_entry_enabled -ne $false) { throw "Unexpected preview capability scope" }
+        $Probe.public_apply_entry_enabled -ne $false -or
+        $Probe.build_profile -ne 'release' -or
+        $Probe.startup_update_check_enabled -ne $true) { throw "Unexpected preview capability scope" }
     $Contract = [ordered]@{ schema = 1 }
     foreach ($Name in @("helper_protocol", "transaction_schema", "candidate_health_protocol", "recovery_health_protocol")) {
         if ($Probe.components.$Name -ne 1) { throw "Unsupported preview protocol: $Name" }

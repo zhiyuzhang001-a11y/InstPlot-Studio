@@ -4,17 +4,30 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
+## [0.1.2-rc.3] - 2026-10-10
+
 ### Added
 
 - Add durable update transactions, guarded restart and private verified-download caching.
-- Add a macOS in-place updater prototype behind the disabled-by-default
-  `in-place-update-preview` feature. Real GUI upgrade/rollback validation is still pending;
-  Windows in-place installation is not implemented or enabled.
+- Implement guarded macOS and Windows in-place update helpers, single-instance restart,
+  saved-project resumption, native visible-window health checks and failure recovery.
+- Record isolated signed-TLS GUI upgrade acceptance on both platforms, macOS health-failure
+  rollback acceptance, and Windows user-device acceptance. These are not evidence that an
+  arbitrary public package has already passed the exact release gates.
 
 ### Fixed
 
 - Embed the Studio product icon in Windows executables and installers, and explicitly use it
   for Start Menu, optional desktop shortcuts and the uninstall entry.
+- Keep successful background checks throttled without suppressing retry after a failed check,
+  and repaint the normal editor after a committed health handshake.
+
+### Compatibility and limitations
+
+- This is a technical prerelease, not a trusted stable release: macOS uses ad-hoc signing
+  without notarization, and Windows lacks Authenticode signing.
+- Isolated QA installations require a one-time manual migration to the public package;
+  test trust roots and localhost channels are not promoted to production.
 
 ## [0.1.2-rc.2] - 2026-10-01
 

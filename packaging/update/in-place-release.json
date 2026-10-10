@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "scope": "technical-prerelease",
+  "macos_in_place": true,
+  "windows_in_place": true
+}
