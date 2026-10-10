@@ -1,8 +1,8 @@
 # 原位更新助手验收记录
 
-最新汇总（2026-10-10，北京时间）：Windows rc.2→rc.3 隔离 QA 已完成真实虚拟桌面端到端、准确 Release 包/原生回归/独立公网验证，并取得用户实机“正常、约5秒以内”反馈。该用户反馈不是自动性能采样；生产入口仍未启用，PR9未合并。完整来源、失败原因与复用边界见[Windows 更新工程复盘](WINDOWS_UPDATER_ENGINEERING_PLAYBOOK.md)。以下按原时间顺序保留当时的范围与待验状态。
+最新汇总（2026-10-10，北京时间）：Windows 与 macOS 隔离签名 TLS 真实 GUI 更新验收已通过，macOS 另有健康失败自动恢复证据；Windows rc.2→rc.3 另取得用户“正常、约5秒以内”反馈，不作为性能基准。PR9 与发布准备 PR19 已合并，公开 rc.3 技术 prerelease、平台资产和 OSS prerelease 更新渠道已发布并独立核验；stable 未启用。准确 source/run/hash、跨 SHA 输入等价性与公开/隔离证据边界见[rc.3 发布收尾记录](INSTPLOT_STUDIO_RC3_RELEASE_CLOSEOUT.md)，失败原因与复用方法见[Windows 更新工程复盘](WINDOWS_UPDATER_ENGINEERING_PLAYBOOK.md)。以下按原时间顺序保留当时的范围、禁止事项与待验状态，不作为当前发布状态。
 
-更新至：2026-10-02。测试属于未发布的 PR #9；产品原位更新入口默认关闭。
+以下历史记录起于 2026-10-02，当时测试属于未发布的 PR #9、原位入口默认关闭。当前默认开发构建仍不启用 preview；已发布技术 RC 的显式 feature 与渠道状态以上述收尾记录为准。
 
 ## macOS 实际证据
 
