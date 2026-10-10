@@ -14,11 +14,13 @@ import json
 import os
 import plistlib
 import re
+import secrets
 import shutil
 import ssl
 import subprocess
 import sys
 import tarfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -230,14 +232,177 @@ def serve(root: Path) -> None:
     context.load_cert_chain(root / "server.pem", root / "server-key.pem")
     server.socket = context.wrap_socket(server.socket, server_side=True)
     print("Isolated TLS service ready", flush=True)
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def health_failure(root: Path) -> None:
+    """Post-verification fault only; never counted as download/button evidence."""
+    case = root / "health-failure"
+    case.mkdir(mode=0o700)
+    (case / ".metadata_never_index").touch()
+    target = case / "Studio Mac GUI QA.app"
+    shutil.copytree(root / "dmg-source-1/InstPlot Studio.app", target)
+    project = case / "Rollback sentinel.instplot"
+    run(str(target / EXECUTABLE), "--create-project", str(project))
+    identifier, nonce = secrets.token_hex(16), secrets.token_hex(32)
+    directory = case / f".instplot-studio-update-{identifier}"
+    directory.mkdir(mode=0o700)
+    candidate = directory / "candidate.app"
+    shutil.copytree(root / "dmg-source-2/InstPlot Studio.app", candidate)
+    transaction = {"schema": 1, "id": identifier, "nonce": nonce,
+        "identity": {"product": "instplot-studio", "platform": "macos-aarch64",
+            "installed_path": str(target), "previous_version": "0.1.2-rc.2",
+            "candidate_version": "0.1.2-rc.3", "candidate_sha256": digest(candidate / EXECUTABLE),
+            "candidate_size": (candidate / EXECUTABLE).stat().st_size},
+        "stage": "waiting_for_exit", "candidate_process": None, "last_error": None}
+    save(directory / "request.json", {"directory": str(directory), "transaction": transaction,
+        "previous_binary_hash": digest(target / EXECUTABLE), "candidate_binary_hash": digest(candidate / EXECUTABLE),
+        "resume_project": str(project)})
+    save(directory / "transaction.json", transaction)
+    shutil.copy2(target / EXECUTABLE, directory / "update-helper")
+    # The real GUI must fail writing its receipt; no fake receipt is supplied.
+    (directory / "health.json").mkdir(mode=0o700)
+    save(case / "fault-proof.json", {"scope": "post-verification-health-failure-not-download-UI",
+        "directory": str(directory), "project_sha256": digest(project),
+        "previous_sha256": digest(target / EXECUTABLE)})
+    with (case / "old-gui.log").open("xb") as log:
+        child = subprocess.Popen([str(target / EXECUTABLE), str(project)], stdin=subprocess.DEVNULL,
+            stdout=log, stderr=log, start_new_session=True)
+    print(json.dumps({"pid": child.pid, "helper": str(directory / "update-helper"), "directory": str(directory)}), flush=True)
+    save(case / "old-exit.json", {"pid": child.pid, "exit_code": child.wait()})
+
+
+def apply_failure(root: Path) -> None:
+    case = root / "health-failure"
+    fault = json.loads((case / "fault-proof.json").read_bytes())
+    directory = Path(fault["directory"])
+    if directory.parent != case or not directory.name.startswith(".instplot-studio-update-"):
+        raise ValueError("exact isolated fault transaction required")
+    with (case / "helper.log").open("xb") as log:
+        child = subprocess.Popen([str(directory / "update-helper"), "--apply-update", str(directory)],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    print(json.dumps({"helper_pid": child.pid}), flush=True)
+    save(case / "helper-exit.json", {"pid": child.pid, "exit_code": child.wait()})
+
+
+def inspect_failure(root: Path) -> None:
+    case = root / "health-failure"
+    fault = json.loads((case / "fault-proof.json").read_bytes())
+    directory = Path(fault["directory"])
+    target = case / "Studio Mac GUI QA.app"
+    state = json.loads((directory / "transaction.json").read_bytes())
+    assert state["stage"] == "rolled_back" and state["last_error"]
+    assert (directory / "health.json").is_dir()
+    assert (directory / "failed-candidate.app").is_dir()
+    assert digest(target / EXECUTABLE) == fault["previous_sha256"]
+    assert digest(case / "Rollback sentinel.instplot") == fault["project_sha256"]
+    assert json.loads((case / "old-exit.json").read_bytes())["exit_code"] == 0
+    assert json.loads((case / "helper-exit.json").read_bytes())["exit_code"] != 0
+    identity = None
+    for _ in range(30):
+        matches = [line.strip().split(maxsplit=1)[0] for line in run("ps", "-axo", "pid=,comm=").splitlines()
+                   if line.strip().split(maxsplit=1)[-1] == str(target / EXECUTABLE)]
+        assert len(matches) == 1
+        current = (matches[0], run("ps", "-p", matches[0], "-o", "lstart="))
+        identity = identity or current
+        assert current == identity
+        time.sleep(1)
+    run("codesign", "--verify", "--deep", "--strict", str(target))
+    run(str(target / EXECUTABLE), "--check-project", str(case / "Rollback sentinel.instplot"))
+    save(case / "rollback-proof.json", {"scope": fault["scope"], "stage": "rolled_back",
+        "restored_pid": identity[0], "restored_started": identity[1], "single_restored_GUI_30_seconds": True,
+        "previous_binary_sha256": fault["previous_sha256"], "project_sha256": fault["project_sha256"],
+        "old_exit_code": 0, "codesign_strict": True, "failed_candidate_preserved": True})
+    print("Real health failure, safe rollback and single restored project GUI: PASS")
+
+
+def inspect_success(root: Path, project_hash: str) -> None:
+    directories = list(root.glob(".instplot-studio-update-*/transaction.json"))
+    if len(directories) != 1 or not re.fullmatch(r"[0-9a-f]{64}", project_hash):
+        raise ValueError("unique actual GUI transaction and pre-update project hash required")
+    directory = directories[0].parent
+    state = json.loads((directory / "transaction.json").read_bytes())
+    receipt = json.loads((directory / "health.json").read_bytes())
+    proofs = json.loads((root / "build-proof.json").read_bytes())
+    target = root / "Studio Mac GUI QA.app"
+    if state["stage"] != "completed" or state["last_error"] is not None:
+        raise ValueError("real GUI transaction did not complete")
+    assert receipt["transaction_id"] == state["id"] and receipt["nonce"] == state["nonce"]
+    assert receipt["initialized"] is True and receipt["window_ready"] is True
+    assert receipt["version"] == "0.1.2-rc.3" and receipt["installed_path"] == str(target)
+    assert state["candidate_process"] == [receipt["process_id"], receipt["process_started"]]
+    assert digest(target / EXECUTABLE) == proofs[1]["binary_sha256"]
+    assert digest(directory / "previous.app" / EXECUTABLE) == proofs[0]["binary_sha256"]
+    assert digest(root / "GUI sentinel.instplot") == project_hash
+    old_exits = list(root.glob("exit-*.json"))
+    assert old_exits and all(json.loads(p.read_bytes())["exit_code"] == 0 for p in old_exits)
+    pid = str(receipt["process_id"])
+    started = time.monotonic()
+    while time.monotonic() - started < 30:
+        assert run("ps", "-p", pid, "-o", "lstart=") == receipt["process_started"]
+        assert run("ps", "-p", pid, "-o", "comm=") == str(target / EXECUTABLE)
+        all_processes = run("ps", "-axo", "pid=,comm=")
+        bound = [line for line in all_processes.splitlines() if line.strip().split(maxsplit=1)[-1] == str(target / EXECUTABLE)]
+        assert len(bound) == 1
+        time.sleep(1)
+    run("codesign", "--verify", "--deep", "--strict", str(target))
+    assert run("lipo", "-archs", str(target / EXECUTABLE)) == "arm64"
+    run(str(target / EXECUTABLE), "--check-project", str(root / "GUI sentinel.instplot"))
+    for suffix in ("png", "pdf"):
+        run(str(target / EXECUTABLE), f"--export-fixed-{suffix}", str(root / f"accepted.{suffix}"))
+        assert (root / f"accepted.{suffix}").stat().st_size > 1000
+    save(root / "success-proof.json", {"source_sha": proofs[1]["source_sha"],
+        "scope": "isolated-Release-TLS-DMG-GUI", "stage": "completed", "last_error": None,
+        "candidate_pid": receipt["process_id"], "candidate_started": receipt["process_started"],
+        "single_bound_process_30_seconds": True, "project_sha256": project_hash,
+        "actual_health_binding": True, "previous_bundle_preserved": True,
+        "old_normal_exit_0": True, "codesign_strict": True, "project_png_pdf": True})
+    print("Completed transaction, process, project, bundle, backup and export proof: PASS")
+
+
+def handoff(root: Path) -> None:
+    provenance = json.loads((root / "provenance.json").read_bytes())
+    proofs = json.loads((root / "build-proof.json").read_bytes())
+    assert json.loads((root / "success-proof.json").read_bytes())["stage"] == "completed"
+    assert json.loads((root / "health-failure/rollback-proof.json").read_bytes())["stage"] == "rolled_back"
+    output = ROOT / "target/macos-update-qa" / f"final-{provenance['source_sha'][:7]}"
+    output.mkdir(mode=0o700)
+    stage = output / "dmg-source"
+    stage.mkdir(mode=0o700)
+    app = stage / "InstPlot Studio Mac QA rc.3.app"
+    shutil.copytree(root / "dmg-source-2/InstPlot Studio.app", app)
+    assert digest(app / EXECUTABLE) == proofs[1]["binary_sha256"]
+    run("codesign", "--verify", "--deep", "--strict", str(app))
+    assert run(str(app / EXECUTABLE), "--product-info").endswith("\t0.1.2-rc.3")
+    dmg = output / "InstPlot-Studio-Mac-QA-0.1.2-rc.3-aarch64.dmg"
+    run("hdiutil", "create", "-srcfolder", str(stage), "-format", "UDZO", "-fs", "HFS+",
+        "-volname", "Studio Mac QA rc.3", str(dmg))
+    run("hdiutil", "verify", str(dmg))
+    evidence = output / "evidence"
+    evidence.mkdir(mode=0o700)
+    for name in ("provenance.json", "build-proof.json", "success-proof.json"):
+        shutil.copy2(root / name, evidence / name)
+    shutil.copy2(root / "health-failure/rollback-proof.json", evidence / "rollback-proof.json")
+    save(output / "package-proof.json", {"version": "0.1.2-rc.3", "source_sha": provenance["source_sha"],
+        "binary_sha256": digest(app / EXECUTABLE), "dmg_sha256": digest(dmg), "size_bytes": dmg.stat().st_size,
+        "scope": "local-isolated-QA-not-production-release", "bundle_id": provenance["bundle_id"],
+        "signed_update_asset": False, "same_tested_binary": True, "codesign": "ad-hoc-not-notarized",
+        "update_origin": ORIGIN, "public_updates_supported": False,
+        "note": "Repacked exact tested candidate under an independent QA app name. Local TLS fixture only; no production installation or release changes."})
+    print(str(output), flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "build", "serve", "activate", "launch"))
+    parser.add_argument("action", choices=("prepare", "build", "serve", "activate", "launch", "health-failure", "apply-failure", "inspect-failure", "inspect-success", "handoff"))
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--source-sha")
+    parser.add_argument("--project-sha256")
     args = parser.parse_args()
     root = validate_root(args.root)
     if args.action == "prepare":
@@ -246,6 +411,16 @@ def main() -> None:
         build(root)
     elif args.action == "serve":
         serve(root)
+    elif args.action == "health-failure":
+        health_failure(root)
+    elif args.action == "apply-failure":
+        apply_failure(root)
+    elif args.action == "inspect-failure":
+        inspect_failure(root)
+    elif args.action == "handoff":
+        handoff(root)
+    elif args.action == "inspect-success":
+        inspect_success(root, args.project_sha256 or "")
     elif args.action == "activate":
         shutil.copyfile(root / "public/instplot-studio/releases/0.1.2-rc.3/metadata/2/manifest.json",
                         root / "public/instplot-studio/channels/prerelease/latest.json")
