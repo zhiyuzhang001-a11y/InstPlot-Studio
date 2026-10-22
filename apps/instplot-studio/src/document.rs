@@ -904,7 +904,7 @@ const HANDOFF_MARKERS: [MarkerShape; 7] = [
     MarkerShape::TriangleDown,
     MarkerShape::Diamond,
     MarkerShape::Pentagon,
-    MarkerShape::Star,
+    MarkerShape::Hexagon,
 ];
 
 fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
@@ -1809,6 +1809,7 @@ fn marker_shape(shape: MarkerShape) -> LayoutMarkerShape {
         MarkerShape::TriangleDown => LayoutMarkerShape::TriangleDown,
         MarkerShape::Diamond => LayoutMarkerShape::Diamond,
         MarkerShape::Pentagon => LayoutMarkerShape::Pentagon,
+        MarkerShape::Hexagon => LayoutMarkerShape::Hexagon,
         MarkerShape::Star => LayoutMarkerShape::Star,
         MarkerShape::Plus => LayoutMarkerShape::Plus,
         MarkerShape::Cross => LayoutMarkerShape::Cross,

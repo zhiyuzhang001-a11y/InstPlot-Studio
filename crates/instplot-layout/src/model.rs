@@ -196,6 +196,7 @@ pub enum MarkerShape {
     TriangleDown,
     Diamond,
     Pentagon,
+    Hexagon,
     Star,
     Plus,
     Cross,

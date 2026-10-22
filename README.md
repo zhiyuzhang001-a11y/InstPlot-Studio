@@ -10,6 +10,16 @@ historical comparison fixtures remain under `prototypes/`.
 
 ## Repository boundary
 
+Saving a new `.instplot` project suggests the source data filename; Save As
+prefills the current project name and folder. Overwriting a valid project keeps
+one previous version as `name.instplot.bak`. If the primary project cannot be
+decoded, Studio attempts read-only backup recovery and asks for Save As. This is
+a safety copy, not a second data format or a complete version history.
+
+The marker picker uses a hexagon instead of a five-pointed star for clearer
+small filled/hollow markers. Existing star markers still load and export
+unchanged; they are not silently converted.
+
 - This repository owns the InstPlot Studio application, figure document, layout compiler,
   display list, publication backends, visual benchmarks, and project format.
 - InstPlot Lite remains an independently buildable and releasable application.

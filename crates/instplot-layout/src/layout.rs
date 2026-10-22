@@ -1048,6 +1048,7 @@ fn marker_path(x: f64, y: f64, style: MarkerStyle) -> Path {
             (x - radius, y),
         ]),
         MarkerShape::Pentagon => radial_marker_polygon(x, y, radius, 5, None),
+        MarkerShape::Hexagon => radial_marker_polygon(x, y, radius, 6, None),
         MarkerShape::Star => radial_marker_polygon(x, y, radius, 5, Some(0.46)),
         MarkerShape::Plus => Path {
             verbs: vec![
