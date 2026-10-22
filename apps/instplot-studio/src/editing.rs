@@ -90,6 +90,12 @@ pub enum EditCommand {
         y_column: String,
         y_error_column: Option<String>,
     },
+    /// Change a file's source-series columns as one atomic, undoable edit.
+    RebindSeriesColumns {
+        artist_ids: Vec<String>,
+        x_column: String,
+        y_column: String,
+    },
     SetSeriesErrorColumns {
         artist_id: String,
         x_error_column: Option<String>,
@@ -176,6 +182,7 @@ impl EditCommand {
             Self::SetSeriesColor { .. } => "Change series color",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
+            Self::RebindSeriesColumns { .. } => "Change file data bindings",
             Self::SetSeriesErrorColumns { .. } => "Change error columns",
             Self::DeleteDataSource { .. } => "Delete data source",
             Self::DeleteDataSources { .. } => "Remove imported data",
@@ -290,6 +297,29 @@ impl EditCommand {
                 &y_column,
                 y_error_column.as_deref(),
             ),
+            Self::RebindSeriesColumns {
+                artist_ids,
+                x_column,
+                y_column,
+            } => {
+                for artist_id in artist_ids {
+                    let data_source_id = document
+                        .logical_series()
+                        .into_iter()
+                        .find(|series| series.id == artist_id)
+                        .and_then(|series| series.binding)
+                        .ok_or_else(|| format!("series {artist_id} has no data binding"))?
+                        .data_source_id;
+                    document.rebind_series(
+                        &artist_id,
+                        &data_source_id,
+                        &x_column,
+                        &y_column,
+                        None,
+                    )?;
+                }
+                Ok(())
+            }
             Self::SetSeriesErrorColumns {
                 artist_id,
                 x_error_column,

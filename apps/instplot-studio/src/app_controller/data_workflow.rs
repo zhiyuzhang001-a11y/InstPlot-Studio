@@ -628,10 +628,27 @@ impl StudioApp {
         ui: &mut egui::Ui,
         group: &DataNavigationGroup,
     ) {
+        let shared_file = file_group_shares_columns(group);
+        let source_ids = file_group_source_ids(group);
+        let selected_source = self.selected_series.as_ref().and_then(|selected| {
+            self.document
+                .logical_series()
+                .into_iter()
+                .find(|series| &series.id == selected)
+                .and_then(|series| series.binding)
+                .map(|binding| binding.data_source_id)
+                .filter(|id| shared_file && source_ids.contains(id))
+        });
         let Some(dataset_id) = group
             .items
             .iter()
-            .find(|item| item.kind == DataSetKind::Source)
+            .find(|item| selected_source.as_deref() == Some(item.id.as_str()))
+            .or_else(|| {
+                group
+                    .items
+                    .iter()
+                    .find(|item| item.kind == DataSetKind::Source)
+            })
             .or_else(|| group.items.first())
             .map(|item| item.id.as_str())
         else {
@@ -642,13 +659,13 @@ impl StudioApp {
             .logical_series()
             .into_iter()
             .filter(|series| {
-                series
-                    .binding
-                    .as_ref()
-                    .is_some_and(|binding| binding.data_source_id == dataset_id)
+                series.binding.as_ref().is_some_and(|binding| {
+                    binding.data_source_id == dataset_id
+                        || (shared_file && source_ids.contains(&binding.data_source_id))
+                })
             })
             .collect::<Vec<_>>();
-        let Some(dataset) = self
+        let Some(mut dataset) = self
             .session
             .datasets()
             .iter()
@@ -659,6 +676,19 @@ impl StudioApp {
         };
         if series_for_dataset.is_empty() {
             return;
+        }
+        let scope_id = egui::Id::new(("file-shared-columns", &group.key));
+        let mut shared_columns = shared_file
+            && ui
+                .ctx()
+                .data_mut(|data| data.get_temp::<bool>(scope_id).unwrap_or(true));
+        if shared_file {
+            ui.checkbox(&mut shared_columns, "同文件共用 X/Y")
+                .on_hover_text(
+                    "默认按同名列统一选择；取消后仅修改下方选中的一条曲线。拟合曲线不参与联动。",
+                );
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(scope_id, shared_columns));
         }
         let selected_index = self
             .selected_series
@@ -692,6 +722,19 @@ impl StudioApp {
                         );
                     }
                 });
+            if let Some(selected_dataset) = series_for_dataset
+                .iter()
+                .find(|series| series.id == selected_id)
+                .and_then(|series| series.binding.as_ref())
+                .and_then(|binding| {
+                    self.session
+                        .datasets()
+                        .iter()
+                        .find(|dataset| dataset.plot_id == binding.data_source_id)
+                })
+            {
+                dataset = selected_dataset.clone();
+            }
             if ui.button("＋").on_hover_text("从此文件新增曲线").clicked() {
                 let used_y = series_for_dataset
                     .iter()
@@ -699,12 +742,14 @@ impl StudioApp {
                         series
                             .binding
                             .as_ref()
+                            .filter(|binding| binding.data_source_id == dataset.plot_id)
                             .map(|binding| binding.y_column.as_str())
                     })
                     .collect::<BTreeSet<_>>();
-                let x = series_for_dataset[0]
-                    .binding
-                    .as_ref()
+                let x = series_for_dataset
+                    .iter()
+                    .find(|series| series.id == selected_id)
+                    .and_then(|series| series.binding.as_ref())
                     .map(|binding| binding.x_column.clone())
                     .unwrap_or_else(|| dataset.columns[0].name.clone());
                 if let Some(y) = dataset
@@ -754,6 +799,33 @@ impl StudioApp {
             return;
         };
         let binding = series.binding.as_ref().expect("filtered bound series");
+        // The curve selector spans every source section, not just the first one.
+        let Some(mut dataset) = self
+            .session
+            .datasets()
+            .iter()
+            .find(|dataset| dataset.plot_id == binding.data_source_id)
+            .cloned()
+        else {
+            return;
+        };
+        if shared_columns {
+            dataset.columns.retain(|column| {
+                source_ids.iter().all(|id| {
+                    self.session
+                        .datasets()
+                        .iter()
+                        .find(|dataset| &dataset.plot_id == id)
+                        .is_some_and(|dataset| {
+                            dataset
+                                .columns
+                                .iter()
+                                .any(|other| other.name == column.name)
+                        })
+                })
+            });
+            ui.weak("X/Y 选列将应用到本文件所有原始数据组");
+        }
         let mut x_column = binding.x_column.clone();
         let mut y_column = binding.y_column.clone();
         let (mut x_error_column, mut y_error_column) = self
@@ -802,11 +874,36 @@ impl StudioApp {
                 &dataset,
             );
         });
-        if before != (x_column.clone(), y_column.clone()) && x_column != y_column {
+        let group_series = self
+            .document
+            .logical_series()
+            .into_iter()
+            .filter(|series| {
+                series
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| source_ids.contains(&binding.data_source_id))
+            })
+            .collect::<Vec<_>>();
+        let mixed = shared_columns
+            && group_series.iter().any(|series| {
+                series
+                    .binding
+                    .as_ref()
+                    .is_some_and(|other| other.x_column != x_column || other.y_column != y_column)
+            });
+        let unify = mixed
+            && ui
+                .button("统一当前选列")
+                .on_hover_text("当前各组绑定不同，点击后统一为上方 X/Y 列。")
+                .clicked();
+        if (before != (x_column.clone(), y_column.clone()) || unify) && x_column != y_column {
             self.selected_dataset = Some(binding.data_source_id.clone());
             self.binding_x.clone_from(&x_column);
             self.binding_y.clone_from(&y_column);
-            self.execute_document_edit(
+            let command = if shared_columns {
+                file_group_column_edit(&self.document, group, x_column.clone(), y_column.clone())
+            } else {
                 EditCommand::RebindSeries {
                     artist_id: series.id.clone(),
                     data_source_id: binding.data_source_id.clone(),
@@ -814,9 +911,9 @@ impl StudioApp {
                     y_column: y_column.clone(),
                     y_error_column: (series.kind == SeriesKind::ErrorBar)
                         .then(|| self.binding_error.clone()),
-                },
-                self.language.text(Text::ApplyBinding),
-            );
+                }
+            };
+            self.execute_document_edit(command, self.language.text(Text::ApplyBinding));
         }
         let mut axes = series.axes.unwrap_or_default();
         if axis_binding_editor(

@@ -6,6 +6,9 @@ All notable changes to InstPlot Studio are recorded here.
 
 ### Fixed
 
+- Share named X/Y column choices across source sections of the same Lite-exported
+  file by default, with an explicit per-curve opt-out and one-step undo. Keep fits,
+  other files, embedded data and raw numeric columns unchanged.
 - Compute automatic axis bounds from the same live, valid X/Y pairs used for rendering;
   blank-cell zero placeholders and unpaired values no longer distort either axis or
   incorrectly reject positive logarithmic data. Genuine zero measurements remain valid.

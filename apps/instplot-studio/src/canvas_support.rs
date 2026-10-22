@@ -798,6 +798,45 @@ pub(super) struct DataNavigationGroup {
     pub(super) items: Vec<DataNavigationItem>,
 }
 
+/// A multi-section file shares named X/Y columns, like Lite. Fits and unrelated
+/// embedded/manual data must not be rebound along with its source datasets.
+pub(super) fn file_group_source_ids(group: &DataNavigationGroup) -> Vec<String> {
+    group
+        .items
+        .iter()
+        .filter(|item| item.kind == DataSetKind::Source)
+        .map(|item| item.id.clone())
+        .collect()
+}
+
+pub(super) fn file_group_shares_columns(group: &DataNavigationGroup) -> bool {
+    group.key != "embedded://" && file_group_source_ids(group).len() > 1
+}
+
+pub(super) fn file_group_column_edit(
+    document: &FigureDocument,
+    group: &DataNavigationGroup,
+    x_column: String,
+    y_column: String,
+) -> EditCommand {
+    let source_ids = file_group_source_ids(group);
+    EditCommand::RebindSeriesColumns {
+        artist_ids: document
+            .logical_series()
+            .into_iter()
+            .filter(|series| {
+                series
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| source_ids.contains(&binding.data_source_id))
+            })
+            .map(|series| series.id)
+            .collect(),
+        x_column,
+        y_column,
+    }
+}
+
 pub(super) fn data_navigation_groups(
     datasets: &[DataSet],
     language: UiLanguage,

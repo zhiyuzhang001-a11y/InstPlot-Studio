@@ -1,5 +1,176 @@
 use super::*;
 
+fn combined_column_fixture() -> (FigureDocument, Vec<DataSet>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.csv");
+    let base = instplot_io::read_data_file(&path).unwrap().remove(0);
+    let mut datasets = (0..9)
+        .map(|index| {
+            let mut dataset = base.clone();
+            dataset.source = PathBuf::from("/measurements/combined.csv");
+            dataset.plot_id = format!("source-{index}");
+            dataset.label = Some(format!("SMR_{index}nm"));
+            dataset.columns[1].values = vec![200.0 + f64::from(index); 3];
+            dataset.columns.push(instplot_core::NumericColumn {
+                name: "change".to_owned(),
+                values: vec![0.0, 0.1, 0.2],
+            });
+            dataset
+        })
+        .collect::<Vec<_>>();
+    let mut fit = base.clone();
+    fit.source = datasets[0].source.clone();
+    fit.kind = DataSetKind::Fit;
+    fit.plot_id = "fit".to_owned();
+    fit.fit_link = Some(instplot_core::FitLink {
+        parent_dataset_id: Some("source-0".to_owned()),
+        source_x_column: "field".to_owned(),
+        source_y_column: "response".to_owned(),
+        equation: None,
+        display_equation: None,
+    });
+    datasets.push(fit);
+    let mut other = base;
+    other.source = PathBuf::from("/other/combined.csv");
+    other.plot_id = "other-file".to_owned();
+    datasets.push(other);
+    (FigureDocument::from_datasets(&datasets).unwrap(), datasets)
+}
+
+#[test]
+fn combined_file_columns_rebind_nine_sources_in_one_undo_without_touching_fit_or_other_file() {
+    let (mut document, datasets) = combined_column_fixture();
+    let group = data_navigation_groups(&datasets, UiLanguage::Chinese).remove(0);
+    assert!(file_group_shares_columns(&group));
+    assert_eq!(file_group_source_ids(&group).len(), 9);
+    let before = document.clone();
+    let mut history = EditHistory::new(&document, true);
+    let command =
+        file_group_column_edit(&document, &group, "field".to_owned(), "change".to_owned());
+    history.execute(&mut document, command, None).unwrap();
+    for series in document.logical_series() {
+        let Some(binding) = series.binding else {
+            continue;
+        };
+        assert_eq!(
+            binding.y_column,
+            if binding.data_source_id.starts_with("source-") {
+                "change"
+            } else {
+                "response"
+            }
+        );
+    }
+    assert_eq!(
+        document.project().data_sources,
+        before.project().data_sources
+    );
+    let y = document.axis_record(AxisDimension::Y);
+    // Fit and the separate file still contribute their unchanged 2..8 values.
+    assert!(y.autoscale && y.maximum < 10.0 && y.minimum < 0.0);
+    let encoded = serde_json::to_vec(document.project()).unwrap();
+    let restored = FigureDocument::from_project(serde_json::from_slice(&encoded).unwrap()).unwrap();
+    assert_eq!(restored.project(), document.project());
+    history.undo(&mut document).unwrap();
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+    history.redo(&mut document).unwrap();
+    assert_eq!(document.project(), restored.project());
+}
+
+#[test]
+fn combined_file_missing_column_rejects_the_entire_edit_without_history_or_partial_bindings() {
+    let (_, mut datasets) = combined_column_fixture();
+    datasets[8].columns.pop();
+    let mut document = FigureDocument::from_datasets(&datasets).unwrap();
+    let group = data_navigation_groups(&datasets, UiLanguage::Chinese).remove(0);
+    let before = document.clone();
+    let command =
+        file_group_column_edit(&document, &group, "field".to_owned(), "change".to_owned());
+    let mut history = EditHistory::new(&document, true);
+    assert!(history.execute(&mut document, command, None).is_err());
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+}
+
+#[test]
+fn combined_file_still_allows_individual_curve_binding_and_embedded_data_never_defaults_to_shared()
+{
+    let (mut document, mut datasets) = combined_column_fixture();
+    let selected = document
+        .logical_series()
+        .into_iter()
+        .find(|series| {
+            series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.data_source_id == "source-5")
+        })
+        .unwrap();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::RebindSeries {
+                artist_id: selected.id,
+                data_source_id: "source-5".to_owned(),
+                x_column: "field".to_owned(),
+                y_column: "change".to_owned(),
+                y_error_column: None,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .logical_series()
+            .iter()
+            .filter(|series| series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.y_column == "change"))
+            .count(),
+        1
+    );
+    for dataset in &mut datasets {
+        dataset.source = PathBuf::from("embedded://manual");
+    }
+    assert!(!file_group_shares_columns(
+        &data_navigation_groups(&datasets, UiLanguage::Chinese)[0]
+    ));
+    assert!(!file_group_shares_columns(
+        &data_navigation_groups(&datasets[..1], UiLanguage::Chinese)[0]
+    ));
+}
+
+#[test]
+fn combined_file_sidebar_defaults_to_shared_and_remembers_explicit_individual_scope() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let (document, datasets) = combined_column_fixture();
+    app.document = document;
+    app.session.replace_datasets(datasets);
+    let group = data_navigation_groups(app.session.datasets(), UiLanguage::Chinese).remove(0);
+    let scope_id = egui::Id::new(("file-shared-columns", &group.key));
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.column_controls_for_group(ui, &group)
+    });
+    output.textures_delta.clear();
+    assert_eq!(
+        context.data_mut(|data| data.get_temp::<bool>(scope_id)),
+        Some(true)
+    );
+    context.data_mut(|data| data.insert_temp(scope_id, false));
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.column_controls_for_group(ui, &group)
+    });
+    output.textures_delta.clear();
+    assert_eq!(
+        context.data_mut(|data| data.get_temp::<bool>(scope_id)),
+        Some(false)
+    );
+}
+
 fn remove_app_data_sources(app: &mut StudioApp, ids: Vec<String>) {
     let state = AppTransactionState {
         document: &app.document,
