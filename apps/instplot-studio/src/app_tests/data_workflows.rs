@@ -1516,6 +1516,40 @@ fn logical_series_title_reports_the_combined_plot_style() {
         canvas_logical_series_title(UiLanguage::Chinese, &app.document, &series),
         "曲线＋点 · Combined title"
     );
+    let members = app
+        .document
+        .series()
+        .into_iter()
+        .filter(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+        .collect::<Vec<_>>();
+    assert_eq!(members.len(), 2);
+    for (language, line_name, marker_name) in [
+        (UiLanguage::Chinese, "曲线部分", "数据点部分"),
+        (UiLanguage::English, "Line component", "Marker component"),
+    ] {
+        let titles = members
+            .iter()
+            .map(|member| canvas_object_title(language, &app.document, member))
+            .collect::<Vec<_>>();
+        assert_ne!(titles[0], titles[1]);
+        for (member, title) in members.iter().zip(titles) {
+            let part = if member.kind == SeriesKind::Line {
+                line_name
+            } else {
+                marker_name
+            };
+            assert_eq!(title, format!("{part} · Combined title"));
+        }
+    }
+    // A pure line/point is still labelled as such, and the sidebar stays logical.
+    for style in [SeriesCreationStyle::Line, SeriesCreationStyle::Scatter] {
+        app.document.set_series_style(&series.id, style).unwrap();
+        let member = app.document.logical_series().remove(0);
+        assert_eq!(
+            canvas_object_title(UiLanguage::Chinese, &app.document, &member),
+            canvas_series_title(UiLanguage::Chinese, &member)
+        );
+    }
 }
 
 #[test]

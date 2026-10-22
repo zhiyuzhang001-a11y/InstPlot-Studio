@@ -720,6 +720,26 @@ pub(super) fn canvas_logical_series_title(
     canvas_series_title(language, series)
 }
 
+/// Object picking edits one artist, even when line and markers form one series.
+/// Keep this distinct from the logical-series title used by the data sidebar.
+pub(super) fn canvas_object_title(
+    language: UiLanguage,
+    document: &FigureDocument,
+    series: &SeriesDescriptor,
+) -> String {
+    if document.series_style(&series.id) == Some(SeriesCreationStyle::LineAndMarker) {
+        let part = match (language, series.kind) {
+            (UiLanguage::Chinese, SeriesKind::Line) => "曲线部分",
+            (UiLanguage::Chinese, SeriesKind::Scatter) => "数据点部分",
+            (UiLanguage::English, SeriesKind::Line) => "Line component",
+            (UiLanguage::English, SeriesKind::Scatter) => "Marker component",
+            _ => return canvas_series_title(language, series),
+        };
+        return format!("{part} · {}", series.label);
+    }
+    canvas_series_title(language, series)
+}
+
 pub(super) fn fixed_ticks_text(record: &AxisRecord) -> String {
     match &record.locator {
         LocatorSpec::Fixed { values } => values

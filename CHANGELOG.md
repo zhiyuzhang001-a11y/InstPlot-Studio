@@ -6,6 +6,8 @@ All notable changes to InstPlot Studio are recorded here.
 
 ### Fixed
 
+- Distinguish line and marker components in overlapping-object choices and their
+  editor titles, rather than showing identical line + markers labels for both.
 - Allow plot type changes (including line + markers) to apply to all logical curves
   in one undoable edit, preserving each curve's data, colors, axes and error bars.
 - Preserve hidden curves' own colors when normalizing a reopened project.
