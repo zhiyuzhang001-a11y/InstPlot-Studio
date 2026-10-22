@@ -17,6 +17,10 @@ fn selecting_a_line_component_keeps_the_correct_dataset_for_lite_editing() {
     let selected = app.selected_series.as_ref().unwrap();
     let (request, _) = make_request(&app.document, selected, "a".repeat(64)).unwrap();
     assert_eq!(request.target_id, "source-3");
+    let selected = selected.clone();
+    app.select_sidebar_curve(&selected);
+    assert_eq!(app.selected_canvas_node.as_deref(), Some(selected.as_str()));
+    assert_eq!(app.selected_canvas_role, Some(SelectableRole::Series));
 }
 
 fn fixture() -> (StudioApp, LiteSourceUpdate) {

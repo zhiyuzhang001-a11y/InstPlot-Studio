@@ -706,6 +706,7 @@ impl StudioApp {
             })
             .unwrap_or(0);
         let mut selected_id = series_for_dataset[selected_index].id.clone();
+        let previous_id = selected_id.clone();
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt(("file-series", &group.key))
                 .width(142.0)
@@ -798,6 +799,12 @@ impl StudioApp {
             }
         });
         self.selected_series = Some(selected_id.clone());
+        if selected_id != previous_id {
+            self.select_sidebar_curve(&selected_id);
+            if self.lite_follows_selection() {
+                self.begin_lite_edit(&selected_id);
+            }
+        }
         let Some(series) = series_for_dataset
             .into_iter()
             .find(|series| series.id == selected_id)
@@ -807,7 +814,7 @@ impl StudioApp {
         let binding = series.binding.as_ref().expect("filtered bound series");
         if ui
             .button("在 Lite 编辑这组数据")
-            .on_hover_text("只发送当前曲线的数据组；发回后保留 Studio 样式与手动刻度。")
+            .on_hover_text("首次开启联动，之后默认随左侧曲线选择更新同一个 Lite 窗口；样式保留，坐标按新数据调整。")
             .clicked()
         {
             self.begin_lite_edit(&series.id);

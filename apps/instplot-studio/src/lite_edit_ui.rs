@@ -21,6 +21,7 @@ pub(super) struct PendingLiteEdit {
     child: Option<Child>,
     revision: u64,
     show_window: bool,
+    follow_selection: bool,
 }
 
 impl PendingLiteEdit {
@@ -114,6 +115,21 @@ fn lite_executable() -> Result<PathBuf, String> {
 }
 
 impl StudioApp {
+    pub(crate) fn lite_follows_selection(&self) -> bool {
+        self.lite_edit.as_ref().is_some_and(|p| p.follow_selection)
+    }
+
+    pub(crate) fn select_sidebar_curve(&mut self, id: &str) {
+        if let Some(series) = self.document.series().into_iter().find(|s| s.id == id) {
+            self.select_series_for_editing(&series);
+            self.selected_canvas_role = Some(if series.kind == SeriesKind::ErrorBar {
+                SelectableRole::ErrorBar
+            } else {
+                SelectableRole::Series
+            });
+        }
+    }
+
     pub(crate) fn begin_lite_edit(&mut self, artist_id: &str) {
         if let Some(pending) = &mut self.lite_edit {
             let alive = pending
@@ -180,6 +196,7 @@ impl StudioApp {
                 child: Some(child),
                 revision: 0,
                 show_window: true,
+                follow_selection: true,
             })
         })();
         match result {
@@ -247,6 +264,7 @@ impl StudioApp {
             .resizable(false).collapsible(false).default_width(380.0)
             .show(context, |ui| {
                 ui.label(&pending.request.label);
+                ui.checkbox(&mut pending.follow_selection, "切换曲线时自动同步 Lite（保持联动）");
                 if let Some(error) = &pending.error { ui.colored_label(egui::Color32::YELLOW, error); }
                 else if let Some(result) = &pending.result {
                     ui.label(format!("已收到 {} 行数据（{} 行保留），只更新这一组。", result.alive.len(), result.alive.iter().filter(|v| **v).count()));
