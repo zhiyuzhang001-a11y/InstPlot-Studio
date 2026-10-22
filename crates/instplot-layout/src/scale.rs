@@ -154,11 +154,20 @@ impl Locator {
                 Scale::Log10 if minimum > 0.0 => {
                     let first = minimum.log10().ceil() as i32;
                     let last = maximum.log10().floor() as i32;
-                    (first..=last)
+                    let mut ticks: Vec<_> = (first..=last)
                         .take(MAX_GENERATED_TICKS)
                         .filter_map(checked_pow10)
                         .filter(|value| *value >= minimum && *value <= maximum)
-                        .collect()
+                        .collect();
+                    if ticks.len() < 2 {
+                        // A narrow log domain may contain no decade at all.
+                        // Keep logarithmic mapping, but label useful in-domain
+                        // values instead of displaying an empty/unusable axis.
+                        ticks.extend(self.major_ticks(Scale::Linear, minimum, maximum, length_pt));
+                        ticks.sort_by(f64::total_cmp);
+                        ticks.dedup();
+                    }
+                    ticks
                 }
                 Scale::Log10 => Vec::new(),
             },
@@ -199,7 +208,7 @@ pub fn minor_ticks(scale: Scale, major: &[f64], minimum: f64, maximum: f64) -> V
                 };
                 for multiple in 2..10 {
                     let value = decade * multiple as f64;
-                    if value > minimum && value < maximum {
+                    if value > minimum && value < maximum && !major.contains(&value) {
                         ticks.push(value);
                     }
                 }
@@ -478,20 +487,23 @@ fn linear_ticks(minimum: f64, maximum: f64, step: f64) -> Vec<f64> {
     {
         return Vec::new();
     }
-    let minimum_tolerance = minimum_index.abs() * f64::EPSILON * 32.0;
-    let maximum_tolerance = maximum_index.abs() * f64::EPSILON * 32.0;
+    // Rounding tolerance must never span neighboring ticks. A large offset
+    // with a small range otherwise snaps many distinct ticks to one endpoint.
+    let minimum_tolerance = (minimum_index.abs() * f64::EPSILON * 32.0).min(0.25);
+    let maximum_tolerance = (maximum_index.abs() * f64::EPSILON * 32.0).min(0.25);
     let first = (minimum_index - minimum_tolerance).ceil() as i64;
     let last = (maximum_index + maximum_tolerance).floor() as i64;
-    (first..=last)
+    let mut ticks: Vec<_> = (first..=last)
         .map(|index| {
             let value = if index == 0 { 0.0 } else { index as f64 * step };
-            let tolerance = value
+            let tolerance = (value
                 .abs()
                 .max(minimum.abs())
                 .max(maximum.abs())
                 .max(step.abs())
                 * f64::EPSILON
-                * 64.0;
+                * 64.0)
+                .min(step * 0.25);
             if (value - minimum).abs() <= tolerance {
                 minimum
             } else if (value - maximum).abs() <= tolerance {
@@ -500,11 +512,10 @@ fn linear_ticks(minimum: f64, maximum: f64, step: f64) -> Vec<f64> {
                 value
             }
         })
-        .filter(|value| {
-            let tolerance = value.abs().max(step) * f64::EPSILON * 64.0;
-            *value >= minimum - tolerance && *value <= maximum + tolerance
-        })
-        .collect()
+        .filter(|value| *value >= minimum && *value <= maximum)
+        .collect();
+    ticks.dedup();
+    ticks
 }
 
 fn precision_from_step(step: f64) -> usize {
@@ -597,5 +608,48 @@ mod tests {
     fn automatic_exponent_only_falls_back_to_domain_when_ticks_are_absent() {
         assert_eq!(automatic_display_exponent(&[0.0], -1.0e9, 1.0e9), None);
         assert_eq!(automatic_display_exponent(&[], -1.0e9, 1.0e9), Some(9));
+    }
+
+    #[test]
+    fn narrow_log_domains_have_distinct_positive_in_domain_major_ticks() {
+        let locator = Locator::Auto {
+            target_spacing_pt: 40.0,
+        };
+        for (minimum, maximum) in [(244.4, 244.9), (0.8, 1.2), (1.2e-13, 1.8e-13)] {
+            let ticks = locator.major_ticks(Scale::Log10, minimum, maximum, 240.0);
+            assert!(ticks.len() >= 2 && ticks.len() <= 32, "{ticks:?}");
+            assert!(ticks.windows(2).all(|p| p[0] < p[1]));
+            assert!(ticks.iter().all(|v| *v > 0.0
+                && *v >= minimum
+                && *v <= maximum
+                && Scale::Log10.map(*v, minimum, maximum).is_some()));
+            let labels = format_ticks(&ticks, Some(ticks[1] - ticks[0])).labels;
+            assert!(!duplicate_labels_for_distinct_values(&ticks, &labels));
+            let minor = minor_ticks(Scale::Log10, &ticks, minimum, maximum);
+            assert!(minor.iter().all(|v| !ticks.contains(v)));
+        }
+    }
+
+    #[test]
+    fn automatic_linear_ticks_remain_finite_and_distinct_at_tiny_and_large_offsets() {
+        let locator = Locator::Auto {
+            target_spacing_pt: 40.0,
+        };
+        for (minimum, maximum) in [
+            (1e12, 1e12 + 0.01),
+            (-1e-15, 1e-15),
+            (f64::from_bits(1), f64::from_bits(20)),
+        ] {
+            let ticks = locator.major_ticks(Scale::Linear, minimum, maximum, 240.0);
+            assert!(ticks.len() >= 2 && ticks.len() <= 32, "{ticks:?}");
+            assert!(ticks.windows(2).all(|p| p[0] < p[1]));
+            assert!(
+                ticks
+                    .iter()
+                    .all(|v| v.is_finite() && *v >= minimum && *v <= maximum)
+            );
+            let labels = format_ticks(&ticks, Some(ticks[1] - ticks[0])).labels;
+            assert!(!duplicate_labels_for_distinct_values(&ticks, &labels));
+        }
     }
 }

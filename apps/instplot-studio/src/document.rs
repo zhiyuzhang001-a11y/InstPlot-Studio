@@ -1109,12 +1109,16 @@ fn set_handoff_axes(
         ));
     };
     let padded = |minimum: f64, maximum: f64| {
-        let span = maximum - minimum;
-        let padding = if span > 0.0 { span * 0.05 } else { 1.0 };
-        (minimum - padding, maximum + padding)
+        apply_visual_padding(
+            DataBounds { minimum, maximum },
+            AxisScale::Linear,
+            AutoscalePolicy::default(),
+        )
+        .map(|bounds| (bounds.minimum, bounds.maximum))
+        .map_err(ProjectError::Validation)
     };
-    let (x_min, x_max) = padded(x_min, x_max);
-    let (y_min, y_max) = padded(y_min, y_max);
+    let (x_min, x_max) = padded(x_min, x_max)?;
+    let (y_min, y_max) = padded(y_min, y_max)?;
     let axes = &mut project.figure.axes[0];
     axes.x.minimum = x_min;
     axes.x.maximum = x_max;

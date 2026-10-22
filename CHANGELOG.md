@@ -4,6 +4,16 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Compute automatic axis bounds from the same live, valid X/Y pairs used for rendering;
+  blank-cell zero placeholders and unpaired values no longer distort either axis or
+  incorrectly reject positive logarithmic data. Genuine zero measurements remain valid.
+- Use the shared finite, relative padding policy on import, including constant small
+  signals and opposite-sign extreme values.
+- Keep useful major ticks on narrow logarithmic domains, and bound endpoint rounding
+  tolerances so large-offset, small-span axes do not collapse distinct ticks together.
+
 ## [0.1.2-rc.3] - 2026-10-10
 
 ### Added

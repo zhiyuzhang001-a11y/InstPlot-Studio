@@ -66,30 +66,14 @@ pub fn compute_axis_data_bounds(
         }
         match &artist.properties {
             ArtistProperties::Line { binding, .. } | ArtistProperties::Scatter { binding, .. } => {
-                let column_name = match identity {
-                    AxisIdentity::X1 | AxisIdentity::X2 => &binding.x_column,
-                    AxisIdentity::Y1 | AxisIdentity::Y2 => &binding.y_column,
-                };
-                let Some(source) = project
-                    .data_sources
-                    .iter()
-                    .find(|source| source.id == binding.data_source_id)
-                else {
-                    continue;
-                };
-                let DataSourcePayload::Embedded { columns, alive, .. } = &source.payload else {
-                    continue;
-                };
-                if let Some(column) = columns.iter().find(|column| column.name == *column_name) {
-                    values.extend(
-                        column
-                            .values
-                            .iter()
-                            .enumerate()
-                            .filter(|(index, _)| alive.get(*index).copied().unwrap_or(true))
-                            .map(|(_, value)| *value),
-                    );
-                }
+                // Use the same paired, live, valid rows as rendering. Embedded
+                // missing cells contain finite zero placeholders; inspecting a
+                // column alone both includes those and counts undrawable pairs.
+                let points = bound_points(binding, project).map_err(|error| error.to_string())?;
+                values.extend(points.into_iter().map(|point| match identity {
+                    AxisIdentity::X1 | AxisIdentity::X2 => point.x,
+                    AxisIdentity::Y1 | AxisIdentity::Y2 => point.y,
+                }));
             }
             ArtistProperties::ErrorBar {
                 binding,
