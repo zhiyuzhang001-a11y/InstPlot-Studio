@@ -69,6 +69,7 @@ pub(super) struct StudioApp {
     pub(super) status: Option<(String, Instant)>,
     pub(super) manual_data: ManualDataState,
     pub(super) marker_size_for_all: bool,
+    pub(super) series_style_for_all: bool,
     pub(super) marker_interval_for_all: bool,
     pub(super) marker_fill_for_all: bool,
     pub(super) language: UiLanguage,

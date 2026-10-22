@@ -75,6 +75,9 @@ pub enum EditCommand {
         artist_id: String,
         style: SeriesCreationStyle,
     },
+    SetAllSeriesStyles {
+        style: SeriesCreationStyle,
+    },
     SetSeriesColor {
         artist_id: String,
         color_id: String,
@@ -179,6 +182,7 @@ impl EditCommand {
             Self::SetAxisMode(_) => "Change axes mode",
             Self::SetSeriesAxisBinding { .. } => "Change series axes",
             Self::SetSeriesStyle { .. } => "Change plot type",
+            Self::SetAllSeriesStyles { .. } => "Change all curve plot types",
             Self::SetSeriesColor { .. } => "Change series color",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
@@ -275,6 +279,24 @@ impl EditCommand {
             }
             Self::SetSeriesStyle { artist_id, style } => {
                 document.set_series_style(&artist_id, style)
+            }
+            Self::SetAllSeriesStyles { style } => {
+                // Snapshot logical series, not individual line/marker members.
+                // Skip already-matching styles so a repeated apply is a no-op.
+                let ids = document
+                    .logical_series()
+                    .into_iter()
+                    .filter(|series| {
+                        document
+                            .series_style(&series.id)
+                            .is_some_and(|current| current != style)
+                    })
+                    .map(|series| series.id)
+                    .collect::<Vec<_>>();
+                for id in ids {
+                    document.set_series_style(&id, style)?;
+                }
+                Ok(())
             }
             Self::SetSeriesColor {
                 artist_id,

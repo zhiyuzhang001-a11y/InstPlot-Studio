@@ -37,6 +37,153 @@ fn combined_column_fixture() -> (FigureDocument, Vec<DataSet>) {
 }
 
 #[test]
+fn all_curve_plot_types_are_one_undoable_idempotent_edit_preserving_data_axes_colors_and_errors() {
+    let (mut document, _) = combined_column_fixture();
+    let ids = document
+        .logical_series()
+        .into_iter()
+        .map(|series| series.id)
+        .collect::<Vec<_>>();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &ids[3],
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    document.set_series_visible(&ids[2], false).unwrap();
+    document
+        .set_series_error_columns(&ids[0], None, Some("change"))
+        .unwrap();
+    let before = document.clone();
+    let originals = ids
+        .iter()
+        .map(|id| document.artist_record(id).unwrap())
+        .collect::<Vec<_>>();
+    let errors = document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter(|artist| matches!(artist.properties, ArtistProperties::ErrorBar { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::SetAllSeriesStyles {
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(document.logical_series().len(), ids.len());
+    for id in &ids {
+        assert_eq!(
+            document.series_style(id),
+            Some(SeriesCreationStyle::LineAndMarker)
+        );
+        assert_eq!(
+            document.series_axis_binding(id),
+            before.series_axis_binding(id)
+        );
+    }
+    for original in originals {
+        assert_eq!(document.artist_record(&original.id), Some(original));
+    }
+    for error in errors {
+        assert_eq!(document.artist_record(&error.id), Some(error));
+    }
+    assert_eq!(
+        document.project().data_sources,
+        before.project().data_sources
+    );
+    assert_eq!(
+        document.axis_record(AxisDimension::X),
+        before.axis_record(AxisDimension::X)
+    );
+    assert_eq!(
+        document.axis_record(AxisDimension::Y),
+        before.axis_record(AxisDimension::Y)
+    );
+    let after = document.clone();
+    let outcome = history
+        .execute(
+            &mut document,
+            EditCommand::SetAllSeriesStyles {
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert!(!outcome.changed);
+    assert_eq!(document, after);
+    history.undo(&mut document).unwrap();
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+    history.redo(&mut document).unwrap();
+    assert_eq!(document, after);
+    let restored = FigureDocument::from_project(
+        serde_json::from_slice(&serde_json::to_vec(document.project()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.project(), document.project());
+    for style in [SeriesCreationStyle::Line, SeriesCreationStyle::Scatter] {
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAllSeriesStyles { style },
+                None,
+            )
+            .unwrap();
+        assert!(
+            document
+                .logical_series()
+                .iter()
+                .all(|series| document.series_style(&series.id) == Some(style))
+        );
+    }
+}
+
+#[test]
+fn plot_type_scope_defaults_to_current_curve_and_single_edit_does_not_change_others() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let app = StudioApp::new(&creation, Instant::now(), None);
+    assert!(!app.series_style_for_all);
+    let (mut document, _) = combined_column_fixture();
+    let series = document.logical_series();
+    let selected = series[4].id.clone();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::SetSeriesStyle {
+                artist_id: selected.clone(),
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .logical_series()
+            .iter()
+            .filter(|series| document.series_style(&series.id)
+                == Some(SeriesCreationStyle::LineAndMarker))
+            .count(),
+        1
+    );
+    assert_eq!(
+        document.series_style(&selected),
+        Some(SeriesCreationStyle::LineAndMarker)
+    );
+}
+
+#[test]
 fn combined_file_columns_rebind_nine_sources_in_one_undo_without_touching_fit_or_other_file() {
     let (mut document, datasets) = combined_column_fixture();
     let group = data_navigation_groups(&datasets, UiLanguage::Chinese).remove(0);
