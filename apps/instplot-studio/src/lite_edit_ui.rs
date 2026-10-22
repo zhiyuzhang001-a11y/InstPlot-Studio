@@ -19,6 +19,35 @@ pub(super) struct PendingLiteEdit {
     keep_manual_axes: bool,
     last_poll: Instant,
     child: Option<Child>,
+    revision: u64,
+    show_window: bool,
+}
+
+impl PendingLiteEdit {
+    fn sync(
+        &mut self,
+        document: &FigureDocument,
+        artist_id: &str,
+        force: bool,
+    ) -> Result<(), String> {
+        let (request, binding) =
+            lite_edit::make_request(document, artist_id, self.request.session_id.clone())?;
+        if !force && request == self.request && binding == self.binding_before {
+            return Ok(());
+        }
+        let revision = self.revision.checked_add(1).ok_or("联动版本已超限")?;
+        lite_edit_protocol::write_transfer(
+            &lite_edit_protocol::request_path(&self.root, revision),
+            &request,
+        )?;
+        self.revision = revision;
+        self.request = request;
+        self.binding_before = binding;
+        self.artist_id = artist_id.to_owned();
+        self.result = None;
+        self.error = None;
+        Ok(())
+    }
 }
 
 impl Drop for PendingLiteEdit {
@@ -86,6 +115,24 @@ fn lite_executable() -> Result<PathBuf, String> {
 
 impl StudioApp {
     pub(crate) fn begin_lite_edit(&mut self, artist_id: &str) {
+        if let Some(pending) = &mut self.lite_edit {
+            let alive = pending
+                .child
+                .as_mut()
+                .is_some_and(|c| matches!(c.try_wait(), Ok(None)));
+            if alive {
+                let result = pending.sync(&self.document, artist_id, true);
+                pending.show_window = true;
+                match result {
+                    Ok(()) => {
+                        self.set_success("已复用同一个 Lite 窗口，同步 Studio 当前数据".to_owned())
+                    }
+                    Err(e) => self.push_error("lite-edit", e),
+                }
+                return;
+            }
+            self.lite_edit = None;
+        }
         let result = (|| {
             if self.lite_edit.is_some() {
                 return Err("已有 Lite 编辑会话，请先完成或取消该会话".to_owned());
@@ -128,9 +175,11 @@ impl StudioApp {
                 binding_before,
                 result: None,
                 error: None,
-                keep_manual_axes: true,
+                keep_manual_axes: false,
                 last_poll: Instant::now(),
                 child: Some(child),
+                revision: 0,
+                show_window: true,
             })
         })();
         match result {
@@ -149,15 +198,26 @@ impl StudioApp {
         let Some(pending) = &mut self.lite_edit else {
             return;
         };
+        // History navigation changes the source revision, not the connection.
+        // Publish a new immutable request so stale results cannot overwrite undo.
+        let artist = pending.artist_id.clone();
+        if let Err(error) = pending.sync(&self.document, &artist, false) {
+            pending.error = Some(error);
+        }
+        context.request_repaint_after(Duration::from_millis(250));
         if pending.result.is_none() && pending.error.is_none() {
             context.request_repaint_after(Duration::from_secs(1));
             if pending.last_poll.elapsed() >= Duration::from_secs(1) {
                 pending.last_poll = Instant::now();
-                let result_path = pending.root.join("result.json");
+                let result_path = lite_edit_protocol::result_path(
+                    &lite_edit_protocol::request_path(&pending.root, pending.revision),
+                )
+                .unwrap();
                 if result_path.symlink_metadata().is_ok() {
                     match lite_edit_protocol::read_transfer(&result_path) {
                         Ok(result) if result.matches_session(&pending.request) => {
                             pending.result = Some(result);
+                            pending.show_window = true;
                             context.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                             context.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                             context.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -179,6 +239,9 @@ impl StudioApp {
         }
         let mut apply = false;
         let mut cancel = false;
+        if !pending.show_window {
+            return;
+        }
         egui::Window::new("Lite 数据编辑")
             .id(egui::Id::new("lite-edit-return"))
             .resizable(false).collapsible(false).default_width(380.0)
@@ -188,11 +251,15 @@ impl StudioApp {
                 else if let Some(result) = &pending.result {
                     ui.label(format!("已收到 {} 行数据（{} 行保留），只更新这一组。", result.alive.len(), result.alive.iter().filter(|v| **v).count()));
                     ui.label(format!("X：{}\nY：{}", result.x_column, result.y_column));
-                    ui.checkbox(&mut pending.keep_manual_axes, "保留手动范围与刻度（自动轴仍刷新）");
+                    ui.checkbox(&mut pending.keep_manual_axes, "固定原手动范围与刻度（可能裁掉新数据）");
+                    ui.label("默认按新数据调整受影响坐标范围，避免去背景后的负值被截掉；样式和排版保留。");
+                    if pending.keep_manual_axes { ui.colored_label(egui::Color32::YELLOW, "固定范围可能截掉曲线，但不会删除数据。"); }
+                    if ui.button("让坐标完整显示处理后的数据").clicked() { pending.keep_manual_axes = false; }
                     ui.weak("颜色、线型、点样式、图例与排版不变；已有拟合不会自动重算。更新可一次撤销。");
                     apply = ui.button("更新这组数据").clicked();
-                } else { ui.label("在 Lite 完成处理后，点击“发回 Studio”。请保持 Studio 打开。"); }
-                cancel = ui.button("取消本次联动（不关闭 Lite）").clicked();
+                } else { ui.label("保持连接：在同一 Lite 窗口可反复处理、撤销并发回；Studio 撤销/重做也会同步。"); }
+                if ui.button("隐藏此面板（保持联动）").clicked() { pending.show_window = false; }
+                cancel = ui.button("结束联动（不关闭 Lite）").clicked();
             });
         if cancel {
             self.lite_edit = None;
@@ -221,7 +288,12 @@ impl StudioApp {
             ) {
                 Ok(outcome) => {
                     self.commit_app_outcome(outcome);
-                    self.lite_edit = None;
+                    let pending = self.lite_edit.as_mut().unwrap();
+                    let artist = pending.artist_id.clone();
+                    if let Err(error) = pending.sync(&self.document, &artist, true) {
+                        pending.error = Some(error);
+                    }
+                    pending.show_window = false;
                     self.sync_axis_editors();
                     self.set_success(
                         "Lite 数据已确认；Studio 排版已保留，数据变化可一次撤销".to_owned(),

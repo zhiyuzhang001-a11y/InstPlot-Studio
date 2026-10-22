@@ -35,6 +35,13 @@ impl FigureDocument {
         if binding != update.binding_before || binding.data_source_id != result.target_id {
             return Err("目标曲线的选列已变化；未覆盖，请重新发起编辑".to_owned());
         }
+        // Merely opening Lite and returning must not change ranges, masks,
+        // payload hashes or history, even when automatic fitting is selected.
+        let (current, _) =
+            crate::lite_edit::make_request(self, &update.artist_id, result.session_id.clone())?;
+        if current == *result {
+            return Ok(());
+        }
         let label = source.label.clone();
         let DataSourcePayload::Embedded {
             columns: previous_columns,

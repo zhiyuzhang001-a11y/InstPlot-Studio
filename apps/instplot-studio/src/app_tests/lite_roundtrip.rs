@@ -62,6 +62,24 @@ fn fixture() -> (StudioApp, LiteSourceUpdate) {
 }
 
 #[test]
+fn unchanged_lite_return_never_changes_manual_axes_or_adds_an_undo_step() {
+    let (mut app, mut update) = fixture();
+    update.result = make_request(&app.document, &update.artist_id, "a".repeat(64))
+        .unwrap()
+        .0;
+    let before = app.document.clone();
+    app.execute_document_edit(
+        EditCommand::ApplyLiteData {
+            update: Box::new(update),
+            keep_manual_axes: false,
+        },
+        "Lite data",
+    );
+    assert_eq!(app.document, before);
+    assert!(app.edit_history.undo(&mut app.document).is_none());
+}
+
+#[test]
 fn lite_update_only_changes_target_data_preserves_manual_plot_and_has_atomic_session_undo_redo() {
     let (mut app, update) = fixture();
     let before = app.document.clone();
