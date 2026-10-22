@@ -12,7 +12,12 @@ historical comparison fixtures remain under `prototypes/`.
 
 Saving a new `.instplot` project suggests the source data filename; Save As
 prefills the current project name and folder. Overwriting a valid project keeps
-one previous version as `name.instplot.bak`. If the primary project cannot be
+one previous version in Studio's local application-data `project-backups`
+directory, keyed by the full project path, not beside the working file. Only
+one `.instplot` file appears in the selected save folder. These local recovery
+copies do not travel with a project moved to another folder or computer.
+Legacy adjacent `.instplot.bak` files remain readable and are not deleted.
+If the primary project cannot be
 decoded, Studio attempts read-only backup recovery and asks for Save As. This is
 a safety copy, not a second data format or a complete version history.
 
