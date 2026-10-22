@@ -34,11 +34,7 @@ impl StudioApp {
                                     }
                                 },
                                 |series| {
-                                    canvas_logical_series_title(
-                                        self.language,
-                                        &self.document,
-                                        &series,
-                                    )
+                                    canvas_object_title(self.language, &self.document, &series)
                                 },
                             );
                         if ui.button(label).clicked() {
@@ -105,7 +101,7 @@ impl StudioApp {
         let axes_id = axes.id.clone();
         let selected_axis_identity = self.document.axis_identity_for_project_id(&selected_id);
         let title = if let Some(series) = &series {
-            canvas_logical_series_title(self.language, &self.document, series)
+            canvas_object_title(self.language, &self.document, series)
         } else if let Some(identity) = selected_axis_identity {
             format!(
                 "{} · {}",

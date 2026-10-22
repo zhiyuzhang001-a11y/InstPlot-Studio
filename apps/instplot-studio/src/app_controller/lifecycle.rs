@@ -102,6 +102,7 @@ impl StudioApp {
             status: Some((status, Instant::now())),
             manual_data: ManualDataState::default(),
             marker_size_for_all: false,
+            series_style_for_all: false,
             marker_interval_for_all: false,
             marker_fill_for_all: false,
             language,

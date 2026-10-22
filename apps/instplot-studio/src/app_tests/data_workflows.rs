@@ -1,5 +1,323 @@
 use super::*;
 
+fn combined_column_fixture() -> (FigureDocument, Vec<DataSet>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.csv");
+    let base = instplot_io::read_data_file(&path).unwrap().remove(0);
+    let mut datasets = (0..9)
+        .map(|index| {
+            let mut dataset = base.clone();
+            dataset.source = PathBuf::from("/measurements/combined.csv");
+            dataset.plot_id = format!("source-{index}");
+            dataset.label = Some(format!("SMR_{index}nm"));
+            dataset.columns[1].values = vec![200.0 + f64::from(index); 3];
+            dataset.columns.push(instplot_core::NumericColumn {
+                name: "change".to_owned(),
+                values: vec![0.0, 0.1, 0.2],
+            });
+            dataset
+        })
+        .collect::<Vec<_>>();
+    let mut fit = base.clone();
+    fit.source = datasets[0].source.clone();
+    fit.kind = DataSetKind::Fit;
+    fit.plot_id = "fit".to_owned();
+    fit.fit_link = Some(instplot_core::FitLink {
+        parent_dataset_id: Some("source-0".to_owned()),
+        source_x_column: "field".to_owned(),
+        source_y_column: "response".to_owned(),
+        equation: None,
+        display_equation: None,
+    });
+    datasets.push(fit);
+    let mut other = base;
+    other.source = PathBuf::from("/other/combined.csv");
+    other.plot_id = "other-file".to_owned();
+    datasets.push(other);
+    (FigureDocument::from_datasets(&datasets).unwrap(), datasets)
+}
+
+#[test]
+fn all_curve_plot_types_are_one_undoable_idempotent_edit_preserving_data_axes_colors_and_errors() {
+    let (mut document, _) = combined_column_fixture();
+    let ids = document
+        .logical_series()
+        .into_iter()
+        .map(|series| series.id)
+        .collect::<Vec<_>>();
+    document.set_axis_mode(AxisMode::DualY).unwrap();
+    document
+        .set_series_axis_binding(
+            &ids[3],
+            AxisBinding {
+                x: XAxisSlot::X1,
+                y: YAxisSlot::Y2,
+            },
+        )
+        .unwrap();
+    document.set_series_visible(&ids[2], false).unwrap();
+    document
+        .set_series_error_columns(&ids[0], None, Some("change"))
+        .unwrap();
+    let before = document.clone();
+    let originals = ids
+        .iter()
+        .map(|id| document.artist_record(id).unwrap())
+        .collect::<Vec<_>>();
+    let errors = document
+        .project()
+        .figure
+        .artists
+        .iter()
+        .filter(|artist| matches!(artist.properties, ArtistProperties::ErrorBar { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::SetAllSeriesStyles {
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(document.logical_series().len(), ids.len());
+    for id in &ids {
+        assert_eq!(
+            document.series_style(id),
+            Some(SeriesCreationStyle::LineAndMarker)
+        );
+        assert_eq!(
+            document.series_axis_binding(id),
+            before.series_axis_binding(id)
+        );
+    }
+    for original in originals {
+        assert_eq!(document.artist_record(&original.id), Some(original));
+    }
+    for error in errors {
+        assert_eq!(document.artist_record(&error.id), Some(error));
+    }
+    assert_eq!(
+        document.project().data_sources,
+        before.project().data_sources
+    );
+    assert_eq!(
+        document.axis_record(AxisDimension::X),
+        before.axis_record(AxisDimension::X)
+    );
+    assert_eq!(
+        document.axis_record(AxisDimension::Y),
+        before.axis_record(AxisDimension::Y)
+    );
+    let after = document.clone();
+    let outcome = history
+        .execute(
+            &mut document,
+            EditCommand::SetAllSeriesStyles {
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert!(!outcome.changed);
+    assert_eq!(document, after);
+    history.undo(&mut document).unwrap();
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+    history.redo(&mut document).unwrap();
+    assert_eq!(document, after);
+    let restored = FigureDocument::from_project(
+        serde_json::from_slice(&serde_json::to_vec(document.project()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.project(), document.project());
+    for style in [SeriesCreationStyle::Line, SeriesCreationStyle::Scatter] {
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetAllSeriesStyles { style },
+                None,
+            )
+            .unwrap();
+        assert!(
+            document
+                .logical_series()
+                .iter()
+                .all(|series| document.series_style(&series.id) == Some(style))
+        );
+    }
+}
+
+#[test]
+fn plot_type_scope_defaults_to_current_curve_and_single_edit_does_not_change_others() {
+    let creation = eframe::CreationContext::_new_kittest(egui::Context::default());
+    let app = StudioApp::new(&creation, Instant::now(), None);
+    assert!(!app.series_style_for_all);
+    let (mut document, _) = combined_column_fixture();
+    let series = document.logical_series();
+    let selected = series[4].id.clone();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::SetSeriesStyle {
+                artist_id: selected.clone(),
+                style: SeriesCreationStyle::LineAndMarker,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .logical_series()
+            .iter()
+            .filter(|series| document.series_style(&series.id)
+                == Some(SeriesCreationStyle::LineAndMarker))
+            .count(),
+        1
+    );
+    assert_eq!(
+        document.series_style(&selected),
+        Some(SeriesCreationStyle::LineAndMarker)
+    );
+}
+
+#[test]
+fn combined_file_columns_rebind_nine_sources_in_one_undo_without_touching_fit_or_other_file() {
+    let (mut document, datasets) = combined_column_fixture();
+    let group = data_navigation_groups(&datasets, UiLanguage::Chinese).remove(0);
+    assert!(file_group_shares_columns(&group));
+    assert_eq!(file_group_source_ids(&group).len(), 9);
+    let before = document.clone();
+    let mut history = EditHistory::new(&document, true);
+    let command =
+        file_group_column_edit(&document, &group, "field".to_owned(), "change".to_owned());
+    history.execute(&mut document, command, None).unwrap();
+    for series in document.logical_series() {
+        let Some(binding) = series.binding else {
+            continue;
+        };
+        assert_eq!(
+            binding.y_column,
+            if binding.data_source_id.starts_with("source-") {
+                "change"
+            } else {
+                "response"
+            }
+        );
+    }
+    assert_eq!(
+        document.project().data_sources,
+        before.project().data_sources
+    );
+    let y = document.axis_record(AxisDimension::Y);
+    // Fit and the separate file still contribute their unchanged 2..8 values.
+    assert!(y.autoscale && y.maximum < 10.0 && y.minimum < 0.0);
+    let encoded = serde_json::to_vec(document.project()).unwrap();
+    let restored = FigureDocument::from_project(serde_json::from_slice(&encoded).unwrap()).unwrap();
+    assert_eq!(restored.project(), document.project());
+    history.undo(&mut document).unwrap();
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+    history.redo(&mut document).unwrap();
+    assert_eq!(document.project(), restored.project());
+}
+
+#[test]
+fn combined_file_missing_column_rejects_the_entire_edit_without_history_or_partial_bindings() {
+    let (_, mut datasets) = combined_column_fixture();
+    datasets[8].columns.pop();
+    let mut document = FigureDocument::from_datasets(&datasets).unwrap();
+    let group = data_navigation_groups(&datasets, UiLanguage::Chinese).remove(0);
+    let before = document.clone();
+    let command =
+        file_group_column_edit(&document, &group, "field".to_owned(), "change".to_owned());
+    let mut history = EditHistory::new(&document, true);
+    assert!(history.execute(&mut document, command, None).is_err());
+    assert_eq!(document, before);
+    assert!(history.undo(&mut document).is_none());
+}
+
+#[test]
+fn combined_file_still_allows_individual_curve_binding_and_embedded_data_never_defaults_to_shared()
+{
+    let (mut document, mut datasets) = combined_column_fixture();
+    let selected = document
+        .logical_series()
+        .into_iter()
+        .find(|series| {
+            series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.data_source_id == "source-5")
+        })
+        .unwrap();
+    let mut history = EditHistory::new(&document, true);
+    history
+        .execute(
+            &mut document,
+            EditCommand::RebindSeries {
+                artist_id: selected.id,
+                data_source_id: "source-5".to_owned(),
+                x_column: "field".to_owned(),
+                y_column: "change".to_owned(),
+                y_error_column: None,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        document
+            .logical_series()
+            .iter()
+            .filter(|series| series
+                .binding
+                .as_ref()
+                .is_some_and(|binding| binding.y_column == "change"))
+            .count(),
+        1
+    );
+    for dataset in &mut datasets {
+        dataset.source = PathBuf::from("embedded://manual");
+    }
+    assert!(!file_group_shares_columns(
+        &data_navigation_groups(&datasets, UiLanguage::Chinese)[0]
+    ));
+    assert!(!file_group_shares_columns(
+        &data_navigation_groups(&datasets[..1], UiLanguage::Chinese)[0]
+    ));
+}
+
+#[test]
+fn combined_file_sidebar_defaults_to_shared_and_remembers_explicit_individual_scope() {
+    let context = egui::Context::default();
+    let creation = eframe::CreationContext::_new_kittest(context.clone());
+    let mut app = StudioApp::new(&creation, Instant::now(), None);
+    let (document, datasets) = combined_column_fixture();
+    app.document = document;
+    app.session.replace_datasets(datasets);
+    let group = data_navigation_groups(app.session.datasets(), UiLanguage::Chinese).remove(0);
+    let scope_id = egui::Id::new(("file-shared-columns", &group.key));
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.column_controls_for_group(ui, &group)
+    });
+    output.textures_delta.clear();
+    assert_eq!(
+        context.data_mut(|data| data.get_temp::<bool>(scope_id)),
+        Some(true)
+    );
+    context.data_mut(|data| data.insert_temp(scope_id, false));
+    let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+        app.column_controls_for_group(ui, &group)
+    });
+    output.textures_delta.clear();
+    assert_eq!(
+        context.data_mut(|data| data.get_temp::<bool>(scope_id)),
+        Some(false)
+    );
+}
+
 fn remove_app_data_sources(app: &mut StudioApp, ids: Vec<String>) {
     let state = AppTransactionState {
         document: &app.document,
@@ -1198,6 +1516,40 @@ fn logical_series_title_reports_the_combined_plot_style() {
         canvas_logical_series_title(UiLanguage::Chinese, &app.document, &series),
         "曲线＋点 · Combined title"
     );
+    let members = app
+        .document
+        .series()
+        .into_iter()
+        .filter(|series| matches!(series.kind, SeriesKind::Line | SeriesKind::Scatter))
+        .collect::<Vec<_>>();
+    assert_eq!(members.len(), 2);
+    for (language, line_name, marker_name) in [
+        (UiLanguage::Chinese, "曲线部分", "数据点部分"),
+        (UiLanguage::English, "Line component", "Marker component"),
+    ] {
+        let titles = members
+            .iter()
+            .map(|member| canvas_object_title(language, &app.document, member))
+            .collect::<Vec<_>>();
+        assert_ne!(titles[0], titles[1]);
+        for (member, title) in members.iter().zip(titles) {
+            let part = if member.kind == SeriesKind::Line {
+                line_name
+            } else {
+                marker_name
+            };
+            assert_eq!(title, format!("{part} · Combined title"));
+        }
+    }
+    // A pure line/point is still labelled as such, and the sidebar stays logical.
+    for style in [SeriesCreationStyle::Line, SeriesCreationStyle::Scatter] {
+        app.document.set_series_style(&series.id, style).unwrap();
+        let member = app.document.logical_series().remove(0);
+        assert_eq!(
+            canvas_object_title(UiLanguage::Chinese, &app.document, &member),
+            canvas_series_title(UiLanguage::Chinese, &member)
+        );
+    }
 }
 
 #[test]

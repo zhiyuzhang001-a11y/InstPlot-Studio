@@ -75,6 +75,9 @@ pub enum EditCommand {
         artist_id: String,
         style: SeriesCreationStyle,
     },
+    SetAllSeriesStyles {
+        style: SeriesCreationStyle,
+    },
     SetSeriesColor {
         artist_id: String,
         color_id: String,
@@ -89,6 +92,12 @@ pub enum EditCommand {
         x_column: String,
         y_column: String,
         y_error_column: Option<String>,
+    },
+    /// Change a file's source-series columns as one atomic, undoable edit.
+    RebindSeriesColumns {
+        artist_ids: Vec<String>,
+        x_column: String,
+        y_column: String,
     },
     SetSeriesErrorColumns {
         artist_id: String,
@@ -173,9 +182,11 @@ impl EditCommand {
             Self::SetAxisMode(_) => "Change axes mode",
             Self::SetSeriesAxisBinding { .. } => "Change series axes",
             Self::SetSeriesStyle { .. } => "Change plot type",
+            Self::SetAllSeriesStyles { .. } => "Change all curve plot types",
             Self::SetSeriesColor { .. } => "Change series color",
             Self::MoveSeries { .. } => "Reorder series",
             Self::RebindSeries { .. } => "Change data binding",
+            Self::RebindSeriesColumns { .. } => "Change file data bindings",
             Self::SetSeriesErrorColumns { .. } => "Change error columns",
             Self::DeleteDataSource { .. } => "Delete data source",
             Self::DeleteDataSources { .. } => "Remove imported data",
@@ -269,6 +280,24 @@ impl EditCommand {
             Self::SetSeriesStyle { artist_id, style } => {
                 document.set_series_style(&artist_id, style)
             }
+            Self::SetAllSeriesStyles { style } => {
+                // Snapshot logical series, not individual line/marker members.
+                // Skip already-matching styles so a repeated apply is a no-op.
+                let ids = document
+                    .logical_series()
+                    .into_iter()
+                    .filter(|series| {
+                        document
+                            .series_style(&series.id)
+                            .is_some_and(|current| current != style)
+                    })
+                    .map(|series| series.id)
+                    .collect::<Vec<_>>();
+                for id in ids {
+                    document.set_series_style(&id, style)?;
+                }
+                Ok(())
+            }
             Self::SetSeriesColor {
                 artist_id,
                 color_id,
@@ -290,6 +319,29 @@ impl EditCommand {
                 &y_column,
                 y_error_column.as_deref(),
             ),
+            Self::RebindSeriesColumns {
+                artist_ids,
+                x_column,
+                y_column,
+            } => {
+                for artist_id in artist_ids {
+                    let data_source_id = document
+                        .logical_series()
+                        .into_iter()
+                        .find(|series| series.id == artist_id)
+                        .and_then(|series| series.binding)
+                        .ok_or_else(|| format!("series {artist_id} has no data binding"))?
+                        .data_source_id;
+                    document.rebind_series(
+                        &artist_id,
+                        &data_source_id,
+                        &x_column,
+                        &y_column,
+                        None,
+                    )?;
+                }
+                Ok(())
+            }
             Self::SetSeriesErrorColumns {
                 artist_id,
                 x_error_column,

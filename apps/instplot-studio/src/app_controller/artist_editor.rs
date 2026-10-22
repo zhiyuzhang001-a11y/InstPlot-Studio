@@ -60,7 +60,10 @@ impl StudioApp {
                             }
                         });
                 });
-                if selected_style != current_style {
+                let apply_to_all_now = ui.checkbox(&mut self.series_style_for_all, "图形类型应用于全部曲线")
+                    .on_hover_text("将散点、曲线或曲线＋点统一应用到图中全部曲线，保留各自颜色、数据、坐标轴与误差棒；可一次撤销。")
+                    .changed() && self.series_style_for_all;
+                if selected_style != current_style || apply_to_all_now {
                     series_style_change = Some(selected_style);
                 }
             }
@@ -1018,13 +1021,15 @@ impl StudioApp {
             return;
         }
         if let Some(style) = series_style_change {
-            if self.execute_document_edit(
+            let command = if self.series_style_for_all {
+                EditCommand::SetAllSeriesStyles { style }
+            } else {
                 EditCommand::SetSeriesStyle {
                     artist_id: artist_id.to_owned(),
                     style,
-                },
-                "更改图形类型",
-            ) {
+                }
+            };
+            if self.execute_document_edit(command, "更改图形类型") {
                 ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
             }
             return;

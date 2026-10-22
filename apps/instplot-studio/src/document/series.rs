@@ -1059,6 +1059,14 @@ pub(super) fn normalize_series_colors(
             })
             .and_then(|artist| artist_color(artist))
             .or_else(|| {
+                // Hidden curves still own their colour. Falling back to the
+                // palette here would recolour them when reopening a project.
+                members
+                    .iter()
+                    .find(|artist| matches!(artist.kind, ArtistKind::Line | ArtistKind::Scatter))
+                    .and_then(|artist| artist_color(artist))
+            })
+            .or_else(|| {
                 members
                     .iter()
                     .find(|artist| artist.kind == ArtistKind::ErrorBar)

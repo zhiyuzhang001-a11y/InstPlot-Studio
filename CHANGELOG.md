@@ -4,6 +4,24 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Distinguish line and marker components in overlapping-object choices and their
+  editor titles, rather than showing identical line + markers labels for both.
+- Allow plot type changes (including line + markers) to apply to all logical curves
+  in one undoable edit, preserving each curve's data, colors, axes and error bars.
+- Preserve hidden curves' own colors when normalizing a reopened project.
+- Share named X/Y column choices across source sections of the same Lite-exported
+  file by default, with an explicit per-curve opt-out and one-step undo. Keep fits,
+  other files, embedded data and raw numeric columns unchanged.
+- Compute automatic axis bounds from the same live, valid X/Y pairs used for rendering;
+  blank-cell zero placeholders and unpaired values no longer distort either axis or
+  incorrectly reject positive logarithmic data. Genuine zero measurements remain valid.
+- Use the shared finite, relative padding policy on import, including constant small
+  signals and opposite-sign extreme values.
+- Keep useful major ticks on narrow logarithmic domains, and bound endpoint rounding
+  tolerances so large-offset, small-span axes do not collapse distinct ticks together.
+
 ## [0.1.2-rc.3] - 2026-10-10
 
 ### Added
