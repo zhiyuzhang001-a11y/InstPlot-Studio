@@ -802,7 +802,7 @@ impl StudioApp {
         if selected_id != previous_id {
             self.select_sidebar_curve(&selected_id);
             if self.lite_follows_selection() {
-                self.begin_lite_edit(&selected_id);
+                self.follow_lite_curve(&selected_id);
             }
         }
         let Some(series) = series_for_dataset

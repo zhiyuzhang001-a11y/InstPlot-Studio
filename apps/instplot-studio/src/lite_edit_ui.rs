@@ -119,6 +119,13 @@ impl StudioApp {
         self.lite_edit.as_ref().is_some_and(|p| p.follow_selection)
     }
 
+    pub(crate) fn follow_lite_curve(&mut self, id: &str) {
+        self.begin_lite_edit(id);
+        if let Some(pending) = &mut self.lite_edit {
+            pending.show_window = false;
+        }
+    }
+
     pub(crate) fn select_sidebar_curve(&mut self, id: &str) {
         if let Some(series) = self.document.series().into_iter().find(|s| s.id == id) {
             self.select_series_for_editing(&series);
