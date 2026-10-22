@@ -16,7 +16,7 @@ pub(super) struct PendingLiteEdit {
     binding_before: DataBinding,
     result: Option<Transfer>,
     error: Option<String>,
-    keep_manual_axes: bool,
+    activation_sequence: u64,
     last_poll: Instant,
     child: Option<Child>,
     revision: u64,
@@ -120,7 +120,7 @@ impl StudioApp {
     }
 
     pub(crate) fn follow_lite_curve(&mut self, id: &str) {
-        self.begin_lite_edit(id);
+        self.open_lite_edit(id, false);
         if let Some(pending) = &mut self.lite_edit {
             pending.show_window = false;
         }
@@ -138,14 +138,34 @@ impl StudioApp {
     }
 
     pub(crate) fn begin_lite_edit(&mut self, artist_id: &str) {
+        self.open_lite_edit(artist_id, true);
+    }
+
+    fn open_lite_edit(&mut self, artist_id: &str, activate: bool) {
         if let Some(pending) = &mut self.lite_edit {
             let alive = pending
                 .child
                 .as_mut()
                 .is_some_and(|c| matches!(c.try_wait(), Ok(None)));
             if alive {
-                let result = pending.sync(&self.document, artist_id, true);
-                pending.show_window = true;
+                let result = pending
+                    .sync(&self.document, artist_id, false)
+                    .and_then(|()| {
+                        if activate {
+                            let next = pending
+                                .activation_sequence
+                                .checked_add(1)
+                                .ok_or("activation sequence overflow")?;
+                            lite_edit_protocol::write_activation(
+                                &pending.root,
+                                &pending.request.session_id,
+                                next,
+                            )?;
+                            pending.activation_sequence = next;
+                        }
+                        Ok(())
+                    });
+                pending.show_window = false;
                 match result {
                     Ok(()) => {
                         self.set_success("已复用同一个 Lite 窗口，同步 Studio 当前数据".to_owned())
@@ -198,7 +218,7 @@ impl StudioApp {
                 binding_before,
                 result: None,
                 error: None,
-                keep_manual_axes: false,
+                activation_sequence: 0,
                 last_poll: Instant::now(),
                 child: Some(child),
                 revision: 0,
@@ -275,12 +295,7 @@ impl StudioApp {
                 if let Some(error) = &pending.error { ui.colored_label(egui::Color32::YELLOW, error); }
                 else if let Some(result) = &pending.result {
                     ui.label(format!("已收到 {} 行数据（{} 行保留），只更新这一组。", result.alive.len(), result.alive.iter().filter(|v| **v).count()));
-                    ui.label(format!("X：{}\nY：{}", result.x_column, result.y_column));
-                    ui.checkbox(&mut pending.keep_manual_axes, "固定原手动范围与刻度（可能裁掉新数据）");
-                    ui.label("默认按新数据调整受影响坐标范围，避免去背景后的负值被截掉；样式和排版保留。");
-                    if pending.keep_manual_axes { ui.colored_label(egui::Color32::YELLOW, "固定范围可能截掉曲线，但不会删除数据。"); }
-                    if ui.button("让坐标完整显示处理后的数据").clicked() { pending.keep_manual_axes = false; }
-                    ui.weak("颜色、线型、点样式、图例与排版不变；已有拟合不会自动重算。更新可一次撤销。");
+                    ui.weak("自动刷新坐标范围与刻度，保留样式和排版；可撤销。");
                     apply = ui.button("更新这组数据").clicked();
                 } else { ui.label("保持连接：在同一 Lite 窗口可反复处理、撤销并发回；Studio 撤销/重做也会同步。"); }
                 if ui.button("隐藏此面板（保持联动）").clicked() { pending.show_window = false; }
@@ -296,7 +311,7 @@ impl StudioApp {
                     binding_before: pending.binding_before.clone(),
                     result: pending.result.clone().unwrap(),
                 }),
-                keep_manual_axes: pending.keep_manual_axes,
+                keep_manual_axes: false,
             };
             let state = AppTransactionState {
                 document: &self.document,
