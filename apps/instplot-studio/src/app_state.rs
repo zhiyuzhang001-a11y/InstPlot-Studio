@@ -15,6 +15,7 @@ impl DataRemovalRequest {
 }
 
 pub(super) struct StudioApp {
+    pub(super) lite_edit: Option<crate::lite_edit_ui::PendingLiteEdit>,
     pub(super) branding: instplot_ui::Branding,
     pub(super) features: instplot_ui::FeatureSet,
     pub(super) session: StudioSession,

@@ -22,6 +22,10 @@ pub enum EditGroup {
 }
 
 pub enum EditCommand {
+    ApplyLiteData {
+        update: Box<crate::lite_edit::LiteSourceUpdate>,
+        keep_manual_axes: bool,
+    },
     SetAxisRanges(AxisRanges),
     RefreshAutoscale,
     AddAnnotation {
@@ -167,6 +171,7 @@ pub enum EditCommand {
 impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
+            Self::ApplyLiteData { .. } => "Update one dataset from Lite",
             Self::SetAxisRanges(_) => "Change axes ranges",
             Self::RefreshAutoscale => "Refresh automatic ranges",
             Self::AddAnnotation { .. } => "Add text annotation",
@@ -210,6 +215,10 @@ impl EditCommand {
 
     fn apply(self, document: &mut FigureDocument) -> Result<(), String> {
         match self {
+            Self::ApplyLiteData {
+                update,
+                keep_manual_axes,
+            } => document.apply_lite_data(&update, keep_manual_axes),
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }

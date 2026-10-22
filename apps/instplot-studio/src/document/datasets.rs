@@ -4,6 +4,127 @@ use std::io::Write;
 use atomicwrites::{AllowOverwrite, AtomicFile};
 
 impl FigureDocument {
+    pub fn apply_lite_data(
+        &mut self,
+        update: &crate::lite_edit::LiteSourceUpdate,
+        keep_manual_axes: bool,
+    ) -> Result<(), String> {
+        let result = &update.result;
+        result.validate()?;
+        let source = self
+            .project
+            .data_sources
+            .iter()
+            .find(|s| s.id == result.target_id)
+            .ok_or("目标数据组已不存在")?;
+        if crate::lite_edit::source_revision(source)? != result.base_sha256 {
+            return Err("这组数据在 Studio 中已变化；未覆盖，请重新发起 Lite 编辑".to_owned());
+        }
+        if source.kind != DataSourceKind::Source
+            || source.origin != DataSourceOrigin::Imported
+            || source.managed_file.is_some()
+        {
+            return Err("目标不再是可编辑的导入数据组".to_owned());
+        }
+        let binding = self
+            .logical_series()
+            .into_iter()
+            .find(|s| s.id == update.artist_id)
+            .and_then(|s| s.binding)
+            .ok_or("目标曲线已不存在")?;
+        if binding != update.binding_before || binding.data_source_id != result.target_id {
+            return Err("目标曲线的选列已变化；未覆盖，请重新发起编辑".to_owned());
+        }
+        let label = source.label.clone();
+        let DataSourcePayload::Embedded {
+            columns: previous_columns,
+            ..
+        } = &source.payload
+        else {
+            return Err("目标数据不再是嵌入数据".to_owned());
+        };
+        if previous_columns
+            .iter()
+            .any(|old| !result.columns.iter().any(|new| new.name == old.name))
+        {
+            return Err("Lite 回传缺少原有列；为保护其他曲线与误差棒，未更新原图".to_owned());
+        }
+        let mut candidate = self.clone();
+        let manual_axes = [
+            AxisIdentity::X1,
+            AxisIdentity::Y1,
+            AxisIdentity::X2,
+            AxisIdentity::Y2,
+        ]
+        .into_iter()
+        .filter_map(|id| {
+            self.axis_record_by_identity(id)
+                .filter(|r| !r.autoscale)
+                .map(|r| (id, r))
+        })
+        .collect::<Vec<_>>();
+        let columns = result
+            .columns
+            .iter()
+            .map(|c| EmbeddedColumn {
+                name: c.name.clone(),
+                values: c.values.iter().map(|v| v.unwrap_or(0.0)).collect(),
+                valid: if c.values.iter().all(Option::is_some) {
+                    Vec::new()
+                } else {
+                    c.values.iter().map(Option::is_some).collect()
+                },
+            })
+            .collect();
+        candidate
+            .project
+            .upsert_embedded_source(
+                &result.target_id,
+                label,
+                columns,
+                result.alive.clone(),
+                DataSourceKind::Source,
+                None,
+            )
+            .map_err(|e| e.to_string())?;
+        if binding.x_column != result.x_column || binding.y_column != result.y_column {
+            candidate.rebind_series(
+                &update.artist_id,
+                &result.target_id,
+                &result.x_column,
+                &result.y_column,
+                None,
+            )?;
+        }
+        if keep_manual_axes {
+            for (identity, record) in manual_axes {
+                let axes = &mut candidate.project.figure.axes[0];
+                match identity {
+                    AxisIdentity::X1 => axes.x = record,
+                    AxisIdentity::Y1 => axes.y = record,
+                    AxisIdentity::X2 => axes.x2 = Some(record),
+                    AxisIdentity::Y2 => axes.y2 = Some(record),
+                }
+            }
+            candidate.refresh_autoscale()?;
+        } else {
+            let mut affected = Vec::new();
+            for series in candidate.logical_series().into_iter().filter(|s| {
+                s.binding
+                    .as_ref()
+                    .is_some_and(|b| b.data_source_id == result.target_id)
+            }) {
+                if let Some(axes) = series.axes {
+                    affected.extend(axis_identities_for_binding(axes));
+                }
+            }
+            candidate.restore_autoscale_after_data_change(&affected)?;
+        }
+        candidate.project.validate().map_err(|e| e.to_string())?;
+        *self = candidate;
+        Ok(())
+    }
+
     pub fn data_source_dependency_count(&self, data_source_id: &str) -> usize {
         let dependent_sources = dependent_source_ids(&self.project, data_source_id);
         let mut source_ids = dependent_sources.clone();
