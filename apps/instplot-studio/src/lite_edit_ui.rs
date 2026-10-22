@@ -103,7 +103,9 @@ impl StudioApp {
                 .canonicalize()
                 .map_err(|e| e.to_string())?
                 .join(format!("instplot-edit-{nonce}"));
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            let mut builder = builder;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
