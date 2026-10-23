@@ -192,6 +192,14 @@ impl StudioApp {
     }
 
     pub(crate) fn commit_app_outcome(&mut self, outcome: AppOutcome) -> AppEffect {
+        if matches!(
+            &outcome.effect,
+            AppEffect::NewProject
+                | AppEffect::OpenedProject { .. }
+                | AppEffect::OpenedHandoff { .. }
+        ) {
+            self.lite_edit = None;
+        }
         self.document = outcome.document;
         self.session = outcome.session;
         self.workspace = outcome.workspace;

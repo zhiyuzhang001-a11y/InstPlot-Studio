@@ -347,7 +347,11 @@ impl ProjectDocument {
                 MarkerShape::Pentagon,
                 &[8.0, 2.0, 2.0, 2.0],
             ),
-            ("gray", MarkerShape::Star, &[6.0, 2.0, 0.8, 2.0, 0.8, 2.0]),
+            (
+                "gray",
+                MarkerShape::Hexagon,
+                &[6.0, 2.0, 0.8, 2.0, 0.8, 2.0],
+            ),
         ];
         let mut legend_entries = Vec::new();
         for (index, (color_id, shape, dash_pt)) in curves.into_iter().enumerate() {
@@ -438,7 +442,7 @@ impl ProjectDocument {
                     marker: MarkerStyle {
                         color_id: color_id.to_owned(),
                         shape,
-                        size_pt: if matches!(shape, MarkerShape::Pentagon | MarkerShape::Star) {
+                        size_pt: if matches!(shape, MarkerShape::Pentagon | MarkerShape::Hexagon) {
                             4.4
                         } else {
                             3.3

@@ -614,6 +614,7 @@ impl ApplicationController {
         command: EditCommand,
         group: Option<EditGroup>,
     ) -> Result<AppOutcome, AppError> {
+        let replaces_data = matches!(&command, EditCommand::ApplyLiteData { .. });
         let mut document = state.document.clone();
         let mut edit_history = state.edit_history.clone();
         let edit = edit_history
@@ -632,9 +633,21 @@ impl ApplicationController {
             &resolved,
             document.export_preferences().selected_raster_dpi,
         );
+        let session = if replaces_data {
+            let (session, warnings) = StudioSession::from_project(document.project());
+            if !warnings.is_empty() {
+                return Err(AppError {
+                    code: "lite-data-session",
+                    diagnostics: warnings,
+                });
+            }
+            session
+        } else {
+            state.session.clone()
+        };
         Ok(AppOutcome {
             document,
-            session: state.session.clone(),
+            session,
             workspace: state.workspace.clone(),
             edit_history,
             resolved,

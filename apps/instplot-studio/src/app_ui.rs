@@ -42,7 +42,7 @@ mod tests {
     fn empty_secondary_axis_placeholder_matches_formal_axis_label_size() {
         for zoom in [0.5, 1.0, 2.0, 3.0] {
             assert_eq!(
-                secondary_axis_placeholder_font_size(zoom),
+                secondary_axis_placeholder_font_size(instplot_layout::AXIS_LABEL_FONT_PT, zoom),
                 instplot_layout::AXIS_LABEL_FONT_PT as f32 * zoom
             );
         }

@@ -22,6 +22,10 @@ pub enum EditGroup {
 }
 
 pub enum EditCommand {
+    ApplyLiteData {
+        update: Box<crate::lite_edit::LiteSourceUpdate>,
+        keep_manual_axes: bool,
+    },
     SetAxisRanges(AxisRanges),
     RefreshAutoscale,
     AddAnnotation {
@@ -140,6 +144,9 @@ pub enum EditCommand {
         width_mm: f64,
         height_mm: f64,
     },
+    SetPlotFontSizes {
+        sizes_pt: [f64; 6],
+    },
     SetArtistRecord(ArtistRecord),
     SetAllMarkerDensity {
         size_pt: f64,
@@ -167,6 +174,7 @@ pub enum EditCommand {
 impl EditCommand {
     fn description(&self) -> &'static str {
         match self {
+            Self::ApplyLiteData { .. } => "Update one dataset from Lite",
             Self::SetAxisRanges(_) => "Change axes ranges",
             Self::RefreshAutoscale => "Refresh automatic ranges",
             Self::AddAnnotation { .. } => "Add text annotation",
@@ -197,6 +205,7 @@ impl EditCommand {
             Self::SetAxisLabel { .. } => "Change axis label",
             Self::SetAxisLabelByIdentity { .. } => "Change axis label",
             Self::SetFigureSize { .. } => "Change figure size",
+            Self::SetPlotFontSizes { .. } => "Change plot font sizes",
             Self::SetArtistRecord(_) => "Change artist properties",
             Self::SetAllMarkerDensity { .. } => "Change all marker density",
             Self::SetAllMarkerSizes { .. } => "Change all marker sizes",
@@ -210,6 +219,10 @@ impl EditCommand {
 
     fn apply(self, document: &mut FigureDocument) -> Result<(), String> {
         match self {
+            Self::ApplyLiteData {
+                update,
+                keep_manual_axes,
+            } => document.apply_lite_data(&update, keep_manual_axes),
             Self::SetAxisRanges(ranges) => {
                 document.set_axis_ranges(ranges).map_err(ToOwned::to_owned)
             }
@@ -388,6 +401,7 @@ impl EditCommand {
                 width_mm,
                 height_mm,
             } => document.set_figure_size_mm(width_mm, height_mm),
+            Self::SetPlotFontSizes { sizes_pt } => document.set_plot_font_sizes(sizes_pt),
             Self::SetArtistRecord(record) => document.set_artist_record(record),
             Self::SetAllMarkerDensity { size_pt, interval } => {
                 document.set_all_marker_density(size_pt, interval)
@@ -555,6 +569,61 @@ impl EditHistory {
 mod tests {
     use super::*;
     use crate::{ArtistProperties, DEFAULT_REFERENCE_DASH_PT};
+
+    #[test]
+    fn font_sizes_round_trip_undo_and_reject_invalid_values_atomically() {
+        let mut document = FigureDocument::showcase();
+        let before = document.clone();
+        assert_eq!(
+            before.project().typography.font_sizes_pt,
+            [11.0, 11.0, 10.0, 10.0, 10.0, 10.0]
+        );
+        let mut legacy_json = serde_json::to_value(before.project()).unwrap();
+        legacy_json["typography"]
+            .as_object_mut()
+            .unwrap()
+            .remove("font_sizes_pt");
+        let legacy: ProjectDocument = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(
+            legacy.typography.font_sizes_pt,
+            [9.0, 9.0, 8.0, 8.0, 8.0, 8.0]
+        );
+        let mut history = EditHistory::new(&document, true);
+        history
+            .execute(
+                &mut document,
+                EditCommand::SetPlotFontSizes {
+                    sizes_pt: [14.0; 6],
+                },
+                None,
+            )
+            .unwrap();
+        let after = document.clone();
+        let mut expected = before.project().clone();
+        expected.typography.font_sizes_pt = [14.0; 6];
+        assert_eq!(after.project(), &expected);
+        let saved: ProjectDocument =
+            serde_json::from_str(&serde_json::to_string(after.project()).unwrap()).unwrap();
+        assert_eq!(saved, *after.project());
+        history.undo(&mut document).unwrap();
+        assert_eq!(document, before);
+        history.redo(&mut document).unwrap();
+        assert_eq!(document, after);
+        for invalid in [f64::NAN, f64::INFINITY, 0.0, 49.0] {
+            assert!(
+                history
+                    .execute(
+                        &mut document,
+                        EditCommand::SetPlotFontSizes {
+                            sizes_pt: [invalid; 6]
+                        },
+                        None
+                    )
+                    .is_err()
+            );
+            assert_eq!(document, after);
+        }
+    }
 
     #[test]
     fn applying_marker_density_to_all_is_one_undoable_edit() {

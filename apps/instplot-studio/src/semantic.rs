@@ -82,6 +82,7 @@ pub fn non_color_signature(artist: &ArtistRecord) -> String {
                 MarkerShape::TriangleDown => "triangle-down",
                 MarkerShape::Diamond => "diamond",
                 MarkerShape::Pentagon => "pentagon",
+                MarkerShape::Hexagon => "hexagon",
                 MarkerShape::Star => "star",
                 MarkerShape::Plus => "plus",
                 MarkerShape::Cross => "cross",

@@ -1,7 +1,7 @@
 use super::*;
 
-pub(crate) fn secondary_axis_placeholder_font_size(canvas_zoom: f32) -> f32 {
-    instplot_layout::AXIS_LABEL_FONT_PT as f32 * canvas_zoom
+pub(crate) fn secondary_axis_placeholder_font_size(font_pt: f64, canvas_zoom: f32) -> f32 {
+    font_pt as f32 * canvas_zoom
 }
 
 pub(crate) const SECONDARY_AXIS_PLACEHOLDER_MIN_PAD_PT: f32 = 7.0;

@@ -135,6 +135,8 @@ fn showcase_keeps_fixed_fixture_separate_and_resolves() {
 
 #[test]
 fn all_product_marker_shapes_validate_and_resolve() {
+    assert!(PRODUCT_MARKER_SHAPES.contains(&MarkerShape::Hexagon));
+    assert!(!PRODUCT_MARKER_SHAPES.contains(&MarkerShape::Star));
     for shape in [
         MarkerShape::Circle,
         MarkerShape::Square,
@@ -142,6 +144,7 @@ fn all_product_marker_shapes_validate_and_resolve() {
         MarkerShape::TriangleDown,
         MarkerShape::Diamond,
         MarkerShape::Pentagon,
+        MarkerShape::Hexagon,
         MarkerShape::Star,
         MarkerShape::Plus,
         MarkerShape::Cross,
@@ -162,6 +165,35 @@ fn all_product_marker_shapes_validate_and_resolve() {
         let decoded = serde_json::from_slice(&encoded).unwrap();
         let document = FigureDocument::from_project(decoded).unwrap();
         resolved_preview(&document).unwrap();
+    }
+}
+
+#[test]
+fn small_hexagon_filled_and_hollow_round_trip_and_export() {
+    for filled in [true, false] {
+        let mut document = FigureDocument::showcase();
+        let mut artist = document.artist_record("node-17").unwrap();
+        let ArtistProperties::Scatter { marker, .. } = &mut artist.properties else {
+            panic!("missing scatter")
+        };
+        marker.shape = MarkerShape::Hexagon;
+        marker.size_pt = 4.0;
+        marker.filled = filled;
+        document.set_artist_record(artist).unwrap();
+        let reopened = FigureDocument::from_project(
+            serde_json::from_slice(&serde_json::to_vec(document.project()).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            instplot_studio::figure_pdf(&reopened)
+                .unwrap()
+                .starts_with(b"%PDF-")
+        );
+        assert!(
+            instplot_studio::figure_png(&reopened, 150)
+                .unwrap()
+                .starts_with(b"\x89PNG\r\n\x1a\n")
+        );
     }
 }
 

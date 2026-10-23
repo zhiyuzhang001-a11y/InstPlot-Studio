@@ -5,6 +5,7 @@ mod axis_editor;
 mod coordination;
 mod data_workflow;
 mod export_workflow;
+mod font_editor;
 mod interaction;
 mod lifecycle;
 mod selection_windows;
