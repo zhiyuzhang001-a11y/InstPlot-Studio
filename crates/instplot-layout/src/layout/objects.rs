@@ -75,6 +75,7 @@ pub(super) fn draw_reference_lines(
 
 pub(super) fn draw_measurement_arrows(
     chart: &Chart,
+    font_pt: f64,
     axes: Bounds,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
@@ -148,9 +149,9 @@ pub(super) fn draw_measurement_arrows(
         let sizes = arrow
             .labels
             .iter()
-            .map(|label| measurer.measure_label(label, TICK_FONT))
+            .map(|label| measurer.measure_label(label, font_pt))
             .collect::<Vec<_>>();
-        let line_height = TICK_FONT * 1.25;
+        let line_height = font_pt * 1.25;
         let width = sizes.iter().map(|size| size.width).fold(0.0, f64::max);
         let first_ascent = sizes.first().map_or(0.0, |size| size.ascent);
         let last_descent = sizes.last().map_or(0.0, |size| size.descent);
@@ -168,7 +169,7 @@ pub(super) fn draw_measurement_arrows(
                 arrow.id,
                 label,
                 (center.0, center.1 + line as f64 * line_height),
-                TICK_FONT,
+                font_pt,
                 TextAnchor::Middle,
                 0.0,
             );
@@ -319,6 +320,7 @@ fn draw_filled_arrow_head(
 
 pub(super) fn draw_annotations(
     chart: &Chart,
+    font_pt: f64,
     axes: Bounds,
     canvas_top: f64,
     measurer: &mut dyn TextMeasurer,
@@ -334,9 +336,9 @@ pub(super) fn draw_annotations(
         let sizes = annotation
             .labels
             .iter()
-            .map(|label| measurer.measure_label(label, TICK_FONT))
+            .map(|label| measurer.measure_label(label, font_pt))
             .collect::<Vec<_>>();
-        let line_height = TICK_FONT * 1.25;
+        let line_height = font_pt * 1.25;
         let width = sizes.iter().map(|size| size.width).fold(0.0, f64::max);
         let first_ascent = sizes.first().map_or(0.0, |size| size.ascent);
         let last_descent = sizes.last().map_or(0.0, |size| size.descent);
@@ -421,7 +423,7 @@ pub(super) fn draw_annotations(
                 annotation.id,
                 label,
                 (x, y + line as f64 * line_height),
-                TICK_FONT,
+                font_pt,
                 TextAnchor::Start,
                 0.0,
             );

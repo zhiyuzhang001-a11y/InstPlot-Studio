@@ -293,6 +293,7 @@ impl eframe::App for StudioApp {
                     {
                         self.redo();
                     }
+                    ui.menu_button("字号", |ui| self.plot_fonts_editor(ui));
                     if ui
                         .button(self.language.text(Text::InsertAnnotation))
                         .clicked()

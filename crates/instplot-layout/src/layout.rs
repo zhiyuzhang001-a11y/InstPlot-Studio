@@ -24,11 +24,8 @@ use legend::{choose_legend, draw_legend};
 use objects::{draw_annotations, draw_measurement_arrows, draw_reference_lines};
 use series::draw_series;
 
-const TICK_FONT: f64 = 8.0;
 /// Physical font size shared by primary and secondary axis labels.
 pub const AXIS_LABEL_FONT_PT: f64 = 9.0;
-const LABEL_FONT: f64 = AXIS_LABEL_FONT_PT;
-const LEGEND_FONT: f64 = 8.0;
 const AXIS_STROKE_WIDTH_PT: f64 = 0.7;
 const FALLBACK_ERROR_BAR_WIDTH_PT: f64 = 0.7;
 const MAX_ITERATIONS: usize = 4;
@@ -148,6 +145,8 @@ pub struct TickLayout {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisLayout {
+    pub tick_font_pt: f64,
+    pub label_font_pt: f64,
     pub major: Vec<TickLayout>,
     pub minor: Vec<f64>,
     pub shared_exponent: Option<i32>,
@@ -256,6 +255,7 @@ impl LayoutResult {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LayoutError {
+    InvalidFontSizes,
     InvalidFigure,
     InvalidAxis(NodeId),
     InvalidData(NodeId),
@@ -264,6 +264,9 @@ pub enum LayoutError {
 impl fmt::Display for LayoutError {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidFontSizes => {
+                output.write_str("plot font sizes must be between 4 and 48 pt")
+            }
             Self::InvalidFigure => {
                 output.write_str("figure dimensions must be finite and positive")
             }
@@ -295,6 +298,55 @@ pub fn layout_with_measurer(
     chart: &Chart,
     measurer: &mut dyn TextMeasurer,
 ) -> Result<LayoutResult, LayoutError> {
+    layout_with_fonts_and_measurer(chart, PlotFontSizes::legacy(), measurer)
+}
+
+/// Physical point sizes, shared by preview and vector/raster export.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlotFontSizes {
+    pub x_label: f64,
+    pub y_label: f64,
+    pub x_ticks: f64,
+    pub y_ticks: f64,
+    pub legend: f64,
+    pub annotations: f64,
+}
+
+impl PlotFontSizes {
+    pub const fn legacy() -> Self {
+        Self {
+            x_label: 9.0,
+            y_label: 9.0,
+            x_ticks: 8.0,
+            y_ticks: 8.0,
+            legend: 8.0,
+            annotations: 8.0,
+        }
+    }
+}
+
+pub fn layout_with_fonts(chart: &Chart, fonts: PlotFontSizes) -> Result<LayoutResult, LayoutError> {
+    layout_with_fonts_and_measurer(chart, fonts, &mut ParleyMeasurer::default())
+}
+
+fn layout_with_fonts_and_measurer(
+    chart: &Chart,
+    fonts: PlotFontSizes,
+    measurer: &mut dyn TextMeasurer,
+) -> Result<LayoutResult, LayoutError> {
+    if [
+        fonts.x_label,
+        fonts.y_label,
+        fonts.x_ticks,
+        fonts.y_ticks,
+        fonts.legend,
+        fonts.annotations,
+    ]
+    .iter()
+    .any(|size| !size.is_finite() || !(4.0..=48.0).contains(size))
+    {
+        return Err(LayoutError::InvalidFontSizes);
+    }
     validate(chart)?;
     let mut margins = Margins {
         left: 38.0,
@@ -311,7 +363,13 @@ pub fn layout_with_measurer(
         if !matches!(legend.position, LegendPosition::Auto) {
             return None;
         }
-        let preliminary = choose_legend(chart, axes_from_margins(chart, margins), measurer, None);
+        let preliminary = choose_legend(
+            chart,
+            axes_from_margins(chart, margins),
+            measurer,
+            None,
+            fonts.legend,
+        );
         Some(if preliminary.outside {
             preliminary.position
         } else {
@@ -326,19 +384,26 @@ pub fn layout_with_measurer(
     for iteration in 1..=MAX_ITERATIONS {
         iterations = iteration;
         let axes = axes_from_margins(chart, margins);
-        let x = axis_layout(&chart.x, true, axes, measurer);
-        let y = axis_layout(&chart.y, false, axes, measurer);
+        let x = axis_layout(&chart.x, true, axes, measurer, fonts.x_ticks, fonts.x_label);
+        let y = axis_layout(
+            &chart.y,
+            false,
+            axes,
+            measurer,
+            fonts.y_ticks,
+            fonts.y_label,
+        );
         let x2 = chart
             .x2
             .as_ref()
-            .map(|axis| axis_layout(axis, true, axes, measurer));
+            .map(|axis| axis_layout(axis, true, axes, measurer, fonts.x_ticks, fonts.x_label));
         let y2 = chart
             .y2
             .as_ref()
-            .map(|axis| axis_layout(axis, false, axes, measurer));
-        let legend = choose_legend(chart, axes, measurer, auto_position);
-        let y_label = measurer.measure_label(&y.label, LABEL_FONT);
-        let x_label = measurer.measure_label(&x.label, LABEL_FONT);
+            .map(|axis| axis_layout(axis, false, axes, measurer, fonts.y_ticks, fonts.y_label));
+        let legend = choose_legend(chart, axes, measurer, auto_position, fonts.legend);
+        let y_label = measurer.measure_label(&y.label, y.label_font_pt);
+        let x_label = measurer.measure_label(&x.label, x.label_font_pt);
         let max_y_tick = y
             .major
             .iter()
@@ -372,7 +437,7 @@ pub fn layout_with_measurer(
                 .as_ref()
                 .zip(y2.as_ref())
                 .map_or(base_right, |(axis, layout)| {
-                    let label = measurer.measure_label(&layout.label, LABEL_FONT);
+                    let label = measurer.measure_label(&layout.label, layout.label_font_pt);
                     axis.appearance.label_edge_pad_pt
                         + label.height
                         + axis.appearance.label_tick_pad_pt
@@ -393,7 +458,7 @@ pub fn layout_with_measurer(
                 .as_ref()
                 .zip(x2.as_ref())
                 .map_or(base_top, |(axis, layout)| {
-                    let label = measurer.measure_label(&layout.label, LABEL_FONT);
+                    let label = measurer.measure_label(&layout.label, layout.label_font_pt);
                     axis.appearance.label_edge_pad_pt
                         + label.height
                         + axis.appearance.label_tick_pad_pt
@@ -475,17 +540,24 @@ pub fn layout_with_measurer(
     }
 
     let axes = axes_from_margins(chart, margins);
-    let x_axis = axis_layout(&chart.x, true, axes, measurer);
-    let y_axis = axis_layout(&chart.y, false, axes, measurer);
+    let x_axis = axis_layout(&chart.x, true, axes, measurer, fonts.x_ticks, fonts.x_label);
+    let y_axis = axis_layout(
+        &chart.y,
+        false,
+        axes,
+        measurer,
+        fonts.y_ticks,
+        fonts.y_label,
+    );
     let x2_axis = chart
         .x2
         .as_ref()
-        .map(|axis| axis_layout(axis, true, axes, measurer));
+        .map(|axis| axis_layout(axis, true, axes, measurer, fonts.x_ticks, fonts.x_label));
     let y2_axis = chart
         .y2
         .as_ref()
-        .map(|axis| axis_layout(axis, false, axes, measurer));
-    let legend_choice = choose_legend(chart, axes, measurer, auto_position);
+        .map(|axis| axis_layout(axis, false, axes, measurer, fonts.y_ticks, fonts.y_label));
+    let legend_choice = choose_legend(chart, axes, measurer, auto_position, fonts.legend);
     let mut warnings = Vec::new();
     for (axis, layout) in [(&chart.x, &x_axis), (&chart.y, &y_axis)]
         .into_iter()
@@ -554,6 +626,7 @@ pub fn layout_with_measurer(
     draw_series(chart, axes, &mut display_list, &mut hit_map)?;
     draw_measurement_arrows(
         chart,
+        fonts.annotations,
         axes,
         measurer,
         &mut display_list,
@@ -562,6 +635,7 @@ pub fn layout_with_measurer(
     )?;
     draw_annotations(
         chart,
+        fonts.annotations,
         axes,
         margins.canvas_top,
         measurer,
@@ -571,6 +645,7 @@ pub fn layout_with_measurer(
     if legend_choice.visible {
         draw_legend(
             chart,
+            fonts.legend,
             legend_choice,
             measurer,
             &mut display_list,
@@ -1200,6 +1275,69 @@ mod tests {
     use super::objects::trimmed_arrow_shaft;
     use super::series::should_draw_marker;
     use crate::{MarkerShape, MarkerStyle, SelectableRole, layout, publication_fixture};
+
+    #[test]
+    fn configured_fonts_drive_both_measurement_and_export_runs() {
+        let chart = publication_fixture();
+        let fonts = super::PlotFontSizes {
+            x_label: 16.0,
+            y_label: 15.0,
+            x_ticks: 14.0,
+            y_ticks: 13.0,
+            legend: 12.0,
+            annotations: 11.0,
+        };
+        let result = super::layout_with_fonts(&chart, fonts).unwrap();
+        assert_eq!(result.x_axis.tick_font_pt, 14.0);
+        assert_eq!(result.y_axis.label_font_pt, 15.0);
+        for (node, expected) in [
+            (chart.x.id, vec![14.0, 16.0]),
+            (chart.y.id, vec![13.0, 15.0]),
+        ] {
+            let sizes: Vec<_> = result
+                .display_list
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    instplot_render::DisplayItem::GlyphRun(run) if run.source == node => {
+                        Some(run.size.get())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for size in expected {
+                assert!(sizes.contains(&size));
+            }
+        }
+        let legacy = layout(&chart).unwrap();
+        assert!(result.x_label_bounds.height > legacy.x_label_bounds.height);
+        assert!(matches!(
+            super::layout_with_fonts(
+                &chart,
+                super::PlotFontSizes {
+                    legend: f64::NAN,
+                    ..fonts
+                }
+            ),
+            Err(super::LayoutError::InvalidFontSizes)
+        ));
+    }
+
+    #[test]
+    fn large_vertical_tick_fonts_do_not_overlap() {
+        let mut chart = publication_fixture();
+        chart.legend = None;
+        chart.height_pt = 500.0;
+        let fonts = super::PlotFontSizes {
+            y_ticks: 36.0,
+            ..super::PlotFontSizes::legacy()
+        };
+        let result = super::layout_with_fonts(&chart, fonts).unwrap();
+        assert!(result.y_axis.major.len() >= 2);
+        for pair in result.y_axis.major.windows(2) {
+            assert!(pair[1].label_bounds.bottom() + 2.9 <= pair[0].label_bounds.y);
+        }
+    }
 
     #[test]
     fn marker_interval_always_includes_first_and_last_drawable_points() {

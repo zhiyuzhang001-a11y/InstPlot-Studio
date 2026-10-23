@@ -22,9 +22,16 @@ impl StudioApp {
                                 * old_zoom;
                         let empty_secondary = self.document.empty_active_secondary_axis();
                         let placeholder_color = egui::Color32::from_gray(130);
-                        let placeholder_font = egui::FontId::proportional(
-                            secondary_axis_placeholder_font_size(old_zoom),
-                        );
+                        let font_index = if empty_secondary == Some(AxisIdentity::Y2) {
+                            1
+                        } else {
+                            0
+                        };
+                        let placeholder_font =
+                            egui::FontId::proportional(secondary_axis_placeholder_font_size(
+                                self.document.project().typography.font_sizes_pt[font_index],
+                                old_zoom,
+                            ));
                         let placeholder_galley = empty_secondary.map(|identity| {
                             let text = match identity {
                                 AxisIdentity::X2 => "X2 label",
@@ -465,6 +472,15 @@ impl StudioApp {
                             .or_else(|| context.input(|input| input.pointer.latest_pos()));
                         let hovered = pointer
                             .and_then(|point| hit_project(&self.resolved, point, origin, old_zoom));
+                        let blank_page = hovered.is_none()
+                            && pointer.is_some_and(|point| preview_rect.contains(point));
+                        let hovered = hovered.or_else(|| {
+                            blank_page.then(|| CanvasHit {
+                                project_id: self.document.project().figure.axes[0].id.clone(),
+                                role: SelectableRole::Axes,
+                                data_index: None,
+                            })
+                        });
                         let pressed = press_origin
                             .and_then(|point| hit_project(&self.resolved, point, origin, old_zoom));
                         let reference_object_interaction = reference_tool_allows_object_interaction(
@@ -516,8 +532,10 @@ impl StudioApp {
                             .as_ref()
                             .filter(|hit| hit.role != SelectableRole::Axes);
                         let edit_requested = quick_drag.is_none()
-                            && response.double_clicked()
-                            && foreground_hovered.is_some();
+                            && ((response.double_clicked() && foreground_hovered.is_some())
+                                || (drawing_tool == DrawingTool::Select
+                                    && response.double_clicked()
+                                    && blank_page));
                         let mut drag_event = None;
                         let active_handle =
                             if self.selected_canvas_role == Some(SelectableRole::Legend) {

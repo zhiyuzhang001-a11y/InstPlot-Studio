@@ -126,6 +126,19 @@ Each file group can be removed with its linked plot objects in one undoable
 action; multi-section files also allow removing an individual data section.
 The File menu clears all imported data in one undoable action.
 These operations change only the current project, never the source files on disk.
+
+The **字号** toolbar entry selects all plot-text categories by default: X/Y titles
+(including secondary axes), X/Y tick labels, legends and annotations/measurement
+labels. Use **−1 pt** or **+1 pt** to adjust selected categories while retaining
+their relative sizes; deselect categories to leave them unchanged.
+Changes are undoable, saved in the project and shared by preview/PDF/PNG/SVG.
+New figures use 11 pt axis titles and 10 pt other text (2 pt larger); older files
+without explicit sizes retain their previous 9/8 pt layout until adjusted.
+Double-click the white page margin to edit physical canvas dimensions, choose an aspect
+ratio or lock the current ratio. Plot-area blank double-click still opens axis
+visibility controls. External legends may extend the output; the size editor
+reports the actual output canvas as well as the configured figure dimensions.
+
 Project schema 7 preserves imported-file provenance and distinguishes each manually entered XY
 group. Manual groups retain their original X/Y repetitions and SD/SEM recipe in the project; the
 first project save can additionally create one managed CSV, TSV, TXT, DAT or XLSX file per group.
