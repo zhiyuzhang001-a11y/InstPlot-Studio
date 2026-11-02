@@ -278,7 +278,11 @@ fn automatic_legend_moves_outside_for_five_or_seven_dense_curves() {
 
 #[test]
 fn filled_pentagon_and_star_markers_have_distinct_closed_vector_paths() {
-    for (shape, expected_verbs) in [(MarkerShape::Pentagon, 6), (MarkerShape::Hexagon,7), (MarkerShape::Star, 11)] {
+    for (shape, expected_verbs) in [
+        (MarkerShape::Pentagon, 6),
+        (MarkerShape::Hexagon, 7),
+        (MarkerShape::Star, 11),
+    ] {
         let mut chart = marker_gallery_fixture();
         chart.series.truncate(1);
         chart.series[0].marker = Some(MarkerStyle {
