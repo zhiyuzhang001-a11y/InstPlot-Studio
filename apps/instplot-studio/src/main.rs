@@ -12,6 +12,7 @@ mod app_update;
 mod canvas_support;
 mod editor_support;
 mod import_flow;
+mod lite_edit_ui;
 #[cfg(target_os = "macos")]
 mod macos_open_files;
 mod startup;

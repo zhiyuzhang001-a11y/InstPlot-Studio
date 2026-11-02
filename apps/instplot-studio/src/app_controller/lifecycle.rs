@@ -48,6 +48,7 @@ impl StudioApp {
         let x_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::X));
         let y_fixed_ticks = fixed_ticks_text(&document.axis_record(AxisDimension::Y));
         Self {
+            lite_edit: None,
             branding: instplot_ui::Branding::new(PRODUCT_NAME, env!("CARGO_PKG_VERSION")),
             features: instplot_ui::FeatureSet::STUDIO,
             session,
@@ -417,11 +418,18 @@ impl StudioApp {
             None
         };
         let path = path.or_else(|| {
-            rfd::FileDialog::new()
+            let suggested = suggested_project_save_path(
+                self.workspace.project_path(),
+                &self.document.project().data_sources,
+            );
+            let mut dialog = rfd::FileDialog::new()
                 .set_title(self.language.text(Text::SaveProjectDialog))
                 .add_filter(self.language.text(Text::ProjectFile), &["instplot"])
-                .set_file_name("figure.instplot")
-                .save_file()
+                .set_file_name(suggested.file_name().unwrap_or_default().to_string_lossy());
+            if let Some(parent) = suggested.parent().filter(|p| !p.as_os_str().is_empty()) {
+                dialog = dialog.set_directory(parent);
+            }
+            dialog.save_file()
         });
         let Some(path) = path else {
             return false;
@@ -540,5 +548,72 @@ impl StudioApp {
         } else if cancel {
             self.pending_managed_save_conflict = None;
         }
+    }
+}
+
+fn suggested_project_save_path(
+    current: Option<&Path>,
+    sources: &[instplot_studio::DataSourceRecord],
+) -> PathBuf {
+    if let Some(path) = current.filter(|p| p.file_name().is_some()) {
+        return path.to_path_buf();
+    }
+    let source = sources
+        .iter()
+        .find(|s| s.kind == instplot_studio::DataSourceKind::Source);
+    let source_path = source.and_then(|s| s.origin_path.as_deref()).map(Path::new);
+    let name = source_path
+        .and_then(Path::file_stem)
+        .and_then(|v| v.to_str())
+        .or_else(|| {
+            source
+                .and_then(|s| Path::new(&s.label).file_stem())
+                .and_then(|v| v.to_str())
+        })
+        .unwrap_or("figure");
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = name.trim_matches(['.', ' ']);
+    let filename = format!("{}.instplot", if name.is_empty() { "figure" } else { name });
+    source_path
+        .and_then(Path::parent)
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from(&filename), |p| p.join(&filename))
+}
+
+#[cfg(test)]
+mod save_name_tests {
+    use super::*;
+    #[test]
+    fn saving_as_prefills_existing_name_and_new_projects_use_source_name() {
+        assert_eq!(
+            suggested_project_save_path(Some(Path::new("/plots/我的图.instplot")), &[]),
+            Path::new("/plots/我的图.instplot")
+        );
+        assert_eq!(
+            suggested_project_save_path(None, &[]),
+            Path::new("figure.instplot")
+        );
+        let document = FigureDocument::showcase();
+        let mut project = document.project().clone();
+        let source = project
+            .data_sources
+            .iter_mut()
+            .find(|s| s.kind == instplot_studio::DataSourceKind::Source)
+            .unwrap();
+        source.origin_path = Some("/data/电阻变化.csv".into());
+        // Keep the fixture's other fields intact; naming never reads/writes data.
+        assert_eq!(
+            suggested_project_save_path(None, &project.data_sources),
+            Path::new("/data/电阻变化.instplot")
+        );
     }
 }

@@ -4,6 +4,19 @@ use super::*;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
+// Unit fixtures keep managed backups inside their disposable test directory,
+// never in the user's real application-data directory.
+fn save_project(path: &Path, document: &ProjectDocument) -> Result<(), ProjectError> {
+    storage::save_project_with_backup_root(
+        path,
+        document,
+        &path.parent().unwrap().join("test-backups"),
+    )
+}
+fn open_project(path: &Path) -> Result<OpenProjectReport, ProjectError> {
+    storage::open_project_with_backup_root(path, Some(&path.parent().unwrap().join("test-backups")))
+}
+
 struct TempDirectory(PathBuf);
 
 impl TempDirectory {
@@ -385,6 +398,63 @@ fn atomic_save_keeps_a_valid_backup_and_recovers_from_corruption() {
     assert_eq!(recovered.source, OpenProjectSource::Backup);
     assert_eq!(recovered.document, first);
     assert!(!recovered.warnings.is_empty());
+}
+
+#[test]
+fn saves_only_one_project_file_and_keeps_private_path_scoped_previous_versions() {
+    let directory = TempDirectory::new();
+    let projects = directory.0.join("projects");
+    let backups = directory.0.join("app-data");
+    fs::create_dir(&projects).unwrap();
+    let path = projects.join("电阻.instplot");
+    let first = ProjectDocument::fixed_fixture();
+    let mut second = first.clone();
+    second.figure.axes[0].x.maximum = 8.0;
+    storage::save_project_with_backup_root(&path, &first, &backups).unwrap();
+    storage::save_project_with_backup_root(&path, &second, &backups).unwrap();
+    assert_eq!(fs::read_dir(&projects).unwrap().count(), 1);
+    let backup = storage::managed_backup_path(&path, &backups).unwrap();
+    assert_eq!(decode_project(&fs::read(&backup).unwrap()).unwrap(), first);
+    let other = directory.0.join("other");
+    fs::create_dir(&other).unwrap();
+    assert_ne!(
+        backup,
+        storage::managed_backup_path(&other.join("电阻.instplot"), &backups).unwrap()
+    );
+    fs::remove_file(&path).unwrap();
+    let recovered = storage::open_project_with_backup_root(&path, Some(&backups)).unwrap();
+    assert_eq!(recovered.document, first);
+    assert_eq!(recovered.source, OpenProjectSource::Backup);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&backups).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
+}
+
+#[test]
+fn legacy_adjacent_backup_recovers_but_failed_managed_backup_does_not_overwrite_project() {
+    let directory = TempDirectory::new();
+    let path = directory.0.join("old.instplot");
+    let badroot = directory.0.join("not-a-directory");
+    let first = ProjectDocument::fixed_fixture();
+    let original = serde_json::to_vec(&first).unwrap();
+    fs::write(&path, &original).unwrap();
+    fs::write(&badroot, b"occupied").unwrap();
+    let mut second = first.clone();
+    second.figure.axes[0].x.maximum = 9.0;
+    assert!(storage::save_project_with_backup_root(&path, &second, &badroot).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let legacy = path.with_file_name("old.instplot.bak");
+    fs::write(&legacy, &original).unwrap();
+    fs::write(&path, b"broken").unwrap();
+    let report = storage::open_project_with_backup_root(&path, Some(&badroot)).unwrap();
+    assert_eq!(report.document, first);
+    assert_eq!(report.source, OpenProjectSource::Backup);
+    assert_eq!(fs::read(&legacy).unwrap(), original);
 }
 
 #[test]

@@ -6,6 +6,8 @@ mod editing;
 mod export;
 mod handoff;
 pub mod label_input;
+pub mod lite_edit;
+pub mod lite_edit_protocol;
 mod palette;
 mod preview;
 mod project;

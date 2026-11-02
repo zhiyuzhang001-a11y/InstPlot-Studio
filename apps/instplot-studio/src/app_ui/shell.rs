@@ -94,6 +94,7 @@ impl eframe::App for StudioApp {
                 self.open_paths(externally_opened_paths);
             }
         }
+        self.lite_edit_window(&context);
         let dirty = self.edit_history.is_dirty(&self.document);
         context.send_viewport_cmd(egui::ViewportCommand::Title(
             self.branding
@@ -292,6 +293,7 @@ impl eframe::App for StudioApp {
                     {
                         self.redo();
                     }
+                    ui.menu_button("字号", |ui| self.plot_fonts_editor(ui));
                     if ui
                         .button(self.language.text(Text::InsertAnnotation))
                         .clicked()

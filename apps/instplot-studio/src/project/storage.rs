@@ -1,6 +1,15 @@
 use super::*;
 
 pub fn save_project(path: &Path, document: &ProjectDocument) -> Result<(), ProjectError> {
+    let root = managed_backup_root()?;
+    save_project_with_backup_root(path, document, &root)
+}
+
+pub(super) fn save_project_with_backup_root(
+    path: &Path,
+    document: &ProjectDocument,
+    root: &Path,
+) -> Result<(), ProjectError> {
     document.validate()?;
     let mut bytes = serde_json::to_vec_pretty(document)?;
     bytes.push(b'\n');
@@ -8,24 +17,57 @@ pub fn save_project(path: &Path, document: &ProjectDocument) -> Result<(), Proje
         let old = fs::read(path)?;
         decode_project(&old)
             .map_err(|error| ProjectError::InvalidExistingProject(error.to_string()))?;
-        atomic_write(&backup_path(path), &old)?;
+        let backup = managed_backup_path(path, root)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(root)?;
+        atomic_write(&backup, &old)?;
     }
     atomic_write(path, &bytes)
 }
 
 pub fn open_project(path: &Path) -> Result<OpenProjectReport, ProjectError> {
+    open_project_with_backup_root(path, managed_backup_root().ok().as_deref())
+}
+
+pub(super) fn open_project_with_backup_root(
+    path: &Path,
+    root: Option<&Path>,
+) -> Result<OpenProjectReport, ProjectError> {
     let primary = fs::read(path).and_then(|bytes| {
         decode_project(&bytes).map_err(|error| std::io::Error::other(error.to_string()))
     });
     match primary {
         Ok(document) => Ok(report_for(document, OpenProjectSource::Primary)),
         Err(primary_error) => {
-            let backup_path = backup_path(path);
-            let backup = fs::read(&backup_path).and_then(|bytes| {
-                decode_project(&bytes).map_err(|error| std::io::Error::other(error.to_string()))
-            });
+            // Prefer the managed previous version, but keep recovery from old
+            // adjacent .bak files. Existing backups are never migrated/deleted.
+            let managed = root.and_then(|root| managed_backup_path(path, root).ok());
+            let mut candidates = managed
+                .into_iter()
+                .chain(std::iter::once(backup_path(path)));
+            let mut failures = Vec::new();
+            let backup = candidates
+                .find_map(|backup_path| {
+                    match fs::read(&backup_path)
+                        .map_err(ProjectError::Io)
+                        .and_then(|bytes| decode_project(&bytes))
+                    {
+                        Ok(document) => Some((document, backup_path)),
+                        Err(e) => {
+                            failures.push(e.to_string());
+                            None
+                        }
+                    }
+                })
+                .ok_or_else(|| failures.join("; "));
             match backup {
-                Ok(document) => {
+                Ok((document, backup_path)) => {
                     let mut report = report_for(document, OpenProjectSource::Backup);
                     report.warnings.insert(
                         0,
@@ -158,4 +200,35 @@ fn backup_path(path: &Path) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(".bak");
     PathBuf::from(value)
+}
+
+fn managed_backup_root() -> Result<PathBuf, ProjectError> {
+    directories::ProjectDirs::from("com", "InstPlot", "InstPlot Studio")
+        .map(|dirs| dirs.data_local_dir().join("project-backups"))
+        .ok_or_else(|| {
+            ProjectError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "local project backup directory is unavailable",
+            ))
+        })
+}
+
+pub(super) fn managed_backup_path(path: &Path, root: &Path) -> Result<PathBuf, ProjectError> {
+    // Canonicalize the parent, not the file: recovery still works if the
+    // primary is missing. Same-named projects in different folders stay apart.
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| ProjectError::Validation("project filename is missing".into()))?;
+    let identity = parent.join(filename);
+    let digest = Sha256::digest(identity.as_os_str().as_encoded_bytes());
+    let key = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(root.join(format!("{key}.instplot.bak")))
 }

@@ -4,6 +4,13 @@ All notable changes to InstPlot Studio are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Edit one imported source dataset in Lite and return it to the existing Studio
+  figure with explicit confirmation, preserved styles/manual axes, conflict checks
+  and one-step undo/redo. Requires a compatible local Lite build; no public release
+  or updater-channel changes are included.
+
 ### Fixed
 
 - Distinguish line and marker components in overlapping-object choices and their

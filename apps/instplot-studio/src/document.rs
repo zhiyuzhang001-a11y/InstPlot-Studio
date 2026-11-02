@@ -11,9 +11,9 @@ use instplot_layout::{
     LegendErrorStyle, LegendGrid as LayoutLegendGrid, LegendPosition, LegendSpec, LineStyle,
     Locator, MarkerShape as LayoutMarkerShape, MarkerStyle as LayoutMarkerStyle,
     MeasurementArrow as LayoutMeasurementArrow,
-    MeasurementConstraint as LayoutMeasurementConstraint, ReferenceLine as LayoutReferenceLine,
-    ReferenceOrientation as LayoutReferenceOrientation, Scale, Series,
-    TickDirection as LayoutTickDirection, layout,
+    MeasurementConstraint as LayoutMeasurementConstraint, PlotFontSizes,
+    ReferenceLine as LayoutReferenceLine, ReferenceOrientation as LayoutReferenceOrientation,
+    Scale, Series, TickDirection as LayoutTickDirection, layout_with_fonts,
 };
 use instplot_render::{Color, CompileError, DisplayList, NodeId, compile, fixed_figure};
 use instplot_text::Label;
@@ -507,27 +507,56 @@ impl FigureDocument {
         } else {
             Vec::new()
         };
-        let result = layout(&Chart {
-            id: axes_id,
-            width_pt,
-            height_pt,
-            x,
-            y,
-            x2,
-            y2,
-            series_axes,
-            reference_lines,
-            series,
-            measurement_arrows,
-            annotations,
-            legend,
-        })
+        let [
+            x_label,
+            y_label,
+            x_ticks,
+            y_ticks,
+            legend_font,
+            annotations_font,
+        ] = self.project.typography.font_sizes_pt;
+        let result = layout_with_fonts(
+            &Chart {
+                id: axes_id,
+                width_pt,
+                height_pt,
+                x,
+                y,
+                x2,
+                y2,
+                series_axes,
+                reference_lines,
+                series,
+                measurement_arrows,
+                annotations,
+                legend,
+            },
+            PlotFontSizes {
+                x_label,
+                y_label,
+                x_ticks,
+                y_ticks,
+                legend: legend_font,
+                annotations: annotations_font,
+            },
+        )
         .map_err(DocumentLayoutError::Layout)?;
         Ok(DocumentLayout {
             data_clip: result.axes,
             result,
             project_ids,
         })
+    }
+
+    pub fn set_plot_font_sizes(&mut self, sizes_pt: [f64; 6]) -> Result<(), String> {
+        if sizes_pt
+            .iter()
+            .any(|size| !size.is_finite() || !(4.0..=48.0).contains(size))
+        {
+            return Err("plot font sizes must be between 4 and 48 pt".to_owned());
+        }
+        self.project.typography.font_sizes_pt = sizes_pt;
+        Ok(())
     }
 }
 
@@ -904,7 +933,7 @@ const HANDOFF_MARKERS: [MarkerShape; 7] = [
     MarkerShape::TriangleDown,
     MarkerShape::Diamond,
     MarkerShape::Pentagon,
-    MarkerShape::Star,
+    MarkerShape::Hexagon,
 ];
 
 fn validate_handoff_datasets(datasets: &[DataSet]) -> Result<(), ProjectError> {
@@ -1809,6 +1838,7 @@ fn marker_shape(shape: MarkerShape) -> LayoutMarkerShape {
         MarkerShape::TriangleDown => LayoutMarkerShape::TriangleDown,
         MarkerShape::Diamond => LayoutMarkerShape::Diamond,
         MarkerShape::Pentagon => LayoutMarkerShape::Pentagon,
+        MarkerShape::Hexagon => LayoutMarkerShape::Hexagon,
         MarkerShape::Star => LayoutMarkerShape::Star,
         MarkerShape::Plus => LayoutMarkerShape::Plus,
         MarkerShape::Cross => LayoutMarkerShape::Cross,

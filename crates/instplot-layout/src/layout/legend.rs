@@ -61,6 +61,7 @@ fn legend_column_widths(
     rows: usize,
     column_major: bool,
     measurer: &mut dyn TextMeasurer,
+    font_pt: f64,
 ) -> Vec<f64> {
     let mut widths = vec![0.0_f64; columns.max(1)];
     for (index, series) in entries.iter().enumerate() {
@@ -71,9 +72,9 @@ fn legend_column_widths(
         };
         if let Some(width) = widths.get_mut(column) {
             let size = if let Some(label) = &series.legend_label {
-                measurer.measure_label(label, LEGEND_FONT)
+                measurer.measure_label(label, font_pt)
             } else {
-                measurer.measure(&series.label, LEGEND_FONT)
+                measurer.measure(&series.label, font_pt)
             };
             *width = (*width).max(size.width + 24.0);
         }
@@ -86,6 +87,7 @@ pub(super) fn choose_legend(
     axes: Bounds,
     measurer: &mut dyn TextMeasurer,
     override_position: Option<LegendPosition>,
+    font_pt: f64,
 ) -> LegendChoice {
     let Some(legend) = chart.legend.as_ref() else {
         return empty_legend();
@@ -98,9 +100,9 @@ pub(super) fn choose_legend(
         .iter()
         .map(|series| {
             if let Some(label) = &series.legend_label {
-                measurer.measure_label(label, LEGEND_FONT).width
+                measurer.measure_label(label, font_pt).width
             } else {
-                measurer.measure(&series.label, LEGEND_FONT).width
+                measurer.measure(&series.label, font_pt).width
             }
         })
         .fold(0.0, f64::max)
@@ -113,10 +115,11 @@ pub(super) fn choose_legend(
         inside_rows,
         inside_column_major,
         measurer,
+        font_pt,
     )
     .iter()
     .sum();
-    let inside_height = inside_rows as f64 * 12.0 + 6.0;
+    let inside_height = inside_rows as f64 * (font_pt * 1.5) + 6.0;
     let position = override_position.unwrap_or(legend.position);
     if let LegendPosition::FigurePoints { x, y } = position {
         return LegendChoice {
@@ -134,7 +137,15 @@ pub(super) fn choose_legend(
             column_major: inside_column_major,
         };
     }
-    let mut above = above_legend(chart, axes, &entries, cell_width, legend.grid, measurer);
+    let mut above = above_legend(
+        chart,
+        axes,
+        &entries,
+        cell_width,
+        legend.grid,
+        measurer,
+        font_pt,
+    );
     let mut right = LegendChoice {
         bounds: Bounds {
             x: axes.right() + 6.0,
@@ -256,15 +267,16 @@ fn above_legend(
     cell_width: f64,
     grid: crate::LegendGrid,
     measurer: &mut dyn TextMeasurer,
+    font_pt: f64,
 ) -> LegendChoice {
     let available_width = (chart.width_pt - axes.x - 12.0).max(1.0);
     let entry_count = entries.len();
     let automatic_columns = ((available_width / cell_width).floor() as usize).clamp(1, entry_count);
     let (columns, rows, column_major) = legend_grid(grid, entry_count, automatic_columns);
-    let width = legend_column_widths(entries, columns, rows, column_major, measurer)
+    let width = legend_column_widths(entries, columns, rows, column_major, measurer, font_pt)
         .iter()
         .sum::<f64>();
-    let height = rows as f64 * 12.0 + 6.0;
+    let height = rows as f64 * (font_pt * 1.5) + 6.0;
     LegendChoice {
         bounds: Bounds {
             x: axes.x + (available_width - width).max(0.0) / 2.0,
@@ -283,6 +295,7 @@ fn above_legend(
 
 pub(super) fn draw_legend(
     chart: &Chart,
+    font_pt: f64,
     choice: LegendChoice,
     measurer: &mut dyn TextMeasurer,
     list: &mut DisplayList,
@@ -297,6 +310,7 @@ pub(super) fn draw_legend(
         choice.rows,
         choice.column_major,
         measurer,
+        font_pt,
     );
     for (index, series) in entries.iter().enumerate() {
         let (column, row) = if choice.column_major {
@@ -304,7 +318,7 @@ pub(super) fn draw_legend(
         } else {
             (index % choice.columns, index / choice.columns)
         };
-        let y = bounds.y + 8.0 + row as f64 * 12.0;
+        let y = bounds.y + font_pt + row as f64 * (font_pt * 1.5);
         let column_offset = column_widths.iter().take(column).sum::<f64>();
         let key_start = bounds.x + column_offset + 3.0;
         let key_end = key_start + 14.0;
@@ -359,24 +373,24 @@ pub(super) fn draw_legend(
             });
         }
         if let Some(label) = &series.legend_label {
-            let _ = measurer.measure_label(label, LEGEND_FONT);
+            let _ = measurer.measure_label(label, font_pt);
             label_text(
                 list,
                 series.id,
                 label,
-                (key_end + 4.0, y + 2.5),
-                LEGEND_FONT,
+                (key_end + 4.0, y + font_pt * 0.3125),
+                font_pt,
                 TextAnchor::Start,
                 0.0,
             );
         } else {
-            let _ = measurer.measure(&series.label, LEGEND_FONT);
+            let _ = measurer.measure(&series.label, font_pt);
             text(
                 list,
                 series.id,
                 &series.label,
-                (key_end + 4.0, y + 2.5),
-                LEGEND_FONT,
+                (key_end + 4.0, y + font_pt * 0.3125),
+                font_pt,
                 TextAnchor::Start,
                 0.0,
             );

@@ -518,6 +518,7 @@ pub enum MarkerShape {
     TriangleDown,
     Diamond,
     Pentagon,
+    Hexagon,
     Star,
     Plus,
     Cross,
@@ -730,6 +731,10 @@ pub struct PaletteColor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TypographyProfile {
+    /// X/Y titles, X/Y tick labels, legend, annotations/measurement labels (pt).
+    /// Missing fields in older documents retain the original physical sizes.
+    #[serde(default = "legacy_font_sizes")]
+    pub font_sizes_pt: [f64; 6],
     pub id: String,
     pub family: String,
     pub font_version: String,
@@ -1260,6 +1265,16 @@ impl ProjectDocument {
         }
         validate_scale("subscript scale", self.typography.subscript_scale)?;
         validate_scale("superscript scale", self.typography.superscript_scale)?;
+        if self
+            .typography
+            .font_sizes_pt
+            .iter()
+            .any(|size| !size.is_finite() || !(4.0..=48.0).contains(size))
+        {
+            return Err(ProjectError::Validation(
+                "plot font sizes must be finite and between 4 and 48 pt".to_owned(),
+            ));
+        }
         let styles = self
             .typography
             .faces
@@ -1448,6 +1463,7 @@ use validation::*;
 
 fn default_typography() -> TypographyProfile {
     TypographyProfile {
+        font_sizes_pt: [11.0, 11.0, 10.0, 10.0, 10.0, 10.0],
         id: "instplot-publication-v1".to_owned(),
         family: "TeX Gyre Heros".to_owned(),
         font_version: "2.501".to_owned(),
@@ -1476,6 +1492,10 @@ fn default_typography() -> TypographyProfile {
         subscript_scale: 0.72,
         superscript_scale: 0.72,
     }
+}
+
+fn legacy_font_sizes() -> [f64; 6] {
+    [9.0, 9.0, 8.0, 8.0, 8.0, 8.0]
 }
 
 fn font_face(style: FontStyle, postscript_name: &str, sha256: &str) -> FontFaceRecord {

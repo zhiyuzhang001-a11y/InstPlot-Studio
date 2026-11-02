@@ -592,7 +592,7 @@ pub(super) const PRODUCT_MARKER_SHAPES: [MarkerShape; 7] = [
     MarkerShape::TriangleDown,
     MarkerShape::Diamond,
     MarkerShape::Pentagon,
-    MarkerShape::Star,
+    MarkerShape::Hexagon,
 ];
 
 pub(super) fn paint_marker_preview(
@@ -662,6 +662,14 @@ pub(super) fn paint_marker_preview(
             paint_marker_polygon(
                 painter,
                 marker_preview_points(center, radius, 5, None),
+                filled,
+                color,
+            );
+        }
+        MarkerShape::Hexagon => {
+            paint_marker_polygon(
+                painter,
+                marker_preview_points(center, radius, 6, None),
                 filled,
                 color,
             );
@@ -1232,6 +1240,7 @@ pub(super) fn marker_shape_name(language: UiLanguage, shape: MarkerShape) -> &'s
         MarkerShape::TriangleDown => Text::TriangleDown,
         MarkerShape::Diamond => Text::Diamond,
         MarkerShape::Pentagon => Text::Pentagon,
+        MarkerShape::Hexagon => Text::Hexagon,
         MarkerShape::Star => Text::Star,
         MarkerShape::Plus => Text::Plus,
         MarkerShape::Cross => Text::Cross,

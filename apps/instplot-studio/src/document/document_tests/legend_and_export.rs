@@ -213,7 +213,7 @@ fn showcase_legend_grid_round_trips_and_controls_export_layout() {
         };
         assert_eq!(
             resolved.result.legend.unwrap().height,
-            expected_rows as f64 * 12.0 + 6.0
+            expected_rows as f64 * document.project().typography.font_sizes_pt[4] * 1.5 + 6.0
         );
         assert!(resolved.result.display_list.height.get() > 65.0 * 72.0 / 25.4);
     }

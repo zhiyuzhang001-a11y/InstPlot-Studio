@@ -5,4 +5,5 @@ use instplot_render::{Color, DisplayItem, NodeId};
 
 mod data_workflows;
 mod interaction_contracts;
+mod lite_roundtrip;
 mod visual_contracts;

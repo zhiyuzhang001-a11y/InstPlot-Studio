@@ -72,6 +72,28 @@ impl StudioApp {
         ui.label(self.language.text(Text::FigureSize));
         let (mut width, mut height) = self.document.figure_size_mm();
         let mut changed_group = None;
+        let ratio_id = egui::Id::new("canvas-locked-aspect");
+        let mut locked_ratio = ui.ctx().data_mut(|data| data.get_temp::<f64>(ratio_id));
+        ui.horizontal_wrapped(|ui| {
+            ui.label("长宽比：");
+            for (label, ratio) in [
+                ("1:1", 1.0),
+                ("4:3", 4.0 / 3.0),
+                ("3:2", 1.5),
+                ("16:9", 16.0 / 9.0),
+            ] {
+                if ui.button(label).clicked() {
+                    width = width.clamp(20.0 * ratio, 500.0);
+                    height = width / ratio;
+                    locked_ratio = Some(ratio);
+                    changed_group = Some(EditGroup::FigureWidth);
+                }
+            }
+        });
+        let mut locked = locked_ratio.is_some();
+        if ui.checkbox(&mut locked, "锁定长宽比").changed() {
+            locked_ratio = locked.then_some(width / height);
+        }
         let mut finish = false;
         let control_height = ui.spacing().interact_size.y;
         ui.horizontal_wrapped(|ui| {
@@ -83,6 +105,10 @@ impl StudioApp {
                     .prefix(format!("{}: ", self.language.text(Text::WidthMm))),
             );
             if response.changed() {
+                if let Some(ratio) = locked_ratio {
+                    width = width.clamp(20.0_f64.max(20.0 * ratio), 500.0_f64.min(500.0 * ratio));
+                    height = width / ratio;
+                }
                 changed_group = Some(EditGroup::FigureWidth);
             }
             finish |= response.drag_stopped() || response.lost_focus();
@@ -94,9 +120,20 @@ impl StudioApp {
                     .prefix(format!("{}: ", self.language.text(Text::HeightMm))),
             );
             if response.changed() {
+                if let Some(ratio) = locked_ratio {
+                    height = height.clamp(20.0_f64.max(20.0 / ratio), 500.0_f64.min(500.0 / ratio));
+                    width = height * ratio;
+                }
                 changed_group = Some(EditGroup::FigureHeight);
             }
             finish |= response.drag_stopped() || response.lost_focus();
+        });
+        ui.ctx().data_mut(|data| {
+            if let Some(ratio) = locked_ratio {
+                data.insert_temp(ratio_id, ratio);
+            } else {
+                data.remove::<f64>(ratio_id);
+            }
         });
         let output_width = f64::from(self.resolved.display.width) * 25.4 / 72.0;
         let output_height = f64::from(self.resolved.display.height) * 25.4 / 72.0;

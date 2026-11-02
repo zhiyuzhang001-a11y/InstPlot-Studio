@@ -159,8 +159,9 @@ impl StudioApp {
                         }
                     } else if selected_id == axes_id {
                         this.figure_size_editor(ui);
-                        ui.separator();
-                        this.axis_ranges_editor(ui);
+                        ui.collapsing(this.language.text(Text::AxesRanges), |ui| {
+                            this.axis_ranges_editor(ui)
+                        });
                     } else if this.document.semantic_label_nodes(&selected_id).is_some() {
                         this.semantic_label_editor(ui, &selected_id);
                     } else if this.document.artist_record(&selected_id).is_some() {

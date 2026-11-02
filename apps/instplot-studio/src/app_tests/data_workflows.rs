@@ -1,6 +1,6 @@
 use super::*;
 
-fn combined_column_fixture() -> (FigureDocument, Vec<DataSet>) {
+pub(super) fn combined_column_fixture() -> (FigureDocument, Vec<DataSet>) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.csv");
     let base = instplot_io::read_data_file(&path).unwrap().remove(0);
     let mut datasets = (0..9)

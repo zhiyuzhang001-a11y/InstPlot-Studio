@@ -5,9 +5,13 @@ pub(super) fn axis_layout(
     horizontal: bool,
     axes: Bounds,
     measurer: &mut dyn TextMeasurer,
+    tick_font_pt: f64,
+    label_font_pt: f64,
 ) -> AxisLayout {
     if !axis.has_data {
         return AxisLayout {
+            tick_font_pt,
+            label_font_pt,
             major: Vec::new(),
             minor: Vec::new(),
             shared_exponent: None,
@@ -58,7 +62,7 @@ pub(super) fn axis_layout(
     let sizes: Vec<TextSize> = formatted
         .labels
         .iter()
-        .map(|label| measurer.measure(label, TICK_FONT))
+        .map(|label| measurer.measure(label, tick_font_pt))
         .collect();
     let stride = if horizontal {
         collision_stride(
@@ -67,7 +71,15 @@ pub(super) fn axis_layout(
             3.0,
         )
     } else {
-        1
+        // Y positions run bottom-to-top; negate them for the ascending collision check.
+        collision_stride(
+            &positions
+                .iter()
+                .map(|position| -position)
+                .collect::<Vec<_>>(),
+            &sizes.iter().map(|size| size.height).collect::<Vec<_>>(),
+            3.0,
+        )
     };
     let major = values
         .iter()
@@ -97,6 +109,8 @@ pub(super) fn axis_layout(
         })
         .collect();
     AxisLayout {
+        tick_font_pt,
+        label_font_pt,
         major,
         minor: minor_ticks_with_interval(
             axis.scale,
@@ -290,14 +304,14 @@ pub(super) fn draw_axes(
                 chart.x.appearance.tick_direction,
             );
         }
-        let size = measurer.measure(&tick.label, TICK_FONT);
+        let size = measurer.measure(&tick.label, x_axis.tick_font_pt);
         if chart.x.appearance.tick_labels_visible && chart.x.appearance.near_tick_labels {
             text(
                 list,
                 chart.x.id,
                 &tick.label,
                 (tick.position, tick.label_bounds.y + size.ascent),
-                TICK_FONT,
+                x_axis.tick_font_pt,
                 TextAnchor::Middle,
                 0.0,
             );
@@ -326,7 +340,7 @@ pub(super) fn draw_axes(
                 chart.x.id,
                 &tick.label,
                 (tick.position, bounds.y + size.ascent),
-                TICK_FONT,
+                x_axis.tick_font_pt,
                 TextAnchor::Middle,
                 0.0,
             );
@@ -395,7 +409,7 @@ pub(super) fn draw_axes(
                 chart.y.appearance.tick_direction,
             );
         }
-        let size = measurer.measure(&tick.label, TICK_FONT);
+        let size = measurer.measure(&tick.label, y_axis.tick_font_pt);
         if chart.y.appearance.tick_labels_visible && chart.y.appearance.near_tick_labels {
             text(
                 list,
@@ -405,7 +419,7 @@ pub(super) fn draw_axes(
                     tick.label_bounds.x,
                     tick.position + (size.ascent - size.descent) / 2.0,
                 ),
-                TICK_FONT,
+                y_axis.tick_font_pt,
                 TextAnchor::Start,
                 0.0,
             );
@@ -434,7 +448,7 @@ pub(super) fn draw_axes(
                 chart.y.id,
                 &tick.label,
                 (bounds.x, tick.position + (size.ascent - size.descent) / 2.0),
-                TICK_FONT,
+                y_axis.tick_font_pt,
                 TextAnchor::Start,
                 0.0,
             );
@@ -479,7 +493,7 @@ pub(super) fn draw_axes(
         }
     }
 
-    let x_size = measurer.measure_label(&x_axis.label, LABEL_FONT);
+    let x_size = measurer.measure_label(&x_axis.label, x_axis.label_font_pt);
     let x_bounds = if chart.x.appearance.label_visible {
         Bounds {
             x: axes.x + (axes.width - x_size.width) / 2.0,
@@ -504,12 +518,12 @@ pub(super) fn draw_axes(
             chart.x.id,
             &x_axis.label,
             (axes.x + axes.width / 2.0, x_bounds.y + x_size.ascent),
-            LABEL_FONT,
+            x_axis.label_font_pt,
             TextAnchor::Middle,
             0.0,
         );
     }
-    let y_size = measurer.measure_label(&y_axis.label, LABEL_FONT);
+    let y_size = measurer.measure_label(&y_axis.label, y_axis.label_font_pt);
     let y_bounds = if chart.y.appearance.label_visible {
         Bounds {
             x: chart.y.appearance.label_edge_pad_pt,
@@ -534,7 +548,7 @@ pub(super) fn draw_axes(
                 y_bounds.right() - y_size.descent,
                 axes.y + axes.height / 2.0,
             ),
-            LABEL_FONT,
+            y_axis.label_font_pt,
             TextAnchor::Middle,
             -90.0,
         );
@@ -695,7 +709,7 @@ fn draw_secondary_x_axis(
             );
         }
         if axis.appearance.tick_labels_visible && axis.appearance.near_tick_labels {
-            let size = measurer.measure(&tick.label, TICK_FONT);
+            let size = measurer.measure(&tick.label, layout.tick_font_pt);
             max_tick_height = max_tick_height.max(size.height);
             let bounds = Bounds {
                 x: tick.position - size.width / 2.0,
@@ -708,7 +722,7 @@ fn draw_secondary_x_axis(
                 axis.id,
                 &tick.label,
                 (tick.position, bounds.y + size.ascent),
-                TICK_FONT,
+                layout.tick_font_pt,
                 TextAnchor::Middle,
                 0.0,
             );
@@ -740,7 +754,7 @@ fn draw_secondary_x_axis(
             );
         }
     }
-    let size = measurer.measure_label(&layout.label, LABEL_FONT);
+    let size = measurer.measure_label(&layout.label, layout.label_font_pt);
     let label_bottom = axes.y
         - if axis.has_data && axis.appearance.near_tick_labels {
             max_tick_height + axis.appearance.tick_label_pad_pt
@@ -769,7 +783,7 @@ fn draw_secondary_x_axis(
             axis.id,
             &layout.label,
             (axes.x + axes.width / 2.0, bounds.y + size.ascent),
-            LABEL_FONT,
+            layout.label_font_pt,
             TextAnchor::Middle,
             0.0,
         );
@@ -826,7 +840,7 @@ fn draw_secondary_y_axis(
             );
         }
         if axis.appearance.tick_labels_visible && axis.appearance.near_tick_labels {
-            let size = measurer.measure(&tick.label, TICK_FONT);
+            let size = measurer.measure(&tick.label, layout.tick_font_pt);
             max_tick_width = max_tick_width.max(size.width);
             let bounds = Bounds {
                 x: axes.right() + axis.appearance.tick_label_pad_pt,
@@ -839,7 +853,7 @@ fn draw_secondary_y_axis(
                 axis.id,
                 &tick.label,
                 (bounds.x, tick.position + (size.ascent - size.descent) / 2.0),
-                TICK_FONT,
+                layout.tick_font_pt,
                 TextAnchor::Start,
                 0.0,
             );
@@ -871,7 +885,7 @@ fn draw_secondary_y_axis(
             );
         }
     }
-    let size = measurer.measure_label(&layout.label, LABEL_FONT);
+    let size = measurer.measure_label(&layout.label, layout.label_font_pt);
     let left = axes.right()
         + if axis.has_data && axis.appearance.near_tick_labels {
             max_tick_width + axis.appearance.tick_label_pad_pt
@@ -900,7 +914,7 @@ fn draw_secondary_y_axis(
             axis.id,
             &layout.label,
             (bounds.right() - size.descent, axes.y + axes.height / 2.0),
-            LABEL_FONT,
+            layout.label_font_pt,
             TextAnchor::Middle,
             -90.0,
         );
