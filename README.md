@@ -1,8 +1,26 @@
 # InstPlot Studio
 
-InstPlot Studio is an independent Rust application for publication-quality scientific figures.
-It is designed to cooperate with InstPlot Lite without becoming a mode, crate, or
-workspace member inside the Lite repository.
+InstPlot Studio turns tabular data into editable scientific figures. The Rust
+desktop editor keeps figure settings in a versioned project and shares its layout
+and display list between preview and export.
+
+![Studio export test fixture with labeled axes, a line, an error bar, and an annotation](crates/instplot-export/tests/visual-baselines/normal-300dpi.png)
+
+*Existing 300 dpi export regression fixture. The labels illustrate formatting
+and rendering. This is a test figure rather than a measurement or editor capture.*
+
+Start with the [rc.3 technical preview](https://github.com/zhiyuzhang001-a11y/InstPlot-Studio/releases/tag/v0.1.2-rc.3)
+or use the [local toolchain instructions](#local-rust-toolchain). In the editor,
+import a small table, select the X and Y columns, adjust labels and figure
+settings, and export a figure. Save the project separately if you want to revisit
+the document. The repository also includes a [small CSV fixture](apps/instplot-studio/tests/fixtures/smoke.csv)
+for trying an import.
+
+For implementation and qualification details, see the [architecture](#current-architecture)
+and [historical delivery record](#historical-delivery-record) below. The release
+page describes the preview's platform scope.
+
+Studio and Lite are independent applications.
 
 The repository directory retains the historical `SciPlot` checkout name. Production
 packages use formal `instplot-*` identities under `apps/` and `crates/`; only explicitly
